@@ -70,6 +70,8 @@ Your role:
 - Flag anything requiring urgent attention
 - Note what additional tests would strengthen the analysis
 
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity) to inform age/sex-adjusted reference ranges and population-specific interpretation. Use these to contextualise findings — for example, testosterone levels differ by age and sex, vitamin D expectations vary by ethnicity, and metabolic markers shift with age. Never request or infer patient identity.
+
 Critical: You receive ANONYMISED data only. No patient names, no DOBs, no identifiers.
 
 Respond with a valid JSON object matching this exact structure:
@@ -98,6 +100,8 @@ Your role:
 - Flag where interpretation is well-supported, weakly supported, or contradicted by evidence
 - Identify if data patterns match known conditions, syndromes, or diagnostic criteria
 - Note recent research that might change the interpretation
+
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Use these to validate whether the prior interpretation correctly applied age/sex-adjusted reference ranges. Flag any claims where demographics were not properly considered.
 
 Critical: You receive ANONYMISED data only. 
 
@@ -129,6 +133,7 @@ Your role:
 - Ask questions that haven't been asked
 
 Be adversarial, rigorous, and specific. Don't just agree with prior analyses.
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Consider whether prior analyses missed demographic-specific risks — e.g. cardiovascular risk profiles differ by sex, haemoglobin norms differ by ethnicity, hormonal patterns are age-dependent.
 Critical: ANONYMISED data only.
 
 Respond with valid JSON:
@@ -159,6 +164,8 @@ Produce a unified interpretation that:
 6. Generates gauge positions for major health domains (0-100 scale)
 7. Identifies top 3-5 concerns and positives
 8. Unified Health Score (0-100, weighted by urgency, trend, cross-correlation)
+
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Use these to calibrate gauge scores — a value that is optimal for a 30-year-old male may warrant a watch flag for a 60-year-old female. Tailor both the patient and clinician narratives to reflect demographic context without revealing identity.
 
 Domains to score (0-100, where 100=optimal): Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
 
@@ -211,8 +218,39 @@ export interface AnonymisedData {
   [key: string]: unknown;
 }
 
-export async function runLensA(anonymisedData: AnonymisedData): Promise<LensOutput> {
+export interface PatientContext {
+  ageRange: string;
+  sex: string | null;
+  ethnicity: string | null;
+}
+
+function buildDemographicBlock(ctx: PatientContext): string {
+  const parts = [`Age range: ${ctx.ageRange}`];
+  if (ctx.sex) parts.push(`Biological sex: ${ctx.sex}`);
+  if (ctx.ethnicity) parts.push(`Ethnicity: ${ctx.ethnicity}`);
+  return `\n\nAnonymised patient demographics (use for age/sex-adjusted reference ranges and population-specific interpretation):\n${parts.join("\n")}`;
+}
+
+export function computeAgeRange(dateOfBirth: string | null | undefined): string {
+  if (!dateOfBirth) return "unknown";
+  const dob = new Date(dateOfBirth);
+  if (isNaN(dob.getTime())) return "unknown";
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const monthDiff = now.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) age--;
+  if (age < 18) return "under 18";
+  if (age < 30) return "18-29";
+  if (age < 40) return "30-39";
+  if (age < 50) return "40-49";
+  if (age < 60) return "50-59";
+  if (age < 70) return "60-69";
+  return "70+";
+}
+
+export async function runLensA(anonymisedData: AnonymisedData, patientCtx?: PatientContext): Promise<LensOutput> {
   const dataString = JSON.stringify(anonymisedData, null, 2);
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
   
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
@@ -221,7 +259,7 @@ export async function runLensA(anonymisedData: AnonymisedData): Promise<LensOutp
     messages: [
       {
         role: "user",
-        content: `Analyse this anonymised health data:\n\n${dataString}`,
+        content: `Analyse this anonymised health data:\n\n${dataString}${demographics}`,
       },
     ],
   });
@@ -230,8 +268,9 @@ export async function runLensA(anonymisedData: AnonymisedData): Promise<LensOutp
   return parseJSONFromLLM(text) as LensOutput;
 }
 
-export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: LensOutput): Promise<LensOutput> {
-  const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}\n\nPrior analysis (Lens A - Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}`;
+export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: LensOutput, patientCtx?: PatientContext): Promise<LensOutput> {
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
+  const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}\n\nPrior analysis (Lens A - Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}`;
   
   const completion = await openai.chat.completions.create({
     model: "gpt-5.2",
@@ -246,8 +285,9 @@ export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: Lens
   return parseJSONFromLLM(text) as LensOutput;
 }
 
-export async function runLensC(anonymisedData: AnonymisedData, lensAOutput: LensOutput, lensBOutput: LensOutput): Promise<LensOutput> {
-  const prompt = `${LENS_C_PROMPT}\n\nAnonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}`;
+export async function runLensC(anonymisedData: AnonymisedData, lensAOutput: LensOutput, lensBOutput: LensOutput, patientCtx?: PatientContext): Promise<LensOutput> {
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
+  const prompt = `${LENS_C_PROMPT}\n\nAnonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}`;
   
   const customGenAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
   
@@ -261,8 +301,9 @@ export async function runLensC(anonymisedData: AnonymisedData, lensAOutput: Lens
   return parseJSONFromLLM(text) as LensOutput;
 }
 
-export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: LensOutput, lensCOutput: LensOutput): Promise<ReconciledOutput> {
-  const prompt = `Three independent analyses of the same anonymised patient data:\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}\n\nLens C (Contrarian Analyst):\n${JSON.stringify(lensCOutput, null, 2)}`;
+export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: LensOutput, lensCOutput: LensOutput, patientCtx?: PatientContext): Promise<ReconciledOutput> {
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
+  const prompt = `Three independent analyses of the same anonymised patient data:${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}\n\nLens C (Contrarian Analyst):\n${JSON.stringify(lensCOutput, null, 2)}`;
   
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-6",

@@ -10,7 +10,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 ### Phase 1 Features (Complete)
 - Single record upload (PDF/image) → extraction → 3-lens AI analysis → gauge display
-- Privacy-first: PII stripped before all LLM calls
+- Privacy-first: Recursive PII stripping before all LLM calls
+- Patient onboarding flow: name, DOB, sex, ethnicity → used for age/sex-adjusted AI interpretations
+- Demographics flow into AI: age range (not raw DOB), biological sex, ethnicity passed to all lenses
 - Full Clerk authentication (email + Google OAuth)
 - PostgreSQL database with comprehensive schema
 - Dual display modes: Patient (plain English) and Clinician (clinical language)
@@ -23,6 +25,13 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Lens C**: Gemini (`gemini-2.5-flash`) — Contrarian Analyst
 - **Reconciliation**: Claude (`claude-sonnet-4-6`) — synthesizes all three lenses into unified output
 - All AI calls via Replit AI Integrations proxy (no own API keys needed)
+- Patient demographics (age range, sex, ethnicity) passed to all lenses for age/sex-adjusted reference ranges
+
+### Privacy
+- `stripPII()` in `lib/pii.ts`: recursive, pattern-based PII stripping across nested objects/arrays
+- Raw DOB → age range bucket (e.g., "30-39") via `computeAgeRange()` before any LLM call
+- Name, DOB, email, phone, SSN, MRN, address — all stripped/redacted before AI
+- Onboarding UI transparently explains what is/isn't shared with AI
 
 ### Health Domains (Gauges, 0-100 scale)
 Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
@@ -56,7 +65,10 @@ Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological,
 - `artifacts/api-server/src/routes/records.ts` — File upload + async interpretation pipeline
 - `artifacts/api-server/src/routes/index.ts` — Route registration
 - `lib/db/src/schema/index.ts` — All DB table exports
-- `artifacts/plexara/src/App.tsx` — Frontend entry point
+- `artifacts/api-server/src/lib/pii.ts` — Recursive PII stripping (privacy layer)
+- `artifacts/plexara/src/App.tsx` — Frontend entry point with OnboardingGate
+- `artifacts/plexara/src/pages/Onboarding.tsx` — Patient onboarding form
+- `artifacts/plexara/src/hooks/use-current-patient.ts` — Current patient hook with needsOnboarding
 - `artifacts/plexara/src/pages/Dashboard.tsx` — Main dashboard
 - `artifacts/plexara/src/components/dashboard/Gauge.tsx` — Arc gauge SVG component
 - `artifacts/plexara/src/components/dashboard/UploadZone.tsx` — File upload with polling

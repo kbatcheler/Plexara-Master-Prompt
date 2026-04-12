@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { stripPII, hashData } from "../lib/pii";
-import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, type AnonymisedData } from "../lib/ai";
+import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext } from "../lib/ai";
 import { logger } from "../lib/logger";
 
 const router = Router({ mergeParams: true });
@@ -42,6 +42,14 @@ async function verifyPatientOwnership(patientId: number, userId: string): Promis
 async function runInterpretationPipeline(patientId: number, recordId: number, structuredData: Record<string, unknown>): Promise<void> {
   const anonymised = stripPII(structuredData) as AnonymisedData;
 
+  const { patientsTable: pt } = await import("@workspace/db");
+  const [patient] = await db.select().from(pt).where(eq(pt.id, patientId));
+  const patientCtx: PatientContext = {
+    ageRange: computeAgeRange(patient?.dateOfBirth),
+    sex: patient?.sex || null,
+    ethnicity: patient?.ethnicity || null,
+  };
+
   let interpretationId: number | null = null;
 
   try {
@@ -66,7 +74,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     let lensCOutput = null;
 
     try {
-      lensAOutput = await runLensA(anonymised);
+      lensAOutput = await runLensA(anonymised, patientCtx);
       await db.update(interpretationsTable)
         .set({ lensAOutput, lensesCompleted: 1 })
         .where(eq(interpretationsTable.id, interpretationId));
@@ -83,7 +91,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
 
     try {
       if (lensAOutput) {
-        lensBOutput = await runLensB(anonymised, lensAOutput);
+        lensBOutput = await runLensB(anonymised, lensAOutput, patientCtx);
         await db.update(interpretationsTable)
           .set({ lensBOutput, lensesCompleted: lensAOutput ? 2 : 1 })
           .where(eq(interpretationsTable.id, interpretationId));
@@ -101,7 +109,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
 
     try {
       if (lensAOutput) {
-        lensCOutput = await runLensC(anonymised, lensAOutput, lensBOutput || lensAOutput);
+        lensCOutput = await runLensC(anonymised, lensAOutput, lensBOutput || lensAOutput, patientCtx);
         const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
         await db.update(interpretationsTable)
           .set({ lensCOutput, lensesCompleted: completedCount })
@@ -122,7 +130,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
       const effectiveLensB = lensBOutput || lensAOutput;
       const effectiveLensC = lensCOutput || lensAOutput;
       
-      const reconciledOutput = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC);
+      const reconciledOutput = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC, patientCtx);
       const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
       
       await db.update(interpretationsTable)

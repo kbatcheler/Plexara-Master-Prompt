@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useUser } from "@clerk/react";
 import { useCreatePatient } from "@workspace/api-client-react";
-import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowRight, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export default function Onboarding() {
   const { user } = useUser();
-  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const createPatient = useCreatePatient();
 
@@ -32,25 +30,21 @@ export default function Onboarding() {
       return;
     }
 
-    createPatient.mutate(
-      {
+    try {
+      await createPatient.mutateAsync({
         data: {
           displayName: displayName.trim(),
           dateOfBirth: dateOfBirth || undefined,
           sex: sex ? (sex as "male" | "female" | "other") : undefined,
           ethnicity: ethnicity || undefined,
         },
-      },
-      {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: ["listPatients"] });
-          setLocation("/dashboard");
-        },
-        onError: () => {
-          setError("Something went wrong. Please try again.");
-        },
-      }
-    );
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
+      const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+      window.location.href = `${base}/dashboard`;
+    } catch {
+      setError("Something went wrong. Please try again.");
+    }
   };
 
   return (
@@ -102,7 +96,8 @@ export default function Onboarding() {
                 className="bg-background border-border/50"
               />
               <p className="text-xs text-muted-foreground">
-                Used for age-adjusted reference ranges. Never shared with AI.
+                Your exact date of birth is never shared with AI. Only your age
+                range (e.g. "30-39") is used for age-adjusted reference ranges.
               </p>
             </div>
 
@@ -119,7 +114,8 @@ export default function Onboarding() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Reference ranges differ by biological sex for many biomarkers.
+                Shared with AI as "male" or "female" for sex-adjusted reference
+                ranges. Many biomarkers have different optimal ranges by sex.
               </p>
             </div>
 
@@ -153,8 +149,9 @@ export default function Onboarding() {
             <div className="flex items-start gap-3 pt-2 border-t border-border/30">
               <Shield className="w-5 h-5 text-primary mt-0.5 shrink-0" />
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Your personal details are stored securely and never sent to any AI
-                model. All data shared with AI is fully anonymised.
+                Your name and date of birth are stored securely and never sent to
+                AI. Only your age range, biological sex, and ethnicity are shared
+                anonymously to improve interpretation accuracy.
               </p>
             </div>
           </form>
