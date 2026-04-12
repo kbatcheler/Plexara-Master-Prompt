@@ -12,8 +12,10 @@ import SignInPage from "./pages/SignIn";
 import SignUpPage from "./pages/SignUp";
 import Dashboard from "./pages/Dashboard";
 import Records from "./pages/Records";
+import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/not-found";
 import { Layout } from "./components/layout/Layout";
+import { useCurrentPatient } from "./hooks/use-current-patient";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,15 +57,25 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
   return (
     <>
       <Show when="signed-in">
-        <Layout>
-          <Component />
-        </Layout>
+        <OnboardingGate>
+          <Layout>
+            <Component />
+          </Layout>
+        </OnboardingGate>
       </Show>
       <Show when="signed-out">
         <Redirect to="/sign-in" />
       </Show>
     </>
   );
+}
+
+function OnboardingGate({ children }: { children: React.ReactNode }) {
+  const { needsOnboarding, isLoading } = useCurrentPatient();
+  
+  if (isLoading) return null;
+  if (needsOnboarding) return <Redirect to="/onboarding" />;
+  return <>{children}</>;
 }
 
 function ClerkQueryClientCacheInvalidator() {
@@ -106,6 +118,16 @@ function ClerkProviderWithRoutes() {
               <Route path="/" component={HomeRedirect} />
               <Route path="/sign-in/*?" component={SignInPage} />
               <Route path="/sign-up/*?" component={SignUpPage} />
+              <Route path="/onboarding">
+                <>
+                  <Show when="signed-in">
+                    <Onboarding />
+                  </Show>
+                  <Show when="signed-out">
+                    <Redirect to="/sign-in" />
+                  </Show>
+                </>
+              </Route>
               <Route path="/dashboard">
                 <ProtectedRoute component={Dashboard} />
               </Route>
