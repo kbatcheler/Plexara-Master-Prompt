@@ -80,6 +80,7 @@ export function UploadZone() {
       const response = await fetch(`/api/patients/${patientId}/records`, {
         method: "POST",
         body: formData,
+        credentials: "include",
       });
 
       if (!response.ok) throw new Error("Upload failed");
