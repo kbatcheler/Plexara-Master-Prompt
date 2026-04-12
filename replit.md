@@ -84,6 +84,6 @@ Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological,
 ## Database Schema
 Tables: `patients`, `records`, `extracted_data`, `biomarker_results`, `biomarker_reference`, `interpretations`, `gauges`, `alerts`, `audit_log`
 
-Biomarker reference table seeded with 50 biomarkers across: CBC, Metabolic, Lipid, Thyroid, Hormonal, Inflammatory, Vitamins, Metabolic Health categories.
+Biomarker reference table seeded with 68 biomarkers across 10 categories: CBC (14), Metabolic (10), Liver (4), Lipid (7), Thyroid (5), Hormonal (7), Inflammatory (4), Vitamins (9), Metabolic Health (3), Kidney (2), Cardiac (3). Seed script: `lib/db/src/seed-biomarkers.ts`. All ranges include documented clinical and research references.
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
