@@ -3,13 +3,27 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Plexara Health Intelligence Platform API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: patients
+    description: Patient profile operations
+  - name: records
+    description: Medical record operations
+  - name: interpretations
+    description: AI interpretation operations
+  - name: gauges
+    description: Health domain gauge operations
+  - name: biomarkers
+    description: Biomarker reference and result operations
+  - name: alerts
+    description: Alert operations
+  - name: dashboard
+    description: Dashboard summary operations
 paths:
   /healthz:
     get:
@@ -24,7 +38,494 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # Patient endpoints
+  /patients:
+    get:
+      operationId: listPatients
+      tags: [patients]
+      summary: List all patient profiles for the authenticated user
+      security:
+        - clerkAuth: []
+      responses:
+        "200":
+          description: List of patients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Patient"
+        "401":
+          description: Unauthorized
+    post:
+      operationId: createPatient
+      tags: [patients]
+      summary: Create a new patient profile
+      security:
+        - clerkAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePatientBody"
+      responses:
+        "201":
+          description: Patient created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+        "400":
+          description: Invalid input
+        "401":
+          description: Unauthorized
+
+  /patients/{patientId}:
+    get:
+      operationId: getPatient
+      tags: [patients]
+      summary: Get a patient profile
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Patient profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+        "404":
+          description: Not found
+    patch:
+      operationId: updatePatient
+      tags: [patients]
+      summary: Update a patient profile
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatientBody"
+      responses:
+        "200":
+          description: Patient updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
+        "400":
+          description: Invalid input
+        "404":
+          description: Not found
+
+  # Records endpoints
+  /patients/{patientId}/records:
+    get:
+      operationId: listRecords
+      tags: [records]
+      summary: List all records for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: recordType
+          in: query
+          schema:
+            type: string
+            enum: [blood_panel, mri_report, scan_report, genetic_test, epigenomics, wearable_data, pathology_report, other]
+      responses:
+        "200":
+          description: List of records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Record"
+        "401":
+          description: Unauthorized
+    post:
+      operationId: uploadRecord
+      tags: [records]
+      summary: Upload a new medical record
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                recordType:
+                  type: string
+                  enum: [blood_panel, mri_report, scan_report, genetic_test, epigenomics, wearable_data, pathology_report, other]
+                testDate:
+                  type: ["string", "null"]
+              required:
+                - file
+                - recordType
+      responses:
+        "201":
+          description: Record uploaded and processing started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Record"
+        "400":
+          description: Invalid input
+        "401":
+          description: Unauthorized
+
+  /patients/{patientId}/records/{recordId}:
+    get:
+      operationId: getRecord
+      tags: [records]
+      summary: Get a specific record
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Record details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordDetail"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteRecord
+      tags: [records]
+      summary: Delete a record
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Record deleted
+        "404":
+          description: Not found
+
+  /patients/{patientId}/records/{recordId}/reanalyze:
+    post:
+      operationId: reanalyzeRecord
+      tags: [records]
+      summary: Trigger re-analysis of a record
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "202":
+          description: Re-analysis triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Record"
+        "404":
+          description: Not found
+
+  # Interpretation endpoints
+  /patients/{patientId}/interpretations:
+    get:
+      operationId: listInterpretations
+      tags: [interpretations]
+      summary: List all interpretations for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of interpretations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InterpretationSummary"
+
+  /patients/{patientId}/interpretations/latest:
+    get:
+      operationId: getLatestInterpretation
+      tags: [interpretations]
+      summary: Get the latest interpretation for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Latest interpretation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Interpretation"
+        "404":
+          description: No interpretation found
+
+  /patients/{patientId}/interpretations/{interpretationId}:
+    get:
+      operationId: getInterpretation
+      tags: [interpretations]
+      summary: Get a specific interpretation
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: interpretationId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Interpretation details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Interpretation"
+        "404":
+          description: Not found
+
+  # Gauge endpoints
+  /patients/{patientId}/gauges:
+    get:
+      operationId: listGauges
+      tags: [gauges]
+      summary: Get all health domain gauges for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Health domain gauges
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Gauge"
+
+  # Biomarker endpoints
+  /patients/{patientId}/biomarkers:
+    get:
+      operationId: listBiomarkerResults
+      tags: [biomarkers]
+      summary: List biomarker results for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: biomarkerName
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: category
+          in: query
+          schema:
+            type: ["string", "null"]
+      responses:
+        "200":
+          description: Biomarker results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BiomarkerResult"
+
+  /biomarker-reference:
+    get:
+      operationId: listBiomarkerReference
+      tags: [biomarkers]
+      summary: List biomarker reference ranges
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: ["string", "null"]
+      responses:
+        "200":
+          description: Biomarker reference data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BiomarkerReference"
+
+  # Alerts endpoints
+  /patients/{patientId}/alerts:
+    get:
+      operationId: listAlerts
+      tags: [alerts]
+      summary: List alerts for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: ["string", "null"]
+            enum: [active, dismissed, resolved, null]
+      responses:
+        "200":
+          description: Patient alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+
+  /patients/{patientId}/alerts/{alertId}/dismiss:
+    patch:
+      operationId: dismissAlert
+      tags: [alerts]
+      summary: Dismiss an alert
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: alertId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DismissAlertBody"
+      responses:
+        "200":
+          description: Alert dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "404":
+          description: Not found
+
+  # Dashboard summary
+  /patients/{patientId}/dashboard:
+    get:
+      operationId: getDashboard
+      tags: [dashboard]
+      summary: Get dashboard summary for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dashboard summary data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+
 components:
+  securitySchemes:
+    clerkAuth:
+      type: http
+      scheme: bearer
+
   schemas:
     HealthStatus:
       type: object
@@ -34,3 +535,359 @@ components:
       required:
         - status
 
+    Patient:
+      type: object
+      properties:
+        id:
+          type: integer
+        accountId:
+          type: string
+        displayName:
+          type: string
+        dateOfBirth:
+          type: ["string", "null"]
+        sex:
+          type: ["string", "null"]
+          enum: [male, female, other, null]
+        ethnicity:
+          type: ["string", "null"]
+        isPrimary:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - accountId
+        - displayName
+        - isPrimary
+        - createdAt
+        - updatedAt
+
+    CreatePatientBody:
+      type: object
+      properties:
+        displayName:
+          type: string
+        dateOfBirth:
+          type: ["string", "null"]
+        sex:
+          type: ["string", "null"]
+          enum: [male, female, other, null]
+        ethnicity:
+          type: ["string", "null"]
+      required:
+        - displayName
+
+    UpdatePatientBody:
+      type: object
+      properties:
+        displayName:
+          type: ["string", "null"]
+        dateOfBirth:
+          type: ["string", "null"]
+        sex:
+          type: ["string", "null"]
+          enum: [male, female, other, null]
+        ethnicity:
+          type: ["string", "null"]
+
+    Record:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        recordType:
+          type: string
+          enum: [blood_panel, mri_report, scan_report, genetic_test, epigenomics, wearable_data, pathology_report, other]
+        fileName:
+          type: string
+        uploadDate:
+          type: string
+          format: date-time
+        testDate:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [pending, processing, complete, error]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - recordType
+        - fileName
+        - uploadDate
+        - status
+        - createdAt
+
+    RecordDetail:
+      allOf:
+        - $ref: "#/components/schemas/Record"
+        - type: object
+          properties:
+            extractedData:
+              type: ["object", "null"]
+            lensAOutput:
+              type: ["object", "null"]
+            lensBOutput:
+              type: ["object", "null"]
+            lensCOutput:
+              type: ["object", "null"]
+            reconciledOutput:
+              type: ["object", "null"]
+            biomarkerResults:
+              type: array
+              items:
+                $ref: "#/components/schemas/BiomarkerResult"
+
+    InterpretationSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        triggerRecordId:
+          type: ["integer", "null"]
+        version:
+          type: integer
+        unifiedHealthScore:
+          type: ["number", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - version
+        - createdAt
+
+    Interpretation:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        triggerRecordId:
+          type: ["integer", "null"]
+        version:
+          type: integer
+        lensAOutput:
+          type: ["object", "null"]
+        lensBOutput:
+          type: ["object", "null"]
+        lensCOutput:
+          type: ["object", "null"]
+        reconciledOutput:
+          type: ["object", "null"]
+        patientNarrative:
+          type: ["string", "null"]
+        clinicalNarrative:
+          type: ["string", "null"]
+        unifiedHealthScore:
+          type: ["number", "null"]
+        lensesCompleted:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - version
+        - lensesCompleted
+        - createdAt
+
+    Gauge:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        domain:
+          type: string
+        currentValue:
+          type: ["number", "null"]
+        clinicalRangeLow:
+          type: ["number", "null"]
+        clinicalRangeHigh:
+          type: ["number", "null"]
+        optimalRangeLow:
+          type: ["number", "null"]
+        optimalRangeHigh:
+          type: ["number", "null"]
+        trend:
+          type: ["string", "null"]
+          enum: [improving, stable, declining, null]
+        confidence:
+          type: ["string", "null"]
+          enum: [high, medium, low, null]
+        lensAgreement:
+          type: ["string", "null"]
+        label:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        lastUpdated:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - domain
+        - lastUpdated
+
+    BiomarkerResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        recordId:
+          type: integer
+        biomarkerName:
+          type: string
+        category:
+          type: ["string", "null"]
+        value:
+          type: ["number", "null"]
+        unit:
+          type: ["string", "null"]
+        labReferenceLow:
+          type: ["number", "null"]
+        labReferenceHigh:
+          type: ["number", "null"]
+        optimalRangeLow:
+          type: ["number", "null"]
+        optimalRangeHigh:
+          type: ["number", "null"]
+        testDate:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - patientId
+        - recordId
+        - biomarkerName
+        - createdAt
+
+    BiomarkerReference:
+      type: object
+      properties:
+        id:
+          type: integer
+        biomarkerName:
+          type: string
+        category:
+          type: ["string", "null"]
+        unit:
+          type: ["string", "null"]
+        clinicalRangeLow:
+          type: ["number", "null"]
+        clinicalRangeHigh:
+          type: ["number", "null"]
+        optimalRangeLow:
+          type: ["number", "null"]
+        optimalRangeHigh:
+          type: ["number", "null"]
+        description:
+          type: ["string", "null"]
+        clinicalSignificance:
+          type: ["string", "null"]
+      required:
+        - id
+        - biomarkerName
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        severity:
+          type: string
+          enum: [urgent, watch, info]
+        title:
+          type: string
+        description:
+          type: string
+        triggerType:
+          type: ["string", "null"]
+        relatedInterpretationId:
+          type: ["integer", "null"]
+        status:
+          type: string
+          enum: [active, dismissed, resolved]
+        dismissedReason:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - patientId
+        - severity
+        - title
+        - description
+        - status
+        - createdAt
+
+    DismissAlertBody:
+      type: object
+      properties:
+        reason:
+          type: ["string", "null"]
+
+    Dashboard:
+      type: object
+      properties:
+        patient:
+          $ref: "#/components/schemas/Patient"
+        unifiedHealthScore:
+          type: ["number", "null"]
+        recordCount:
+          type: integer
+        latestInterpretationId:
+          type: ["integer", "null"]
+        latestInterpretationDate:
+          type: ["string", "null"]
+        activeAlertCount:
+          type: integer
+        urgentAlertCount:
+          type: integer
+        gauges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Gauge"
+        patientNarrative:
+          type: ["string", "null"]
+        clinicalNarrative:
+          type: ["string", "null"]
+        recentRecords:
+          type: array
+          items:
+            $ref: "#/components/schemas/Record"
+        lensesCompleted:
+          type: ["integer", "null"]
+      required:
+        - patient
+        - recordCount
+        - activeAlertCount
+        - urgentAlertCount
+        - gauges
+        - recentRecords
