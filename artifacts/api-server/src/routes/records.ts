@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { recordsTable, extractedDataTable, biomarkerResultsTable, interpretationsTable, gaugesTable, alertsTable, auditLogTable, biomarkerReferenceTable } from "@workspace/db";
+import { recordsTable, extractedDataTable, biomarkerResultsTable, interpretationsTable, gaugesTable, alertsTable, auditLogTable, biomarkerReferenceTable, baselinesTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import multer from "multer";
 import fs from "fs";
@@ -207,6 +207,58 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
       .set({ status: "complete" })
       .where(eq(recordsTable.id, recordId));
 
+    if (lensAOutput && interpretationId) {
+      const [latest] = await db
+        .select()
+        .from(interpretationsTable)
+        .where(eq(interpretationsTable.id, interpretationId));
+      if (latest?.reconciledOutput) {
+        const allBiomarkers = await db
+          .select()
+          .from(biomarkerResultsTable)
+          .where(eq(biomarkerResultsTable.patientId, patientId));
+        const allGauges = await db
+          .select()
+          .from(gaugesTable)
+          .where(eq(gaugesTable.patientId, patientId));
+
+        // Atomic: re-check for existing baseline inside the tx so concurrent
+        // pipelines cannot both create version-1 baselines.
+        await db.transaction(async (tx) => {
+          const existing = await tx
+            .select()
+            .from(baselinesTable)
+            .where(eq(baselinesTable.patientId, patientId))
+            .limit(1);
+          if (existing.length > 0) return;
+          await tx.insert(baselinesTable).values({
+            patientId,
+            version: 1,
+            sourceInterpretationId: interpretationId,
+            isActive: true,
+            snapshotJson: {
+              unifiedHealthScore: latest.unifiedHealthScore,
+              gauges: allGauges.map((g) => ({
+                domain: g.domain,
+                value: g.currentValue,
+                trend: g.trend,
+                confidence: g.confidence,
+                label: g.label,
+              })),
+              biomarkers: allBiomarkers.map((b) => ({
+                name: b.biomarkerName,
+                value: b.value,
+                unit: b.unit,
+                testDate: b.testDate,
+              })),
+              patientNarrative: latest.patientNarrative,
+              clinicalNarrative: latest.clinicalNarrative,
+            },
+            notes: "Auto-established from first complete interpretation",
+          });
+        });
+      }
+    }
   } catch (err) {
     logger.error({ err }, "Interpretation pipeline failed");
     await db.update(recordsTable)
@@ -284,14 +336,14 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
         let structuredData: Record<string, unknown> = {};
         
         try {
-          structuredData = await extractFromDocument(base64, mimeType);
+          structuredData = await extractFromDocument(base64, mimeType, recordType);
 
           await db.insert(extractedDataTable).values({
             recordId: record.id,
             patientId,
-            dataType: recordType,
+            dataType: (structuredData.documentType as string) || recordType,
             structuredJson: structuredData,
-            extractionModel: "claude-opus-4-5",
+            extractionModel: "claude-sonnet-4-6",
             extractionConfidence: "high",
           });
 

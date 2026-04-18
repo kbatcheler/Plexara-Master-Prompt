@@ -317,17 +317,67 @@ export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: Le
   return parseJSONFromLLM(text) as ReconciledOutput;
 }
 
-export async function extractFromDocument(base64File: string, mimeType: string): Promise<Record<string, unknown>> {
-  const extractionPrompt = `You are a medical document extraction specialist. Extract ALL data points from this medical record into structured JSON.
-
-For blood panels extract: biomarker name, value, unit, reference range (lab-provided), date of test, lab name (anonymise it as [LAB]).
-For imaging: findings, measurements, impression, technique, body region.
-For genetics: variants, risk scores, gene names.
-For wearables: metric type, value, timestamp, device (anonymise as [DEVICE]).
+function buildExtractionPrompt(recordType: string): string {
+  const t = (recordType || "blood_panel").toLowerCase();
+  if (t.includes("imaging") || t.includes("mri") || t.includes("scan") || t.includes("xray") || t.includes("ct") || t.includes("ultrasound")) {
+    return `You are a medical imaging extraction specialist. Extract structured data from this imaging report. Anonymise patient name as [PATIENT], facility as [FACILITY], radiologist as [PHYSICIAN].
 
 Return valid JSON only:
 {
-  "documentType": "blood_panel|imaging|genetics|wearable|other",
+  "documentType": "imaging",
+  "modality": "MRI|CT|XRAY|ULTRASOUND|PET|OTHER",
+  "bodyRegion": "string",
+  "studyDate": "YYYY-MM-DD or null",
+  "technique": "string",
+  "findings": [
+    { "region": "string", "description": "string", "measurementMm": number or null, "severity": "normal|mild|moderate|severe|incidental", "confidence": "high|medium|low" }
+  ],
+  "impression": "string",
+  "comparedTo": "string or null",
+  "biomarkers": [],
+  "extractionNotes": "string"
+}`;
+  }
+  if (t.includes("genetic") || t.includes("dna") || t.includes("epigen") || t.includes("methylation")) {
+    return `You are a genetics/epigenomics extraction specialist. Extract structured data from this report. Do not include patient name.
+
+Return valid JSON only:
+{
+  "documentType": "genetics",
+  "panel": "string",
+  "testDate": "YYYY-MM-DD or null",
+  "variants": [
+    { "gene": "string", "variant": "string", "zygosity": "homozygous|heterozygous|hemizygous|null", "clinicalSignificance": "benign|likely_benign|uncertain|likely_pathogenic|pathogenic", "phenotypeAssociations": ["string"] }
+  ],
+  "riskScores": [
+    { "condition": "string", "score": number or null, "interpretation": "string" }
+  ],
+  "methylationAge": number or null,
+  "biomarkers": [],
+  "extractionNotes": "string"
+}`;
+  }
+  if (t.includes("wearable") || t.includes("fitbit") || t.includes("oura") || t.includes("garmin") || t.includes("apple_health") || t.includes("whoop")) {
+    return `You are a wearable data extraction specialist. Extract aggregated metrics from this wearable export. Anonymise device as [DEVICE].
+
+Return valid JSON only:
+{
+  "documentType": "wearable",
+  "device": "[DEVICE]",
+  "rangeStart": "YYYY-MM-DD or null",
+  "rangeEnd": "YYYY-MM-DD or null",
+  "metrics": [
+    { "name": "resting_heart_rate|hrv|vo2max|sleep_score|deep_sleep_min|rem_sleep_min|steps|active_minutes|spo2|skin_temp", "average": number or null, "unit": "string", "trend": "improving|stable|declining" }
+  ],
+  "biomarkers": [],
+  "extractionNotes": "string"
+}`;
+  }
+  return `You are a medical document extraction specialist. Extract ALL data points from this blood panel into structured JSON. Anonymise lab name as [LAB], physician as [PHYSICIAN], patient name as [PATIENT].
+
+Return valid JSON only:
+{
+  "documentType": "blood_panel",
   "testDate": "YYYY-MM-DD or null",
   "labName": "[LAB]",
   "biomarkers": [
@@ -345,6 +395,10 @@ Return valid JSON only:
   "otherFindings": {},
   "extractionNotes": "string"
 }`;
+}
+
+export async function extractFromDocument(base64File: string, mimeType: string, recordType: string = "blood_panel"): Promise<Record<string, unknown>> {
+  const extractionPrompt = buildExtractionPrompt(recordType);
 
   try {
     const imageTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;

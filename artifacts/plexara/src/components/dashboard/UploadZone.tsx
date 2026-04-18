@@ -12,6 +12,7 @@ export function UploadZone() {
   const [uploadStatus, setUploadStatus] = useState<"idle" | "uploading" | "processing" | "complete" | "error">("idle");
   const [uploadProgress, setUploadProgress] = useState("");
   const [recordId, setRecordId] = useState<number | null>(null);
+  const [recordType, setRecordType] = useState<string>("blood_panel");
 
   const { data: recordData } = useGetRecord(patientId!, recordId!, {
     query: {
@@ -75,7 +76,7 @@ export function UploadZone() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      formData.append("recordType", "blood_panel"); // Defaulting for now
+      formData.append("recordType", recordType);
 
       const response = await fetch(`/api/patients/${patientId}/records`, {
         method: "POST",
@@ -96,7 +97,27 @@ export function UploadZone() {
   };
 
   return (
-    <div className="w-full">
+    <div className="w-full space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">Record type:</span>
+        <select
+          value={recordType}
+          onChange={(e) => setRecordType(e.target.value)}
+          disabled={uploadStatus !== "idle"}
+          className="text-xs bg-card border border-border rounded px-2 py-1"
+          data-testid="select-upload-record-type"
+        >
+          <option value="blood_panel">Blood Panel</option>
+          <option value="mri_report">MRI Report</option>
+          <option value="scan_report">CT / Scan Report</option>
+          <option value="ultrasound">Ultrasound</option>
+          <option value="genetic_test">Genetic Test</option>
+          <option value="epigenomics">Epigenomics / Methylation</option>
+          <option value="wearable_data">Wearable Export</option>
+          <option value="pathology_report">Pathology Report</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
       <div 
         className={`relative flex flex-col items-center justify-center w-full h-48 border-2 border-dashed rounded-xl transition-colors ${
           isDragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-card/50"

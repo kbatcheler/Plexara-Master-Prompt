@@ -5,10 +5,11 @@ import { useMode } from "../context/ModeContext";
 import { ArcGauge } from "../components/dashboard/Gauge";
 import { UploadZone } from "../components/dashboard/UploadZone";
 import { RecordDetailModal } from "../components/dashboard/RecordDetailModal";
-import { AlertCircle, AlertTriangle, Info, CheckCircle2, ChevronRight, FileText, BrainCircuit, Activity } from "lucide-react";
+import { AlertCircle, AlertTriangle, Info, CheckCircle2, ChevronRight, FileText, BrainCircuit, Activity, Anchor, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
+import { api } from "../lib/api";
 
 export default function Dashboard() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
@@ -32,6 +33,20 @@ export default function Dashboard() {
   const dismissAlert = useDismissAlert();
 
   const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
+
+  const baselineQuery = useQuery({
+    queryKey: ["baseline", patientId],
+    queryFn: () => api<{
+      active: { id: number; version: number; establishedAt: string; notes: string | null } | null;
+      delta: { baselineScore: number; currentScore: number; scoreDelta: number; sinceDate: string; gaugeDeltas: Array<{ domain: string; label: string | null; baselineValue: number | null; currentValue: number; delta: number | null }> } | null;
+    }>(`/patients/${patientId}/baselines`),
+    enabled: !!patientId,
+  });
+
+  const rebaselineMutation = useMutation({
+    mutationFn: () => api(`/patients/${patientId}/baselines`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["baseline", patientId] }),
+  });
 
   if (patientLoading || dashboardLoading) {
     return (
@@ -172,6 +187,50 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Baseline Card */}
+      {baselineQuery.data?.active && (
+        <div className="bg-card border border-border/50 rounded-2xl p-5" data-testid="baseline-card">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div className="flex items-center gap-2">
+              <Anchor className="w-4 h-4 text-primary" />
+              <h3 className="font-heading font-medium">Baseline v{baselineQuery.data.active.version}</h3>
+              <span className="text-xs text-muted-foreground">
+                established {new Date(baselineQuery.data.active.establishedAt).toLocaleDateString()}
+              </span>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => rebaselineMutation.mutate()} disabled={rebaselineMutation.isPending} data-testid="button-rebaseline">
+              {rebaselineMutation.isPending ? "Saving…" : "Reset baseline"}
+            </Button>
+          </div>
+          {baselineQuery.data.delta && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 text-sm">
+                <span className="text-muted-foreground">Health score</span>
+                <span className="font-mono">{baselineQuery.data.delta.baselineScore.toFixed(0)} → {baselineQuery.data.delta.currentScore.toFixed(0)}</span>
+                <span className={`flex items-center gap-1 font-mono text-xs ${
+                  baselineQuery.data.delta.scoreDelta > 0 ? "text-emerald-400" : baselineQuery.data.delta.scoreDelta < 0 ? "text-amber-400" : "text-muted-foreground"
+                }`}>
+                  {baselineQuery.data.delta.scoreDelta > 0 ? <TrendingUp className="w-3 h-3" /> : baselineQuery.data.delta.scoreDelta < 0 ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+                  {baselineQuery.data.delta.scoreDelta >= 0 ? "+" : ""}{baselineQuery.data.delta.scoreDelta.toFixed(1)}
+                </span>
+              </div>
+              {baselineQuery.data.delta.gaugeDeltas.filter((g) => g.delta !== null).length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                  {baselineQuery.data.delta.gaugeDeltas.filter((g) => g.delta !== null).slice(0, 6).map((g) => (
+                    <div key={g.domain} className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-secondary/40">
+                      <span className="truncate">{g.label || g.domain}</span>
+                      <span className={`font-mono ${g.delta! > 0 ? "text-emerald-400" : g.delta! < 0 ? "text-amber-400" : "text-muted-foreground"}`}>
+                        {g.delta! >= 0 ? "+" : ""}{g.delta!.toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Gauge Grid */}
       <div className="space-y-4">

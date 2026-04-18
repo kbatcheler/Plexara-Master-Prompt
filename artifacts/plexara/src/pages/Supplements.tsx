@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill } from "lucide-react";
+import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity } from "lucide-react";
 
 interface Supplement {
   id: number;
@@ -40,10 +40,80 @@ interface GenerateResponse {
   redundantWithCurrentStack: string[];
 }
 
+interface ImpactPayload {
+  supplement: { id: number; name: string; dosage: string | null; startedAt: string };
+  windowDays: number;
+  caveat: string;
+  impacts: Array<{
+    biomarker: string;
+    unit: string | null;
+    preCount: number;
+    postCount: number;
+    preMean: number | null;
+    postMean: number | null;
+    deltaAbsolute: number | null;
+    deltaPercent: number | null;
+    direction: "improved" | "worsened" | "unchanged" | "insufficient_data";
+  }>;
+}
+
+function ImpactPanel({ patientId, supplementId }: { patientId: number; supplementId: number }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["supp-impact", patientId, supplementId],
+    queryFn: () => api<ImpactPayload>(`/patients/${patientId}/supplements/${supplementId}/impact`),
+  });
+
+  if (isLoading) return <div className="text-xs text-muted-foreground py-2">Loading impact data…</div>;
+  if (error) return <div className="text-xs text-destructive py-2">Failed to load impact data.</div>;
+  if (!data) return null;
+
+  const withData = data.impacts.filter((i) => i.direction !== "insufficient_data");
+  const withoutData = data.impacts.filter((i) => i.direction === "insufficient_data");
+
+  return (
+    <div className="space-y-3 border-t border-border/40 pt-3 mt-2">
+      <div className="text-xs text-muted-foreground">
+        Comparing biomarker means within ±{data.windowDays} days of {new Date(data.supplement.startedAt).toLocaleDateString()}.
+      </div>
+      {withData.length === 0 ? (
+        <div className="text-xs text-muted-foreground italic">
+          Not enough biomarker data on either side of the start date to compute impact yet. Upload another panel after 60–90 days to see attribution.
+        </div>
+      ) : (
+        <div className="space-y-1.5" data-testid={`impact-list-${supplementId}`}>
+          {withData.map((i) => {
+            const Icon = i.direction === "improved" ? TrendingDown : i.direction === "worsened" ? TrendingUp : Minus;
+            const colour = i.direction === "improved" ? "text-emerald-400" : i.direction === "worsened" ? "text-amber-400" : "text-muted-foreground";
+            return (
+              <div key={i.biomarker} className="flex items-center justify-between text-xs gap-2">
+                <span className="font-medium truncate">{i.biomarker}</span>
+                <span className={`flex items-center gap-1 ${colour} font-mono`}>
+                  <Icon className="w-3 h-3" />
+                  {i.preMean?.toFixed(2)} → {i.postMean?.toFixed(2)} {i.unit ?? ""}
+                  {i.deltaPercent !== null && (
+                    <span className="text-muted-foreground">({i.deltaPercent >= 0 ? "+" : ""}{i.deltaPercent.toFixed(1)}%)</span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {withoutData.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          {withoutData.length} additional biomarker{withoutData.length === 1 ? "" : "s"} have data on only one side of the start date.
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground italic">{data.caveat}</p>
+    </div>
+  );
+}
+
 export default function Supplements() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
   const qc = useQueryClient();
   const [newSupp, setNewSupp] = useState({ name: "", dosage: "", frequency: "" });
+  const [openImpactId, setOpenImpactId] = useState<number | null>(null);
 
   const stackQuery = useQuery({
     queryKey: ["supplements", patientId],
@@ -145,22 +215,30 @@ export default function Supplements() {
             <div className="space-y-2">
               {stack.map((s) => (
                 <Card key={s.id} className={s.active ? "" : "opacity-50"} data-testid={`supp-${s.id}`}>
-                  <CardContent className="py-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-medium">{s.name}</span>
-                        {!s.active && <Badge variant="outline" className="text-xs">paused</Badge>}
+                  <CardContent className="py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="font-medium">{s.name}</span>
+                          {!s.active && <Badge variant="outline" className="text-xs">paused</Badge>}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {s.dosage && <span>{s.dosage}</span>}
+                          {s.dosage && s.frequency && <span> · </span>}
+                          {s.frequency && <span>{s.frequency}</span>}
+                        </div>
+                        {s.notes && <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">{s.notes}</p>}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {s.dosage && <span>{s.dosage}</span>}
-                        {s.dosage && s.frequency && <span> · </span>}
-                        {s.frequency && <span>{s.frequency}</span>}
+                      <div className="flex items-center gap-1">
+                        <Button size="icon" variant="ghost" onClick={() => setOpenImpactId(openImpactId === s.id ? null : s.id)} title="Show biomarker impact" data-testid={`button-impact-${s.id}`}>
+                          <Activity className={`w-4 h-4 ${openImpactId === s.id ? "text-primary" : "text-muted-foreground"}`} />
+                        </Button>
+                        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(s.id)} disabled={deleteMutation.isPending} data-testid={`button-delete-${s.id}`}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
                       </div>
-                      {s.notes && <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">{s.notes}</p>}
                     </div>
-                    <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(s.id)} disabled={deleteMutation.isPending} data-testid={`button-delete-${s.id}`}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+                    {openImpactId === s.id && patientId && <ImpactPanel patientId={patientId} supplementId={s.id} />}
                   </CardContent>
                 </Card>
               ))}

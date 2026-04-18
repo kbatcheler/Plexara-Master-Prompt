@@ -10,6 +10,7 @@ import { biomarkerResultsRouter, biomarkerReferenceRouter } from "./biomarkers";
 import supplementsRouter from "./supplements";
 import biologicalAgeRouter from "./biological-age";
 import correlationsRouter from "./correlations";
+import baselinesRouter from "./baselines";
 
 const router: IRouter = Router();
 
@@ -24,6 +25,7 @@ router.use("/patients/:patientId/biomarkers", biomarkerResultsRouter);
 router.use("/patients/:patientId/supplements", supplementsRouter);
 router.use("/patients/:patientId/biological-age", biologicalAgeRouter);
 router.use("/patients/:patientId/correlations", correlationsRouter);
+router.use("/patients/:patientId/baselines", baselinesRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
 
 export default router;
