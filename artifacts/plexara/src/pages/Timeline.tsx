@@ -25,6 +25,19 @@ interface TimelineData {
   biomarkers: TimelineBiomarker[];
 }
 
+interface Trajectory {
+  biomarker: string;
+  observations: Array<{ date: string; value: number }>;
+  optimalLow: number | null;
+  optimalHigh: number | null;
+  slopePerDay: number;
+  rSquared: number;
+  projection6mo: number;
+  projection12mo: number;
+  projection24mo: number;
+  optimalCrossingDate: string | null;
+}
+
 interface CorrelationData {
   id: number;
   generatedAt: string;
@@ -43,28 +56,44 @@ function num(v: string | null): number | null {
   return isFinite(n) ? n : null;
 }
 
-function BiomarkerChart({ b }: { b: TimelineBiomarker }) {
-  const data = b.points
+function BiomarkerChart({ b, trajectory }: { b: TimelineBiomarker; trajectory?: Trajectory }) {
+  const observed = b.points
     .filter((p) => p.date && p.value !== null)
-    .map((p) => ({ date: p.date!, value: Number(p.value) }))
+    .map((p) => ({ date: p.date!, value: Number(p.value), projected: null as number | null }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  if (data.length === 0) return null;
+  if (observed.length === 0) return null;
+
+  const data: Array<{ date: string; value: number | null; projected: number | null }> = observed.map((o) => ({ ...o }));
+  if (trajectory && observed.length >= 2) {
+    const lastDate = new Date(observed[observed.length - 1].date);
+    const lastValue = observed[observed.length - 1].value;
+    data[data.length - 1] = { ...data[data.length - 1], projected: lastValue };
+    const horizons = [
+      { months: 6, value: trajectory.projection6mo },
+      { months: 12, value: trajectory.projection12mo },
+      { months: 24, value: trajectory.projection24mo },
+    ];
+    for (const h of horizons) {
+      const dt = new Date(lastDate.getTime() + h.months * 30 * 24 * 60 * 60 * 1000);
+      data.push({ date: dt.toISOString().split("T")[0], value: null, projected: h.value });
+    }
+  }
 
   const optLow = num(b.optimalLow);
   const optHigh = num(b.optimalHigh);
   const refLow = num(b.labRefLow);
   const refHigh = num(b.labRefHigh);
 
-  const values = data.map((d) => d.value);
+  const values = data.map((d) => d.value ?? d.projected ?? NaN).filter((v) => isFinite(v));
   const dataMin = Math.min(...values, optLow ?? Infinity, refLow ?? Infinity);
   const dataMax = Math.max(...values, optHigh ?? -Infinity, refHigh ?? -Infinity);
   const padding = (dataMax - dataMin) * 0.15 || 1;
   const yMin = dataMin - padding;
   const yMax = dataMax + padding;
 
-  const first = data[0].value;
-  const last = data[data.length - 1].value;
+  const first = observed[0].value;
+  const last = observed[observed.length - 1].value;
   const change = data.length > 1 ? ((last - first) / first) * 100 : 0;
   const direction = data.length < 2 ? "stable" : Math.abs(change) < 5 ? "stable" : change > 0 ? "up" : "down";
 
@@ -102,10 +131,19 @@ function BiomarkerChart({ b }: { b: TimelineBiomarker }) {
                 contentStyle={{ background: "hsl(var(--background))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
                 formatter={(v: number) => [`${v} ${b.unit ?? ""}`, b.biomarkerName]}
               />
-              <Line type="monotone" dataKey="value" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: "hsl(var(--primary))" }} />
+              <Line type="monotone" dataKey="value" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: "hsl(var(--primary))" }} connectNulls={false} />
+              {trajectory && (
+                <Line type="monotone" dataKey="projected" stroke="hsl(var(--primary))" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </div>
+        {trajectory && (
+          <p className="text-[11px] text-muted-foreground mt-2">
+            Linear projection (R²={trajectory.rSquared.toFixed(2)}): 12mo ≈ {trajectory.projection12mo.toFixed(2)} {b.unit ?? ""}
+            {trajectory.optimalCrossingDate && <> · projected to enter optimal range by {new Date(trajectory.optimalCrossingDate).toLocaleDateString()}</>}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -127,6 +165,14 @@ export default function Timeline() {
     queryFn: () => api<CorrelationData | null>(`/patients/${patientId}/correlations`),
     enabled: !!patientId,
   });
+
+  const predictionsQuery = useQuery({
+    queryKey: ["predictions", patientId],
+    queryFn: () => api<{ trajectories: Trajectory[] }>(`/patients/${patientId}/predictions`),
+    enabled: !!patientId,
+  });
+  const trajectoryByName = new Map<string, Trajectory>();
+  predictionsQuery.data?.trajectories.forEach((t) => trajectoryByName.set(t.biomarker.toLowerCase(), t));
 
   const generateMutation = useMutation({
     mutationFn: () => api<CorrelationData>(`/patients/${patientId}/correlations/generate`, { method: "POST" }),
@@ -250,7 +296,7 @@ export default function Timeline() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {charted.map((b) => <BiomarkerChart key={b.biomarkerName} b={b} />)}
+          {charted.map((b) => <BiomarkerChart key={b.biomarkerName} b={b} trajectory={trajectoryByName.get(b.biomarkerName.toLowerCase())} />)}
         </div>
       )}
     </div>

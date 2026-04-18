@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { recordsTable, extractedDataTable, biomarkerResultsTable, interpretationsTable, gaugesTable, alertsTable, auditLogTable, biomarkerReferenceTable, baselinesTable } from "@workspace/db";
+import { recordsTable, extractedDataTable, biomarkerResultsTable, interpretationsTable, gaugesTable, alertsTable, auditLogTable, biomarkerReferenceTable, baselinesTable, alertPreferencesTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import multer from "multer";
 import fs from "fs";
@@ -174,7 +174,11 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
         }
       }
 
-      if (reconciledOutput.urgentFlags.length > 0) {
+      const [prefs] = await db.select().from(alertPreferencesTable).where(eq(alertPreferencesTable.patientId, patientId));
+      const allowUrgent = prefs?.enableUrgent ?? true;
+      const allowWatch = prefs?.enableWatch ?? true;
+
+      if (allowUrgent && reconciledOutput.urgentFlags.length > 0) {
         for (const flag of reconciledOutput.urgentFlags) {
           await db.insert(alertsTable).values({
             patientId,
@@ -188,7 +192,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
         }
       }
 
-      if (reconciledOutput.topConcerns.length > 0) {
+      if (allowWatch && reconciledOutput.topConcerns.length > 0) {
         for (const concern of reconciledOutput.topConcerns.slice(0, 2)) {
           await db.insert(alertsTable).values({
             patientId,

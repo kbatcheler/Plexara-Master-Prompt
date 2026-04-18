@@ -3,7 +3,9 @@ import { Link, useLocation } from "wouter";
 import { useMode } from "../../context/ModeContext";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { LogOut, Activity, FileText } from "lucide-react";
+import { LogOut, Activity, Settings as SettingsIcon, MoreHorizontal } from "lucide-react";
+import { PatientSwitcher } from "./PatientSwitcher";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user } = useUser();
@@ -24,16 +26,32 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <span className="font-heading font-semibold text-lg tracking-tight">Plexara<span className="text-primary">.</span></span>
             </Link>
             
-            <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground ml-6">
+            <nav className="hidden md:flex items-center gap-5 text-sm font-medium text-muted-foreground ml-6">
               <Link href="/dashboard" className="hover:text-primary transition-colors">Dashboard</Link>
               <Link href="/records" className="hover:text-primary transition-colors">Records</Link>
               <Link href="/timeline" className="hover:text-primary transition-colors">Timeline</Link>
-              <Link href="/biological-age" className="hover:text-primary transition-colors">Biological Age</Link>
+              <Link href="/biological-age" className="hover:text-primary transition-colors">Bio Age</Link>
               <Link href="/supplements" className="hover:text-primary transition-colors">Supplements</Link>
+              <Link href="/protocols" className="hover:text-primary transition-colors">Protocols</Link>
+              <Link href="/chat" className="hover:text-primary transition-colors">Ask</Link>
+              <DropdownMenu>
+                <DropdownMenuTrigger className="hover:text-primary transition-colors flex items-center gap-1">
+                  More <MoreHorizontal className="w-3 h-3" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem asChild><Link href="/share-portal">Share with clinician</Link></DropdownMenuItem>
+                  <DropdownMenuItem asChild><Link href="/audit">Audit log</Link></DropdownMenuItem>
+                  <DropdownMenuItem asChild><Link href="/settings">Settings</Link></DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </nav>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4">
+            <PatientSwitcher />
+            <Link href="/settings" className="text-muted-foreground hover:text-primary" title="Settings">
+              <SettingsIcon className="w-4 h-4" />
+            </Link>
             {/* Mode Toggle */}
             <div className="flex items-center space-x-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border/50">
               <Label htmlFor="mode-toggle" className={`text-xs cursor-pointer ${mode === "patient" ? "text-primary font-medium" : "text-muted-foreground"}`}>Patient</Label>

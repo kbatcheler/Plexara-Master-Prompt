@@ -17,8 +17,16 @@ import BiologicalAge from "./pages/BiologicalAge";
 import Supplements from "./pages/Supplements";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/not-found";
+import Settings from "./pages/Settings";
+import Audit from "./pages/Audit";
+import Share from "./pages/Share";
+import SharedView from "./pages/SharedView";
+import Protocols from "./pages/Protocols";
+import Report from "./pages/Report";
+import Chat from "./pages/Chat";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
+import { ActivePatientProvider } from "./context/ActivePatientContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -116,40 +124,39 @@ function ClerkProviderWithRoutes() {
       <QueryClientProvider client={queryClient}>
         <ClerkQueryClientCacheInvalidator />
         <ModeProvider>
-          <TooltipProvider>
-            <Switch>
-              <Route path="/" component={HomeRedirect} />
-              <Route path="/sign-in/*?" component={SignInPage} />
-              <Route path="/sign-up/*?" component={SignUpPage} />
-              <Route path="/onboarding">
-                <>
-                  <Show when="signed-in">
-                    <Onboarding />
-                  </Show>
-                  <Show when="signed-out">
-                    <Redirect to="/sign-in" />
-                  </Show>
-                </>
-              </Route>
-              <Route path="/dashboard">
-                <ProtectedRoute component={Dashboard} />
-              </Route>
-              <Route path="/records">
-                <ProtectedRoute component={Records} />
-              </Route>
-              <Route path="/timeline">
-                <ProtectedRoute component={Timeline} />
-              </Route>
-              <Route path="/biological-age">
-                <ProtectedRoute component={BiologicalAge} />
-              </Route>
-              <Route path="/supplements">
-                <ProtectedRoute component={Supplements} />
-              </Route>
-              <Route component={NotFound} />
-            </Switch>
-            <Toaster />
-          </TooltipProvider>
+          <ActivePatientProvider>
+            <TooltipProvider>
+              <Switch>
+                <Route path="/" component={HomeRedirect} />
+                <Route path="/share/:token" component={SharedView} />
+                <Route path="/sign-in/*?" component={SignInPage} />
+                <Route path="/sign-up/*?" component={SignUpPage} />
+                <Route path="/onboarding">
+                  <>
+                    <Show when="signed-in">
+                      <Onboarding />
+                    </Show>
+                    <Show when="signed-out">
+                      <Redirect to="/sign-in" />
+                    </Show>
+                  </>
+                </Route>
+                <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>
+                <Route path="/records"><ProtectedRoute component={Records} /></Route>
+                <Route path="/timeline"><ProtectedRoute component={Timeline} /></Route>
+                <Route path="/biological-age"><ProtectedRoute component={BiologicalAge} /></Route>
+                <Route path="/supplements"><ProtectedRoute component={Supplements} /></Route>
+                <Route path="/protocols"><ProtectedRoute component={Protocols} /></Route>
+                <Route path="/chat"><ProtectedRoute component={Chat} /></Route>
+                <Route path="/share-portal"><ProtectedRoute component={Share} /></Route>
+                <Route path="/settings"><ProtectedRoute component={Settings} /></Route>
+                <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
+                <Route path="/reports/:id"><ProtectedRoute component={Report} /></Route>
+                <Route component={NotFound} />
+              </Switch>
+              <Toaster />
+            </TooltipProvider>
+          </ActivePatientProvider>
         </ModeProvider>
       </QueryClientProvider>
     </ClerkProvider>

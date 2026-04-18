@@ -11,6 +11,14 @@ import supplementsRouter from "./supplements";
 import biologicalAgeRouter from "./biological-age";
 import correlationsRouter from "./correlations";
 import baselinesRouter from "./baselines";
+import notesRouter from "./notes";
+import alertPrefsRouter from "./alert-prefs";
+import accountRouter from "./account";
+import chatRouter from "./chat";
+import predictionsRouter from "./predictions";
+import shareRouter, { publicRouter as sharePublicRouter } from "./share";
+import protocolsRouter, { globalRouter as protocolsGlobalRouter } from "./protocols";
+import reportsRouter from "./reports";
 
 const router: IRouter = Router();
 
@@ -26,6 +34,16 @@ router.use("/patients/:patientId/supplements", supplementsRouter);
 router.use("/patients/:patientId/biological-age", biologicalAgeRouter);
 router.use("/patients/:patientId/correlations", correlationsRouter);
 router.use("/patients/:patientId/baselines", baselinesRouter);
+router.use("/patients/:patientId/notes", notesRouter);
+router.use("/patients/:patientId/alert-preferences", alertPrefsRouter);
+router.use("/patients/:patientId/chat", chatRouter);
+router.use("/patients/:patientId/predictions", predictionsRouter);
+router.use("/patients/:patientId/share-links", shareRouter);
+router.use("/patients/:patientId/protocols", protocolsRouter);
+router.use("/patients/:patientId/reports", reportsRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
+router.use("/protocols", protocolsGlobalRouter);
+router.use("/me", accountRouter);
+router.use("/share", sharePublicRouter);
 
 export default router;

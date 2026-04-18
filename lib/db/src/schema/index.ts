@@ -8,3 +8,4 @@ export * from "./audit";
 export * from "./supplements";
 export * from "./biological-age";
 export * from "./baselines";
+export * from "./phase3";
