@@ -427,19 +427,62 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
       });
       const text = message.content[0].type === "text" ? message.content[0].text : "";
       return parseJSONFromLLM(text) as Record<string, unknown>;
-    } else {
+    } else if (mimeType === "application/pdf") {
+      // Anthropic native PDF support — model receives both visual and text layers.
       const message = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 4000,
         messages: [
           {
             role: "user",
-            content: `${extractionPrompt}\n\nPlease extract data from the medical document. This appears to be a PDF document.`,
+            content: [
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: base64File,
+                },
+              },
+              { type: "text", text: extractionPrompt },
+            ],
           },
         ],
       });
-      const text = message.content[0].type === "text" ? message.content[0].text : "";
+      const text = message.content[0]?.type === "text" ? message.content[0].text : "";
       return parseJSONFromLLM(text) as Record<string, unknown>;
+    } else if (
+      mimeType.startsWith("text/") ||
+      mimeType === "application/json" ||
+      mimeType === "application/csv" ||
+      mimeType === "application/xml"
+    ) {
+      // Plain text / structured exports (e.g. wearable CSV/JSON, lab text dumps).
+      let decoded = "";
+      try {
+        decoded = Buffer.from(base64File, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const truncated = decoded.length > 60000 ? decoded.slice(0, 60000) + "\n…[truncated]" : decoded;
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4000,
+        messages: [
+          {
+            role: "user",
+            content: `${extractionPrompt}\n\nThe document content (${mimeType}) is provided below verbatim. Extract from this text only — do not invent values.\n\n----- DOCUMENT START -----\n${truncated}\n----- DOCUMENT END -----`,
+          },
+        ],
+      });
+      const text = message.content[0]?.type === "text" ? message.content[0].text : "";
+      return parseJSONFromLLM(text) as Record<string, unknown>;
+    } else {
+      logger.warn({ mimeType }, "Unsupported document MIME type for extraction");
+      return {
+        extractionError: true,
+        note: `Unsupported file type: ${mimeType}. Supported formats: JPG, PNG, WebP, GIF, PDF, plain text, JSON, CSV, XML.`,
+      };
     }
   } catch (err) {
     logger.error({ err }, "Failed to extract from document");
