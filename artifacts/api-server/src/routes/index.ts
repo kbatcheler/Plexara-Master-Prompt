@@ -19,6 +19,11 @@ import predictionsRouter from "./predictions";
 import shareRouter, { publicRouter as sharePublicRouter } from "./share";
 import protocolsRouter, { globalRouter as protocolsGlobalRouter } from "./protocols";
 import reportsRouter from "./reports";
+import storageRouter from "./storage";
+import geneticsRouter, { globalRouter as pgsCatalogRouter } from "./genetics";
+import imagingRouter, { dicomRouter } from "./imaging";
+import complianceRouter from "./compliance";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -44,6 +49,14 @@ router.use("/patients/:patientId/reports", reportsRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
 router.use("/protocols", protocolsGlobalRouter);
 router.use("/me", accountRouter);
+router.use("/me", complianceRouter);
 router.use("/share", sharePublicRouter);
+router.use("/admin", adminRouter);
+router.use("/patients/:patientId/genetics", geneticsRouter);
+router.use("/patients/:patientId/imaging", imagingRouter);
+router.use("/patients/:patientId", geneticsRouter); // also exposes /patients/:pid/prs
+router.use(pgsCatalogRouter);
+router.use(dicomRouter);
+router.use(storageRouter);
 
 export default router;

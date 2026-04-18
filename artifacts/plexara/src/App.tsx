@@ -24,6 +24,11 @@ import SharedView from "./pages/SharedView";
 import Protocols from "./pages/Protocols";
 import Report from "./pages/Report";
 import Chat from "./pages/Chat";
+import Genetics from "./pages/Genetics";
+import Imaging from "./pages/Imaging";
+import ImagingViewer from "./pages/ImagingViewer";
+import Consents from "./pages/Consents";
+import Admin from "./pages/Admin";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
 import { ActivePatientProvider } from "./context/ActivePatientContext";
@@ -152,6 +157,11 @@ function ClerkProviderWithRoutes() {
                 <Route path="/settings"><ProtectedRoute component={Settings} /></Route>
                 <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
                 <Route path="/reports/:id"><ProtectedRoute component={Report} /></Route>
+                <Route path="/genetics"><ProtectedRoute component={Genetics} /></Route>
+                <Route path="/imaging"><ProtectedRoute component={Imaging} /></Route>
+                <Route path="/imaging/:id"><ProtectedRoute component={ImagingViewer} /></Route>
+                <Route path="/consents"><ProtectedRoute component={Consents} /></Route>
+                <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
                 <Route component={NotFound} />
               </Switch>
               <Toaster />

@@ -25,8 +25,14 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { isAdminUserId } from "../lib/admin";
 
 const router = Router();
+
+router.get("/profile", requireAuth, (req, res): void => {
+  const { userId } = req as AuthenticatedRequest;
+  res.json({ userId, isAdmin: isAdminUserId(userId) });
+});
 
 router.get("/export", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;

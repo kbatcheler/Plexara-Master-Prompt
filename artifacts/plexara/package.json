@@ -75,6 +75,10 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@clerk/react": "^6.2.1"
+    "@clerk/react": "^6.2.1",
+    "@cornerstonejs/core": "^4.21.7",
+    "@cornerstonejs/dicom-image-loader": "^4.21.7",
+    "@cornerstonejs/tools": "^4.21.7",
+    "dicom-parser": "^1.8.21"
   }
 }

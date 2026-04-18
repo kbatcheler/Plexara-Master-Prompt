@@ -32,15 +32,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <Link href="/timeline" className="hover:text-primary transition-colors">Timeline</Link>
               <Link href="/biological-age" className="hover:text-primary transition-colors">Bio Age</Link>
               <Link href="/supplements" className="hover:text-primary transition-colors">Supplements</Link>
-              <Link href="/protocols" className="hover:text-primary transition-colors">Protocols</Link>
+              <Link href="/genetics" className="hover:text-primary transition-colors">Genetics</Link>
+              <Link href="/imaging" className="hover:text-primary transition-colors">Imaging</Link>
               <Link href="/chat" className="hover:text-primary transition-colors">Ask</Link>
               <DropdownMenu>
                 <DropdownMenuTrigger className="hover:text-primary transition-colors flex items-center gap-1">
                   More <MoreHorizontal className="w-3 h-3" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
+                  <DropdownMenuItem asChild><Link href="/protocols">Protocols</Link></DropdownMenuItem>
                   <DropdownMenuItem asChild><Link href="/share-portal">Share with clinician</Link></DropdownMenuItem>
+                  <DropdownMenuItem asChild><Link href="/consents">Consent &amp; data control</Link></DropdownMenuItem>
                   <DropdownMenuItem asChild><Link href="/audit">Audit log</Link></DropdownMenuItem>
+                  <DropdownMenuItem asChild><Link href="/admin">Admin console</Link></DropdownMenuItem>
                   <DropdownMenuItem asChild><Link href="/settings">Settings</Link></DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

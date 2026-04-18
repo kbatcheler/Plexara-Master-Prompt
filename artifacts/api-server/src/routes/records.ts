@@ -9,6 +9,7 @@ import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { stripPII, hashData } from "../lib/pii";
 import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext } from "../lib/ai";
 import { logger } from "../lib/logger";
+import { isProviderAllowed } from "../lib/consent";
 
 const router = Router({ mergeParams: true });
 
@@ -50,6 +51,11 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     ethnicity: patient?.ethnicity || null,
   };
 
+  const accountId = patient?.accountId || "";
+  const allowAnthropic = await isProviderAllowed(accountId, "anthropic");
+  const allowOpenAi = await isProviderAllowed(accountId, "openai");
+  const allowGemini = await isProviderAllowed(accountId, "gemini");
+
   let interpretationId: number | null = null;
 
   try {
@@ -74,6 +80,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     let lensCOutput = null;
 
     try {
+      if (!allowAnthropic) throw new Error("consent_revoked:anthropic");
       lensAOutput = await runLensA(anonymised, patientCtx);
       await db.update(interpretationsTable)
         .set({ lensAOutput, lensesCompleted: 1 })
@@ -90,7 +97,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     }
 
     try {
-      if (lensAOutput) {
+      if (lensAOutput && allowOpenAi) {
         lensBOutput = await runLensB(anonymised, lensAOutput, patientCtx);
         await db.update(interpretationsTable)
           .set({ lensBOutput, lensesCompleted: lensAOutput ? 2 : 1 })
@@ -108,7 +115,7 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     }
 
     try {
-      if (lensAOutput) {
+      if (lensAOutput && allowGemini) {
         lensCOutput = await runLensC(anonymised, lensAOutput, lensBOutput || lensAOutput, patientCtx);
         const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
         await db.update(interpretationsTable)
@@ -338,7 +345,17 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
         const mimeType = req.file!.mimetype;
 
         let structuredData: Record<string, unknown> = {};
-        
+
+        // Consent-gate document extraction (Anthropic) — fail closed if patient revoked AI consent.
+        const { patientsTable: ptOwnerCheck } = await import("@workspace/db");
+        const [ownerForExtract] = await db.select().from(ptOwnerCheck).where(eq(ptOwnerCheck.id, patientId));
+        const extractAllowed = ownerForExtract ? await isProviderAllowed(ownerForExtract.accountId, "anthropic") : false;
+        if (!extractAllowed) {
+          logger.warn({ patientId, recordId: record.id }, "Skipping document extraction — Anthropic AI consent not granted");
+          await db.update(recordsTable).set({ processingStatus: "consent_blocked" }).where(eq(recordsTable.id, record.id));
+          return;
+        }
+
         try {
           structuredData = await extractFromDocument(base64, mimeType, recordType);
 
