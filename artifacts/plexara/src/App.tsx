@@ -29,6 +29,8 @@ import Imaging from "./pages/Imaging";
 import ImagingViewer from "./pages/ImagingViewer";
 import Consents from "./pages/Consents";
 import Admin from "./pages/Admin";
+import Wearables from "./pages/Wearables";
+import Trends from "./pages/Trends";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
 import { ActivePatientProvider } from "./context/ActivePatientContext";
@@ -162,6 +164,8 @@ function ClerkProviderWithRoutes() {
                 <Route path="/imaging/:id"><ProtectedRoute component={ImagingViewer} /></Route>
                 <Route path="/consents"><ProtectedRoute component={Consents} /></Route>
                 <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
+                <Route path="/wearables"><ProtectedRoute component={Wearables} /></Route>
+                <Route path="/trends"><ProtectedRoute component={Trends} /></Route>
                 <Route component={NotFound} />
               </Switch>
               <Toaster />

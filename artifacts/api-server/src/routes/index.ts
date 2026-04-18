@@ -24,6 +24,8 @@ import geneticsRouter, { globalRouter as pgsCatalogRouter } from "./genetics";
 import imagingRouter, { dicomRouter } from "./imaging";
 import complianceRouter from "./compliance";
 import adminRouter from "./admin";
+import wearablesRouter, { wearablesPatientRouter } from "./wearables";
+import trendsRouter from "./trends";
 
 const router: IRouter = Router();
 
@@ -58,5 +60,8 @@ router.use("/patients/:patientId", geneticsRouter); // also exposes /patients/:p
 router.use(pgsCatalogRouter);
 router.use(dicomRouter);
 router.use(storageRouter);
+router.use("/me", wearablesRouter);
+router.use("/patients/:patientId/wearables", wearablesPatientRouter);
+router.use("/patients/:patientId/trends", trendsRouter);
 
 export default router;
