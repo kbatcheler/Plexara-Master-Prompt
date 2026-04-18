@@ -10,6 +10,9 @@ export const geneticProfilesTable = pgTable("genetic_profiles", {
   fileSha256: text("file_sha256").notNull(),
   snpCount: integer("snp_count").notNull().default(0),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+  interpretation: jsonb("interpretation"),
+  interpretationModel: text("interpretation_model"),
+  interpretationAt: timestamp("interpretation_at", { withTimezone: true }),
 });
 
 export const geneticVariantsTable = pgTable("genetic_variants", {
@@ -61,7 +64,7 @@ export const polygenicScoresTable = pgTable("polygenic_scores", {
   snpsTotal: integer("snps_total").notNull(),
   computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  patientCatalogIdx: uniqueIndex("scores_patient_catalog_idx").on(t.patientId, t.catalogId),
+  patientProfileCatalogIdx: uniqueIndex("scores_patient_profile_catalog_idx").on(t.patientId, t.profileId, t.catalogId),
 }));
 
 // Imaging

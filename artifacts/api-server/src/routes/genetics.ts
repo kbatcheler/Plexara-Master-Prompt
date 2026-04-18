@@ -14,6 +14,8 @@ import {
   computePolygenicScore,
   persistScore,
 } from "../lib/genetics";
+import { runGeneticsInterpretation, computeAgeRange, type PatientContext } from "../lib/ai";
+import { isProviderAllowed } from "../lib/consent";
 
 const router = Router({ mergeParams: true });
 const globalRouter = Router();
@@ -205,6 +207,83 @@ router.get("/prs", requireAuth, async (req, res): Promise<void> => {
   }
 
   res.json({ profile, scores: out });
+});
+
+// POST /patients/:pid/genetics/:profileId/interpret  — Claude-driven plain-language interpretation.
+router.post("/:profileId/interpret", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt(req.params.patientId);
+  const profileId = parseInt(req.params.profileId);
+  if (!(await verifyOwnership(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+  if (!(await isProviderAllowed(userId, "anthropic"))) {
+    res.status(403).json({ error: "Anthropic AI consent not granted — visit Consent & data control to enable interpretation." });
+    return;
+  }
+  const [profile] = await db.select().from(geneticProfilesTable)
+    .where(and(eq(geneticProfilesTable.id, profileId), eq(geneticProfilesTable.patientId, patientId)));
+  if (!profile) {
+    res.status(404).json({ error: "Profile not found" });
+    return;
+  }
+  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
+  const patientCtx: PatientContext = {
+    ageRange: computeAgeRange(patient?.dateOfBirth),
+    sex: patient?.sex || null,
+    ethnicity: patient?.ethnicity || null,
+  };
+
+  await ensureCatalogSeeded();
+  const catalog = await db.select().from(pgsCatalogTable);
+  let scores = await db.select().from(polygenicScoresTable)
+    .where(and(eq(polygenicScoresTable.patientId, patientId), eq(polygenicScoresTable.profileId, profile.id)));
+  // If not yet computed for this profile, compute now.
+  for (const cat of catalog) {
+    if (!scores.find((s) => s.catalogId === cat.id)) {
+      try {
+        const result = await computePolygenicScore(profile.id, patientId, cat.id);
+        await persistScore(patientId, profile.id, cat.id, result);
+      } catch (err) {
+        logger.warn({ err, pgsId: cat.pgsId }, "PRS compute failed during interpretation; skipping");
+      }
+    }
+  }
+  scores = await db.select().from(polygenicScoresTable)
+    .where(and(eq(polygenicScoresTable.patientId, patientId), eq(polygenicScoresTable.profileId, profile.id)));
+
+  const scoreInput = scores.map((s) => {
+    const c = catalog.find((x) => x.id === s.catalogId)!;
+    return {
+      pgsId: c.pgsId, trait: c.trait, name: c.name,
+      rawScore: s.rawScore, zScore: s.zScore, percentile: s.percentile,
+      matched: s.snpsMatched, total: s.snpsTotal,
+    };
+  });
+  if (scoreInput.length === 0) {
+    res.status(400).json({ error: "No polygenic scores available to interpret." });
+    return;
+  }
+
+  try {
+    const interpretation = await runGeneticsInterpretation({ patientCtx, scores: scoreInput });
+    await db.update(geneticProfilesTable).set({
+      interpretation,
+      interpretationModel: "claude-sonnet-4-6",
+      interpretationAt: new Date(),
+    }).where(eq(geneticProfilesTable.id, profileId));
+    await db.insert(auditLogTable).values({
+      patientId,
+      actionType: "genetics_interpret",
+      llmProvider: "anthropic",
+      dataSentHash: profile.fileSha256,
+    });
+    res.json({ interpretation, model: "claude-sonnet-4-6", at: new Date().toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Genetics interpretation failed");
+    res.status(500).json({ error: err instanceof Error ? err.message : "Interpretation failed" });
+  }
 });
 
 // POST /patients/:pid/prs/recompute

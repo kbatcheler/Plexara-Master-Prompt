@@ -1,17 +1,31 @@
 import { Router } from "express";
 import multer from "multer";
 import { Readable } from "stream";
-import { db, imagingStudiesTable, imagingAnnotationsTable, patientsTable } from "@workspace/db";
+import fs from "fs";
+import path from "path";
+import { db, imagingStudiesTable, imagingAnnotationsTable, patientsTable, recordsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
 import { parseDicomMetadata } from "../lib/dicom";
 import { logger } from "../lib/logger";
+import { processUploadedDocument } from "./records";
 
 const router = Router({ mergeParams: true });
 const dicomRouter = Router();
 const storage = new ObjectStorageService();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+
+const REPORTS_DIR = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
+const reportUpload = multer({
+  dest: REPORTS_DIR,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    cb(allowed.includes(file.mimetype) ? null : new Error("PDF or image only"), allowed.includes(file.mimetype));
+  },
+});
 
 async function verifyOwnership(patientId: number, userId: string): Promise<boolean> {
   const [p] = await db.select().from(patientsTable).where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
@@ -70,6 +84,57 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
     res.status(201).json(study);
   } catch (err) {
     logger.error({ err }, "DICOM upload failed");
+    res.status(500).json({ error: "Upload failed" });
+  }
+});
+
+// POST /patients/:pid/imaging/:studyId/report — attach a PDF/image report to an imaging
+// study and route it through the standard extraction + interpretation pipeline.
+router.post("/:studyId/report", requireAuth, reportUpload.single("file"), async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt(req.params.patientId);
+  const studyId = parseInt(req.params.studyId);
+  if (!(await verifyOwnership(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+  if (!req.file) {
+    res.status(400).json({ error: "No file uploaded" });
+    return;
+  }
+  const [study] = await db.select().from(imagingStudiesTable)
+    .where(and(eq(imagingStudiesTable.id, studyId), eq(imagingStudiesTable.patientId, patientId)));
+  if (!study) {
+    res.status(404).json({ error: "Study not found" });
+    return;
+  }
+
+  try {
+    const recordType = study.modality ? `imaging_${study.modality.toLowerCase()}_report` : "imaging_report";
+    const [record] = await db.insert(recordsTable).values({
+      patientId,
+      recordType,
+      filePath: req.file.path,
+      fileName: req.file.originalname,
+      testDate: study.studyDate || null,
+      status: "pending",
+    }).returning();
+
+    await db.update(imagingStudiesTable).set({ recordId: record.id }).where(eq(imagingStudiesTable.id, studyId));
+    res.status(201).json({ record, study: { ...study, recordId: record.id } });
+
+    setImmediate(() => {
+      processUploadedDocument({
+        patientId,
+        recordId: record.id,
+        filePath: req.file!.path,
+        mimeType: req.file!.mimetype,
+        recordType,
+        testDate: study.studyDate || null,
+      }).catch((err) => logger.error({ err, recordId: record.id }, "Imaging report extraction failed"));
+    });
+  } catch (err) {
+    logger.error({ err }, "Imaging report upload failed");
     res.status(500).json({ error: "Upload failed" });
   }
 });

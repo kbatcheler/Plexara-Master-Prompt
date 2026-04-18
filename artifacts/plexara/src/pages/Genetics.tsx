@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Upload, Trash2, RefreshCw, Dna } from "lucide-react";
+import { Loader2, Upload, Trash2, RefreshCw, Dna, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface GeneticProfile {
@@ -17,6 +17,18 @@ interface GeneticProfile {
   fileSha256: string;
   snpCount: number;
   uploadedAt: string;
+  interpretation: GeneticsInterpretation | null;
+  interpretationModel: string | null;
+  interpretationAt: string | null;
+}
+
+interface GeneticsInterpretation {
+  summary: string;
+  topInsights: Array<{ trait: string; pgsId: string; percentile: number | null; interpretation: string; clinicalRelevance: "low" | "moderate" | "high" }>;
+  notableVariants: Array<{ rsid: string; gene?: string; significance: string }>;
+  lifestyleConsiderations: string[];
+  followUpRecommendations: string[];
+  caveats: string[];
 }
 
 interface PrsScore {
@@ -79,6 +91,15 @@ export default function Genetics() {
   const recomputeMut = useMutation({
     mutationFn: () => api(`/patients/${patientId}/prs/recompute`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["prs", patientId] }),
+  });
+
+  const interpretMut = useMutation({
+    mutationFn: (profileId: number) => api(`/patients/${patientId}/genetics/${profileId}/interpret`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["genetics", patientId] });
+      toast({ title: "Interpretation ready", description: "Scroll to the bottom of this page." });
+    },
+    onError: (err: Error) => toast({ title: "Interpretation failed", description: err.message, variant: "destructive" }),
   });
 
   async function onUpload(file: File) {
@@ -221,6 +242,80 @@ export default function Genetics() {
           </CardContent>
         </Card>
       )}
+      {/* AI interpretation */}
+      {(profilesQ.data?.length ?? 0) > 0 && (() => {
+        const latest = profilesQ.data![0];
+        const interp = latest.interpretation;
+        return (
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" /> Plain-language interpretation</CardTitle>
+                <CardDescription>
+                  Claude translates your scores into a counselling-style summary. Anonymised PRS values only — no raw genome leaves your account.
+                </CardDescription>
+              </div>
+              <Button size="sm" onClick={() => interpretMut.mutate(latest.id)} disabled={interpretMut.isPending} data-testid="genetics-interpret">
+                {interpretMut.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                {interp ? "Re-run" : "Interpret my results"}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!interp ? (
+                <div className="text-sm text-muted-foreground">
+                  No interpretation yet. Click <em>Interpret my results</em> to generate one. (Requires Anthropic AI consent.)
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm leading-relaxed">{interp.summary}</p>
+                  {interp.topInsights.length > 0 && (
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Top insights</div>
+                      <ul className="space-y-2">
+                        {interp.topInsights.map((i) => (
+                          <li key={i.pgsId} className="rounded-md border border-border/40 p-3 bg-secondary/20">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{i.trait}</span>
+                              <Badge variant="outline" className="text-[10px]">{i.pgsId}</Badge>
+                              <Badge variant={i.clinicalRelevance === "high" ? "destructive" : i.clinicalRelevance === "moderate" ? "secondary" : "outline"} className="text-[10px]">
+                                {i.clinicalRelevance}
+                              </Badge>
+                              {i.percentile !== null && <span className="text-xs text-muted-foreground ml-auto font-mono">pct {i.percentile.toFixed(1)}</span>}
+                            </div>
+                            <p className="text-sm text-muted-foreground mt-2">{i.interpretation}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {interp.lifestyleConsiderations.length > 0 && (
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Lifestyle considerations</div>
+                      <ul className="text-sm space-y-1 list-disc pl-5">{interp.lifestyleConsiderations.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                  {interp.followUpRecommendations.length > 0 && (
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Follow-up recommendations</div>
+                      <ul className="text-sm space-y-1 list-disc pl-5">{interp.followUpRecommendations.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                  {interp.caveats.length > 0 && (
+                    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                      <div className="text-xs uppercase tracking-wide text-amber-400 mb-1">Caveats</div>
+                      <ul className="text-xs space-y-1 list-disc pl-5 text-muted-foreground">{interp.caveats.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-muted-foreground">
+                    Generated by {latest.interpretationModel} · {latest.interpretationAt && new Date(latest.interpretationAt).toLocaleString()}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       <p className="text-xs text-muted-foreground italic">
         Polygenic scores estimate genetic predisposition relative to a reference population. They are <strong>not</strong> diagnostic. Results derived for European ancestry calibrate poorly outside that population — confer with a clinical genetic counsellor for actionable interpretation.
       </p>

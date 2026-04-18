@@ -16,21 +16,21 @@ export const CONSENT_SCOPES: ConsentScopeDef[] = [
     category: "ai",
     label: "Anthropic (Claude) interpretation",
     description: "Allow de-identified health data to be sent to Anthropic's Claude API for the first interpretation lens.",
-    defaultGranted: true,
+    defaultGranted: false,
   },
   {
     key: "ai.openai.send_phi",
     category: "ai",
     label: "OpenAI (GPT) interpretation",
     description: "Allow de-identified health data to be sent to OpenAI's GPT API for the second interpretation lens.",
-    defaultGranted: true,
+    defaultGranted: false,
   },
   {
     key: "ai.gemini.send_phi",
     category: "ai",
     label: "Google (Gemini) interpretation",
     description: "Allow de-identified health data to be sent to Google's Gemini API for the third interpretation lens.",
-    defaultGranted: true,
+    defaultGranted: false,
   },
   {
     key: "sharing.physician",
@@ -106,8 +106,10 @@ export async function setConsent(accountId: string, scopeKey: string, granted: b
 }
 
 export async function isProviderAllowed(accountId: string, provider: "anthropic" | "openai" | "gemini"): Promise<boolean> {
+  // Fail-closed: AI providers are off by default; only an explicit, currently-granted
+  // consent record on the patient's account allows data transmission.
   const key = `ai.${provider}.send_phi`;
   const consents = await getEffectiveConsents(accountId);
   const c = consents.find((x) => x.key === key);
-  return c ? c.granted : true;
+  return c ? c.granted : false;
 }

@@ -40,6 +40,80 @@ async function verifyPatientOwnership(patientId: number, userId: string): Promis
   return !!patient;
 }
 
+// Extracts a document (PDF/image) via the AI extraction pipeline and stores biomarkers,
+// then runs the multi-lens interpretation. Used by the records upload route AND by the
+// imaging report attachment route. Consent-gated against Anthropic.
+export async function processUploadedDocument(opts: {
+  patientId: number;
+  recordId: number;
+  filePath: string;
+  mimeType: string;
+  recordType: string;
+  testDate?: string | null;
+}): Promise<void> {
+  const { patientId, recordId, filePath, mimeType, recordType, testDate } = opts;
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const base64 = fileBuffer.toString("base64");
+    let structuredData: Record<string, unknown> = {};
+
+    const { patientsTable: ptOwnerCheck } = await import("@workspace/db");
+    const [ownerForExtract] = await db.select().from(ptOwnerCheck).where(eq(ptOwnerCheck.id, patientId));
+    const extractAllowed = ownerForExtract ? await isProviderAllowed(ownerForExtract.accountId, "anthropic") : false;
+    if (!extractAllowed) {
+      logger.warn({ patientId, recordId }, "Skipping document extraction — Anthropic AI consent not granted");
+      await db.update(recordsTable).set({ status: "consent_blocked" }).where(eq(recordsTable.id, recordId));
+      return;
+    }
+
+    try {
+      structuredData = await extractFromDocument(base64, mimeType, recordType);
+
+      await db.insert(extractedDataTable).values({
+        recordId,
+        patientId,
+        dataType: (structuredData.documentType as string) || recordType,
+        structuredJson: structuredData,
+        extractionModel: "claude-sonnet-4-6",
+        extractionConfidence: "high",
+      });
+
+      const biomarkers = (structuredData.biomarkers as Array<{
+        name: string; value: number; unit: string;
+        labRefLow?: number; labRefHigh?: number; category?: string;
+      }>) || [];
+
+      if (biomarkers.length > 0) {
+        const refData = await db.select().from(biomarkerReferenceTable);
+        const refMap = new Map(refData.map(r => [r.biomarkerName.toLowerCase(), r]));
+        for (const bm of biomarkers) {
+          const ref = refMap.get(bm.name.toLowerCase());
+          await db.insert(biomarkerResultsTable).values({
+            patientId,
+            recordId,
+            biomarkerName: bm.name,
+            category: bm.category || ref?.category || null,
+            value: bm.value ? bm.value.toString() : null,
+            unit: bm.unit || ref?.unit || null,
+            labReferenceLow: bm.labRefLow ? bm.labRefLow.toString() : null,
+            labReferenceHigh: bm.labRefHigh ? bm.labRefHigh.toString() : null,
+            optimalRangeLow: ref?.optimalRangeLow ? ref.optimalRangeLow.toString() : null,
+            optimalRangeHigh: ref?.optimalRangeHigh ? ref.optimalRangeHigh.toString() : null,
+            testDate: (structuredData.testDate as string) || testDate || null,
+          });
+        }
+      }
+    } catch (extractErr) {
+      logger.error({ extractErr }, "Extraction failed, using empty data");
+    }
+
+    await runInterpretationPipeline(patientId, recordId, structuredData);
+  } catch (bgErr) {
+    logger.error({ bgErr }, "Background processing failed");
+    await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+  }
+}
+
 async function runInterpretationPipeline(patientId: number, recordId: number, structuredData: Record<string, unknown>): Promise<void> {
   const anonymised = stripPII(structuredData) as AnonymisedData;
 

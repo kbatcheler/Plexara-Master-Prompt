@@ -284,9 +284,15 @@ export async function persistScore(
   catalogId: number,
   result: { rawScore: number; zScore: number | null; percentile: number | null; matched: number; total: number },
 ): Promise<void> {
-  // Upsert: drop any prior score for this (patient, catalog) and insert fresh.
+  // Upsert: drop any prior score for this (patient, profile, catalog) and insert fresh.
+  // Scoping by profileId ensures different uploads (e.g. 23andMe vs VCF) keep their own
+  // score row instead of overwriting each other.
   await db.delete(polygenicScoresTable).where(
-    and(eq(polygenicScoresTable.patientId, patientId), eq(polygenicScoresTable.catalogId, catalogId))
+    and(
+      eq(polygenicScoresTable.patientId, patientId),
+      eq(polygenicScoresTable.profileId, profileId),
+      eq(polygenicScoresTable.catalogId, catalogId),
+    )
   );
   await db.insert(polygenicScoresTable).values({
     patientId,
