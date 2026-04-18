@@ -27,6 +27,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground ml-6">
               <Link href="/dashboard" className="hover:text-primary transition-colors">Dashboard</Link>
               <Link href="/records" className="hover:text-primary transition-colors">Records</Link>
+              <Link href="/timeline" className="hover:text-primary transition-colors">Timeline</Link>
+              <Link href="/biological-age" className="hover:text-primary transition-colors">Biological Age</Link>
+              <Link href="/supplements" className="hover:text-primary transition-colors">Supplements</Link>
             </nav>
           </div>
 

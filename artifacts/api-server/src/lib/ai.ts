@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { logger } from "./logger";
+import { stripPII } from "./pii";
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -390,4 +391,161 @@ Return valid JSON only:
     logger.error({ err }, "Failed to extract from document");
     return { extractionError: true, note: "Extraction failed" };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 2: Cross-record correlation + supplement recommendations
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface BiomarkerTrend {
+  biomarkerName: string;
+  category: string;
+  unit: string | null;
+  series: Array<{ date: string; value: number; lensRange?: { low: number | null; high: number | null }; optimalRange?: { low: number | null; high: number | null } }>;
+  direction: "improving" | "declining" | "stable" | "fluctuating";
+  changePercent: number | null;
+  clinicalNote: string;
+}
+
+export interface CorrelationOutput {
+  trends: BiomarkerTrend[];
+  patterns: Array<{
+    title: string;
+    description: string;
+    biomarkersInvolved: string[];
+    significance: "urgent" | "watch" | "interesting" | "positive";
+    confidence: "high" | "medium" | "low";
+  }>;
+  narrativeSummary: string;
+  recommendedActions: string[];
+}
+
+const CORRELATION_PROMPT = `You are the Longitudinal Pattern Analyst — interpreting trends across multiple historical lab panels for one anonymised patient.
+
+Your role:
+- Detect biomarkers moving meaningfully out of (or into) optimal range over time
+- Identify covarying patterns (e.g. rising HbA1c with rising triglycerides + falling HDL = developing metabolic syndrome)
+- Distinguish meaningful trends from physiological noise (require ≥10% directional change OR crossing optimal-range threshold to flag)
+- Suggest actionable interventions and highlight which biomarkers warrant earliest re-testing
+
+You receive: anonymised patient demographics + a time-ordered series of biomarker panels.
+
+Respond with valid JSON only:
+{
+  "trends": [
+    {
+      "biomarkerName": "string",
+      "category": "string",
+      "unit": "string|null",
+      "series": [{"date": "YYYY-MM-DD", "value": number}],
+      "direction": "improving|declining|stable|fluctuating",
+      "changePercent": number|null,
+      "clinicalNote": "string (1 sentence on what this trend means)"
+    }
+  ],
+  "patterns": [
+    {
+      "title": "string (concise pattern name)",
+      "description": "string (2-3 sentences)",
+      "biomarkersInvolved": ["string"],
+      "significance": "urgent|watch|interesting|positive",
+      "confidence": "high|medium|low"
+    }
+  ],
+  "narrativeSummary": "string (1 paragraph, second-person, plain English)",
+  "recommendedActions": ["string"]
+}`;
+
+export async function runCrossRecordCorrelation(
+  panelHistory: Array<{ testDate: string | null; biomarkers: Array<{ name: string; value: number | null; unit: string | null; category: string | null }> }>,
+  patientCtx?: PatientContext,
+): Promise<CorrelationOutput> {
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
+  // Privacy: strip any PII that may have leaked into the structured panel before sending to the model
+  const sanitisedHistory = stripPII({ panelHistory } as unknown as Record<string, unknown>) as unknown as { panelHistory: typeof panelHistory };
+  const prompt = `${demographics}\n\nTime-ordered panel history (oldest to newest):\n${JSON.stringify(sanitisedHistory.panelHistory, null, 2)}`;
+
+  const message = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 4000,
+    system: CORRELATION_PROMPT,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text = message.content[0].type === "text" ? message.content[0].text : "";
+  return parseJSONFromLLM(text) as CorrelationOutput;
+}
+
+export interface SupplementRecommendation {
+  name: string;
+  dosage: string;
+  rationale: string;
+  targetBiomarkers: string[];
+  evidenceLevel: "strong" | "moderate" | "emerging";
+  priority: "high" | "moderate" | "low";
+  citation: string;
+}
+
+export interface SupplementRecommendationsOutput {
+  recommendations: SupplementRecommendation[];
+  cautions: string[];
+  redundantWithCurrentStack: string[];
+}
+
+const SUPPLEMENT_PROMPT = `You are the Evidence-Based Supplement Advisor — recommending supplements grounded ONLY in published peer-reviewed evidence relevant to the anonymised patient's specific biomarker findings.
+
+Strict rules:
+- Recommend ONLY supplements with documented evidence for the patient's specific abnormal/suboptimal biomarkers
+- Every recommendation MUST include a real citation (author, journal, year)
+- Do NOT recommend supplements as a general wellness package — only for evidence-supported indications
+- If the patient already takes something in the proposed list (current stack), flag as redundant rather than duplicating
+- Always include cautions where relevant (e.g. drug interactions, upper limits, conditions to avoid)
+- Prefer dietary form (e.g. methylfolate vs folic acid) where evidence supports
+- This is informational only, not medical advice — the rationale must say so
+
+You receive: anonymised patient demographics + reconciled biomarker findings + current supplement stack.
+
+Respond with valid JSON only:
+{
+  "recommendations": [
+    {
+      "name": "string",
+      "dosage": "string (e.g. '2000 IU daily with fat')",
+      "rationale": "string (2-3 sentences linking specific biomarker to supplement)",
+      "targetBiomarkers": ["string"],
+      "evidenceLevel": "strong|moderate|emerging",
+      "priority": "high|moderate|low",
+      "citation": "string (Author Year, Journal full reference)"
+    }
+  ],
+  "cautions": ["string"],
+  "redundantWithCurrentStack": ["string"]
+}`;
+
+export async function runSupplementRecommendations(
+  reconciled: ReconciledOutput,
+  currentStack: Array<{ name: string; dosage: string | null }>,
+  patientCtx?: PatientContext,
+): Promise<SupplementRecommendationsOutput> {
+  const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
+  // Privacy: recursively strip any PII before passing to the model
+  const sanitised = stripPII({
+    currentStack,
+    findings: {
+      topConcerns: reconciled.topConcerns,
+      urgentFlags: reconciled.urgentFlags,
+      gaugeUpdates: reconciled.gaugeUpdates,
+    },
+  } as unknown as Record<string, unknown>);
+  const prompt = `${demographics}\n\nCurrent supplement stack:\n${JSON.stringify((sanitised as { currentStack: unknown }).currentStack, null, 2)}\n\nReconciled biomarker findings:\n${JSON.stringify((sanitised as { findings: unknown }).findings, null, 2)}`;
+
+  const message = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 3000,
+    system: SUPPLEMENT_PROMPT,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text = message.content[0].type === "text" ? message.content[0].text : "";
+  return parseJSONFromLLM(text) as SupplementRecommendationsOutput;
 }

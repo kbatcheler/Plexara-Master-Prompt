@@ -5,3 +5,5 @@ export * from "./interpretations";
 export * from "./gauges";
 export * from "./alerts";
 export * from "./audit";
+export * from "./supplements";
+export * from "./biological-age";

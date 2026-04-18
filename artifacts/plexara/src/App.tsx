@@ -12,6 +12,9 @@ import SignInPage from "./pages/SignIn";
 import SignUpPage from "./pages/SignUp";
 import Dashboard from "./pages/Dashboard";
 import Records from "./pages/Records";
+import Timeline from "./pages/Timeline";
+import BiologicalAge from "./pages/BiologicalAge";
+import Supplements from "./pages/Supplements";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/not-found";
 import { Layout } from "./components/layout/Layout";
@@ -133,6 +136,15 @@ function ClerkProviderWithRoutes() {
               </Route>
               <Route path="/records">
                 <ProtectedRoute component={Records} />
+              </Route>
+              <Route path="/timeline">
+                <ProtectedRoute component={Timeline} />
+              </Route>
+              <Route path="/biological-age">
+                <ProtectedRoute component={BiologicalAge} />
+              </Route>
+              <Route path="/supplements">
+                <ProtectedRoute component={Supplements} />
               </Route>
               <Route component={NotFound} />
             </Switch>
