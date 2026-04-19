@@ -36,6 +36,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <Link href="/imaging" className="hover:text-primary transition-colors">Imaging</Link>
               <Link href="/wearables" className="hover:text-primary transition-colors">Wearables</Link>
               <Link href="/trends" className="hover:text-primary transition-colors">Trends</Link>
+              <Link href="/safety" className="hover:text-primary transition-colors">Safety</Link>
               <Link href="/chat" className="hover:text-primary transition-colors">Ask</Link>
               <DropdownMenu>
                 <DropdownMenuTrigger className="hover:text-primary transition-colors flex items-center gap-1">

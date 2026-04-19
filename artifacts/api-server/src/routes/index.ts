@@ -26,6 +26,7 @@ import complianceRouter from "./compliance";
 import adminRouter from "./admin";
 import wearablesRouter, { wearablesPatientRouter } from "./wearables";
 import trendsRouter from "./trends";
+import safetyRouter from "./safety";
 
 const router: IRouter = Router();
 
@@ -63,5 +64,6 @@ router.use(storageRouter);
 router.use("/me", wearablesRouter);
 router.use("/patients/:patientId/wearables", wearablesPatientRouter);
 router.use("/patients/:patientId/trends", trendsRouter);
+router.use("/patients/:patientId/safety", safetyRouter);
 
 export default router;

@@ -31,6 +31,7 @@ import Consents from "./pages/Consents";
 import Admin from "./pages/Admin";
 import Wearables from "./pages/Wearables";
 import Trends from "./pages/Trends";
+import Safety from "./pages/Safety";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
 import { ActivePatientProvider } from "./context/ActivePatientContext";
@@ -166,6 +167,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
                 <Route path="/wearables"><ProtectedRoute component={Wearables} /></Route>
                 <Route path="/trends"><ProtectedRoute component={Trends} /></Route>
+                <Route path="/safety"><ProtectedRoute component={Safety} /></Route>
                 <Route component={NotFound} />
               </Switch>
               <Toaster />
