@@ -32,6 +32,8 @@ import Admin from "./pages/Admin";
 import Wearables from "./pages/Wearables";
 import Trends from "./pages/Trends";
 import Safety from "./pages/Safety";
+import DevSignIn from "./pages/DevSignIn";
+import { isDevSignedIn } from "./lib/dev-auth";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
 import { ActivePatientProvider } from "./context/ActivePatientContext";
@@ -60,6 +62,7 @@ if (!clerkPubKey) {
 }
 
 function HomeRedirect() {
+  if (isDevSignedIn()) return <Redirect to="/dashboard" />;
   return (
     <>
       <Show when="signed-in">
@@ -73,6 +76,15 @@ function HomeRedirect() {
 }
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  if (isDevSignedIn()) {
+    return (
+      <OnboardingGate>
+        <Layout>
+          <Component />
+        </Layout>
+      </OnboardingGate>
+    );
+  }
   return (
     <>
       <Show when="signed-in">
@@ -139,6 +151,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/share/:token" component={SharedView} />
                 <Route path="/sign-in/*?" component={SignInPage} />
                 <Route path="/sign-up/*?" component={SignUpPage} />
+                <Route path="/dev-login" component={DevSignIn} />
                 <Route path="/onboarding">
                   <>
                     <Show when="signed-in">
