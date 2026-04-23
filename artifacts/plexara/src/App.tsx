@@ -95,7 +95,7 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
         </OnboardingGate>
       </Show>
       <Show when="signed-out">
-        <Redirect to="/sign-in" />
+        <Redirect to="/dev-login" />
       </Show>
     </>
   );

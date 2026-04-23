@@ -12,11 +12,8 @@ export default function Landing() {
           <span className="font-heading font-semibold text-xl tracking-tight">Plexara<span className="text-primary">.</span>health</span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/sign-in" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-            Sign In
-          </Link>
-          <Link href="/sign-up" className="text-sm font-medium bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
-            Get Started
+          <Link href="/dev-login" className="text-sm font-medium bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
+            Enter Platform
           </Link>
         </div>
       </header>
@@ -45,7 +42,7 @@ export default function Landing() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
-            <Link href="/sign-up" className="flex items-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-medium hover:bg-primary/90 transition-all hover:scale-105 shadow-lg shadow-primary/20">
+            <Link href="/dev-login" className="flex items-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-medium hover:bg-primary/90 transition-all hover:scale-105 shadow-lg shadow-primary/20">
               Enter Platform
               <ArrowRight className="w-4 h-4" />
             </Link>
