@@ -426,7 +426,7 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
         const extractAllowed = ownerForExtract ? await isProviderAllowed(ownerForExtract.accountId, "anthropic") : false;
         if (!extractAllowed) {
           logger.warn({ patientId, recordId: record.id }, "Skipping document extraction — Anthropic AI consent not granted");
-          await db.update(recordsTable).set({ processingStatus: "consent_blocked" }).where(eq(recordsTable.id, record.id));
+          await db.update(recordsTable).set({ status: "consent_blocked" }).where(eq(recordsTable.id, record.id));
           return;
         }
 
