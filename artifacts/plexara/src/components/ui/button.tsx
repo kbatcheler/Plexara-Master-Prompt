@@ -4,35 +4,46 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Button variants tuned for Plexara's redesign:
+ * - Larger touch targets (40px default min-height) for accessibility.
+ * - Filled primary; destructive is outlined (NOT filled red) — filling buttons
+ *   red induces anxiety in a medical context. Reduce anxiety everywhere.
+ * - Visible focus ring on keyboard nav (a11y non-negotiable).
+ * - Preserves the platform `hover-elevate` / `active-elevate-2` utilities.
+ */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0" +
-" hover-elevate active-elevate-2",
+  cn(
+    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium",
+    "transition-colors transition-shadow duration-150",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+    "disabled:pointer-events-none disabled:opacity-50",
+    "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+    "hover-elevate active-elevate-2",
+  ),
   {
     variants: {
       variant: {
         default:
-           // @replit: no hover, and add primary border
-           "bg-primary text-primary-foreground border border-primary-border",
+          "bg-primary text-primary-foreground border border-primary-border hover:bg-primary/90",
         destructive:
-          "bg-destructive text-destructive-foreground shadow-sm border-destructive-border",
+          // Outlined-only — never filled red. Hover tints the bg subtly.
+          "border border-destructive/40 text-destructive bg-transparent hover:bg-destructive/5",
         outline:
-          // @replit Shows the background color of whatever card / sidebar / accent background it is inside of.
-          // Inherits the current text color. Uses shadow-xs. no shadow on active
-          // No hover state
           " border [border-color:var(--button-outline)] shadow-xs active:shadow-none ",
         secondary:
-          // @replit border, no hover, no shadow, secondary border.
-          "border bg-secondary text-secondary-foreground border border-secondary-border ",
-        // @replit no hover, transparent border
-        ghost: "border border-transparent",
-        link: "text-primary underline-offset-4 hover:underline",
+          "border bg-secondary text-secondary-foreground border-secondary-border hover:bg-secondary/80",
+        ghost:
+          "border border-transparent hover:bg-secondary/60 hover:text-foreground",
+        link:
+          "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        // @replit changed sizes
-        default: "min-h-9 px-4 py-2",
-        sm: "min-h-8 rounded-md px-3 text-xs",
-        lg: "min-h-10 rounded-md px-8",
-        icon: "h-9 w-9",
+        // 40px default min-height — larger, accessible touch target
+        default: "min-h-10 px-4",
+        sm: "min-h-9 rounded-md px-3 text-xs",
+        lg: "min-h-11 rounded-lg px-6",
+        icon: "h-10 w-10",
       },
     },
     defaultVariants: {

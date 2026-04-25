@@ -2,6 +2,11 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Plexara cards: white surface, subtle 1px border, soft elevation on hover.
+ * No transform/scale on hover — stability communicates trustworthiness in a
+ * medical context.
+ */
 const Card = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
@@ -9,7 +14,8 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border bg-card text-card-foreground shadow",
+      "rounded-xl border border-card-border bg-card text-card-foreground",
+      "transition-shadow duration-200 ease-out hover:shadow-[0_4px_12px_-2px_rgba(15,23,42,0.06)]",
       className
     )}
     {...props}
@@ -35,7 +41,7 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("font-semibold leading-none tracking-tight", className)}
+    className={cn("text-base font-semibold leading-tight tracking-tight", className)}
     {...props}
   />
 ))
@@ -47,7 +53,7 @@ const CardDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    className={cn("text-sm text-muted-foreground leading-normal", className)}
     {...props}
   />
 ))

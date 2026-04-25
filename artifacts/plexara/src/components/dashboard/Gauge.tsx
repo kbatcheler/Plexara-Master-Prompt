@@ -1,173 +1,211 @@
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 import { useMode } from "../../context/ModeContext";
 import { Gauge as GaugeType } from "@workspace/api-client-react";
-import { ArrowUpIcon, ArrowRightIcon, ArrowDownIcon } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface GaugeProps {
   gauge: GaugeType;
+  /** Delay before the fill animation starts. Use `index * 100` in grids for a nice stagger. */
+  delay?: number;
+  /** Pixel diameter. Defaults to 180. The hero variant should pass 220+. */
+  size?: number;
 }
 
 // PostgreSQL `numeric` columns are returned as strings by node-postgres,
-// so values reaching the client may be `string | number | null`. Normalise
-// before using them in arithmetic or `.toFixed(...)`.
+// so values reaching the client may be `string | number | null`.
 function toNum(v: unknown, fallback: number | null = null): number | null {
   if (v === null || v === undefined || v === "") return fallback;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function ArcGauge({ gauge }: GaugeProps) {
+/** Map a 0-100 unified health score to a colour bucket per the design brief. */
+function scoreColour(score: number | null): { varName: string; band: string } {
+  if (score === null) return { varName: "--muted-foreground", band: "Pending" };
+  if (score >= 76) return { varName: "--gauge-optimal", band: "Optimal" };
+  if (score >= 51) return { varName: "--gauge-good", band: "Good" };
+  if (score >= 26) return { varName: "--gauge-fair", band: "Fair" };
+  if (score >= 11) return { varName: "--gauge-poor", band: "Poor" };
+  return { varName: "--gauge-critical", band: "Critical" };
+}
+
+/** Hook: track prefers-reduced-motion so we can skip the fill animation. */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return reduced;
+}
+
+export function ArcGauge({ gauge, delay = 0, size = 180 }: GaugeProps) {
   const { mode } = useMode();
-  const domain = gauge.domain;
+  const score = toNum(gauge.currentValue);
+  const colour = scoreColour(score);
   const trend = gauge.trend;
-  const confidence = gauge.confidence;
   const lensAgreement = gauge.lensAgreement;
 
-  const currentValue = toNum(gauge.currentValue);
-  const clinicalRangeLow = toNum(gauge.clinicalRangeLow, 0) ?? 0;
-  const clinicalRangeHigh = toNum(gauge.clinicalRangeHigh, 100) ?? 100;
-  const optimalRangeLow = toNum(gauge.optimalRangeLow, 20) ?? 20;
-  const optimalRangeHigh = toNum(gauge.optimalRangeHigh, 80) ?? 80;
+  // Confidence ring style: solid (3/3) → dashed (2/3) → dotted (1/3) → none
+  const ringStyle: "solid" | "dashed" | "dotted" | "none" = (() => {
+    if (!lensAgreement) return "none";
+    const head = String(lensAgreement).trim().charAt(0);
+    if (head === "3") return "solid";
+    if (head === "2") return "dashed";
+    if (head === "1") return "dotted";
+    return "none";
+  })();
 
-  // SVG parameters
-  const size = 200;
-  const strokeWidth = 12;
-  const radius = (size - strokeWidth) / 2;
-  const center = size / 2;
-  
-  // Angle calculations (240 degree sweep from 210 to 330, but wait, standard is 210 to 330? 
-  // Let's use 150 to 390 for a 240 degree sweep starting bottom left to bottom right.
-  const startAngle = 150;
-  const endAngle = 390;
-  const sweepAngle = endAngle - startAngle;
+  // ── SVG geometry: 270° arc starting bottom-left, sweeping clockwise ─────
+  const strokeWidth = Math.round(size * 0.075);
+  const ringGap = 8;
+  const radius = (size - strokeWidth) / 2 - ringGap;
+  const cx = size / 2;
+  const cy = size / 2;
+  const startAngle = 135;
+  const sweep = 270;
+  const endAngle = startAngle + sweep;
 
-  const valueToAngle = (val: number) => {
-    // Normalize value between 0 and 120 (assuming range is 0-120 for now, or use max of ranges)
-    const min = Math.min(0, clinicalRangeLow || 0);
-    const max = Math.max(120, clinicalRangeHigh || 100) * 1.1; // Add 10% padding
-    const normalized = Math.max(0, Math.min(1, (val - min) / (max - min)));
-    return startAngle + normalized * sweepAngle;
+  const polar = (deg: number) => {
+    const r = ((deg - 90) * Math.PI) / 180;
+    return { x: cx + radius * Math.cos(r), y: cy + radius * Math.sin(r) };
   };
 
-  const polarToCartesian = (centerX: number, centerY: number, radius: number, angleInDegrees: number) => {
-    const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
-    return {
-      x: centerX + radius * Math.cos(angleInRadians),
-      y: centerY + radius * Math.sin(angleInRadians),
+  const arcPath = (fromDeg: number, toDeg: number) => {
+    const start = polar(fromDeg);
+    const end = polar(toDeg);
+    const largeArc = toDeg - fromDeg > 180 ? 1 : 0;
+    return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y}`;
+  };
+
+  const fullArcLength = (sweep / 360) * 2 * Math.PI * radius;
+  const filledPath = arcPath(startAngle, endAngle);
+
+  // ── Animated score: 0 → score, 800ms ease-out-cubic, with optional delay ──
+  const [animated, setAnimated] = useState(0);
+  const reducedMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (score === null) { setAnimated(0); return; }
+    if (reducedMotion) { setAnimated(score); return; }
+
+    let raf = 0;
+    let cancelled = false;
+    const startAt = performance.now() + delay;
+    const dur = 800;
+    const tick = (now: number) => {
+      if (cancelled) return;
+      const t = Math.max(0, Math.min(1, (now - startAt) / dur));
+      const eased = 1 - Math.pow(1 - t, 3);
+      setAnimated(score * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
     };
-  };
+    raf = requestAnimationFrame(tick);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, [score, delay, reducedMotion]);
 
-  const describeArc = (x: number, y: number, radius: number, startAngle: number, endAngle: number) => {
-    const start = polarToCartesian(x, y, radius, endAngle);
-    const end = polarToCartesian(x, y, radius, startAngle);
-    const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-    return [
-      "M", start.x, start.y,
-      "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y
-    ].join(" ");
-  };
+  const dashOffset = fullArcLength * (1 - animated / 100);
 
-  const getStatusColor = (val: number | null | undefined) => {
-    if (val === null || val === undefined) return "hsl(var(--muted))";
-    if (val >= (optimalRangeLow || 0) && val <= (optimalRangeHigh || 100)) return "hsl(142, 71%, 45%)"; // Green
-    if (val >= (clinicalRangeLow || 0) && val <= (clinicalRangeHigh || 100)) return "hsl(38, 92%, 50%)"; // Amber
-    return "hsl(0, 84%, 60%)"; // Red
-  };
-
-  const currentAngle = valueToAngle(currentValue || 0);
-  const needlePos = polarToCartesian(center, center, radius - 20, currentAngle);
-  const color = getStatusColor(currentValue);
+  const TrendIcon = trend === "improving" ? ArrowUp
+    : trend === "declining" ? ArrowDown
+    : ArrowRight;
+  const trendCls = trend === "improving" ? "text-[hsl(var(--status-optimal))]"
+    : trend === "declining" ? "text-[hsl(var(--status-urgent))]"
+    : "text-muted-foreground";
 
   return (
-    <div className="flex flex-col items-center relative bg-card/50 p-4 rounded-xl border border-border/50">
-      <div className="flex w-full justify-between items-start mb-2">
-        <h3 className="font-heading font-medium text-sm text-muted-foreground">{domain}</h3>
-        {lensAgreement && (
-          <span className="text-[10px] bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
-            {lensAgreement}
-          </span>
+    <div className="flex flex-col items-center text-center">
+      <div className="relative" style={{ width: size, height: size }}>
+        {/* Confidence ring (subtle outer ring conveying lens agreement) */}
+        {ringStyle !== "none" && (
+          <svg width={size} height={size} className="absolute inset-0" aria-hidden>
+            <circle
+              cx={cx} cy={cy} r={radius + ringGap - 1}
+              fill="none"
+              stroke="hsl(var(--muted-foreground))"
+              strokeOpacity="0.28"
+              strokeWidth="1.5"
+              strokeDasharray={
+                ringStyle === "dashed" ? "5 5"
+                : ringStyle === "dotted" ? "1.5 4"
+                : undefined
+              }
+            />
+          </svg>
         )}
-      </div>
-
-      <div className="relative w-[200px] h-[120px] overflow-hidden">
-        <svg width={size} height={size} className="absolute top-0 left-0">
-          {/* Background Arc */}
+        {/* Main arc gauge */}
+        <svg
+          width={size} height={size}
+          className="absolute inset-0"
+          role="meter"
+          aria-label={`${gauge.domain} score, ${score === null ? "pending" : Math.round(score) + " out of 100"}`}
+          aria-valuenow={score ?? 0}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          {/* Background track */}
           <path
-            d={describeArc(center, center, radius, startAngle, endAngle)}
+            d={filledPath}
             fill="none"
-            stroke="hsl(var(--secondary))"
+            stroke="hsl(var(--surface-3))"
             strokeWidth={strokeWidth}
             strokeLinecap="round"
           />
-          
-          {/* Clinical Range Arc */}
-          {clinicalRangeLow !== null && clinicalRangeHigh !== null && (
+          {/* Filled arc — animated via stroke-dashoffset */}
+          {score !== null && (
             <path
-              d={describeArc(center, center, radius, valueToAngle(clinicalRangeLow), valueToAngle(clinicalRangeHigh))}
+              d={filledPath}
               fill="none"
-              stroke="hsl(var(--muted-foreground)/0.3)"
+              stroke={`hsl(var(${colour.varName}))`}
               strokeWidth={strokeWidth}
               strokeLinecap="round"
+              strokeDasharray={fullArcLength}
+              strokeDashoffset={dashOffset}
             />
           )}
-
-          {/* Optimal Range Arc */}
-          {optimalRangeLow !== null && optimalRangeHigh !== null && (
-            <path
-              d={describeArc(center, center, radius, valueToAngle(optimalRangeLow), valueToAngle(optimalRangeHigh))}
-              fill="none"
-              stroke="hsl(142, 71%, 45%/0.4)"
-              strokeWidth={strokeWidth}
-              strokeLinecap="round"
-            />
-          )}
-
-          {/* Needle / Indicator */}
-          <motion.circle
-            cx={polarToCartesian(center, center, radius, currentAngle).x}
-            cy={polarToCartesian(center, center, radius, currentAngle).y}
-            r={strokeWidth / 1.5}
-            fill={color}
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", stiffness: 100, damping: 15 }}
-            style={{ filter: `drop-shadow(0 0 6px ${color})` }}
-          />
         </svg>
-
-        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center justify-end pb-2">
-          {mode === "clinician" ? (
-            <div className="flex flex-col items-center">
-              <span className="font-mono text-2xl font-semibold leading-none text-foreground">{currentValue?.toFixed(1) || '--'}</span>
-              <span className="text-[10px] text-muted-foreground mt-1 font-mono">
-                {clinicalRangeLow}-{clinicalRangeHigh} (Opt: {optimalRangeLow}-{optimalRangeHigh})
-              </span>
-            </div>
+        {/* Centre: large score + trend arrow */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          {score === null ? (
+            <span className="text-3xl font-bold text-muted-foreground tabular-nums">--</span>
           ) : (
-            <div className="flex flex-col items-center">
-              <span className="font-heading text-lg font-medium" style={{ color }}>
-                {gauge.label || "Evaluating"}
+            <>
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className="text-3xl font-bold tabular-nums leading-none"
+                  style={{ color: `hsl(var(${colour.varName}))` }}
+                >
+                  {Math.round(animated)}
+                </span>
+                <TrendIcon className={cn("w-4 h-4", trendCls)} aria-hidden />
+              </div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1.5 font-medium">
+                {colour.band}
               </span>
-            </div>
+            </>
           )}
         </div>
       </div>
-
-      <div className="flex items-center justify-between w-full mt-4 text-xs">
-        <div className="flex items-center gap-1 text-muted-foreground">
-          <span>Trend:</span>
-          {trend === "improving" && <ArrowUpIcon className="w-3 h-3 text-green-500" />}
-          {trend === "stable" && <ArrowRightIcon className="w-3 h-3 text-amber-500" />}
-          {trend === "declining" && <ArrowDownIcon className="w-3 h-3 text-red-500" />}
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="text-muted-foreground">Conf:</span>
-          <div className="flex gap-0.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${confidence === 'low' || confidence === 'medium' || confidence === 'high' ? 'bg-primary' : 'bg-muted'}`} />
-            <div className={`w-1.5 h-1.5 rounded-full ${confidence === 'medium' || confidence === 'high' ? 'bg-primary' : 'bg-muted'}`} />
-            <div className={`w-1.5 h-1.5 rounded-full ${confidence === 'high' ? 'bg-primary' : 'bg-muted'}`} />
+      {/* Below the gauge: domain name + descriptor */}
+      <div className="mt-3 max-w-[180px]">
+        <div className="text-sm font-semibold text-foreground">{gauge.domain}</div>
+        {gauge.label && (
+          <div className="text-xs text-muted-foreground mt-0.5 leading-snug line-clamp-2">
+            {gauge.label}
           </div>
-        </div>
+        )}
+        {mode === "clinician" && lensAgreement && (
+          <div className="mt-2 text-[10px] font-mono text-muted-foreground">
+            Lens agreement: {lensAgreement}
+          </div>
+        )}
       </div>
     </div>
   );

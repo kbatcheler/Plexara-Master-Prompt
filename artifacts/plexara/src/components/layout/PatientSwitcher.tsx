@@ -31,7 +31,10 @@ export function PatientSwitcher() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/50 border border-border/50 hover:bg-secondary text-sm font-medium">
+      <DropdownMenuTrigger
+        className="inline-flex items-center gap-2 h-10 pl-2.5 pr-3 rounded-lg border border-border bg-card hover:bg-secondary/60 transition-colors text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        data-testid="patient-switcher"
+      >
         <Users className="w-3.5 h-3.5 text-primary" />
         <span className="max-w-[120px] truncate">{active.displayName}</span>
         <ChevronDown className="w-3.5 h-3.5 opacity-60" />

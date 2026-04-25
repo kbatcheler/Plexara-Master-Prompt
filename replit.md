@@ -1,128 +1,62 @@
-# Workspace
+# Plexara Project
 
 ## Overview
+Plexara is a premium health intelligence platform designed to transform raw blood panel data into actionable health insights. Users upload blood panel PDFs or images, which are then processed by AI to extract structured biomarker data. A unique three-lens adversarial interpretation pipeline (using Claude, GPT, and Gemini) analyzes this data, presenting results as intuitive health domain gauges and narrative summaries. The platform prioritizes user privacy through recursive PII stripping and offers dual display modes for patients and clinicians. The project aims to provide comprehensive, privacy-conscious health analytics, with a recent focus on a significant UI/UX redesign to enhance the user experience.
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+## User Preferences
+I want iterative development. I want to be asked before you make any major changes to the codebase.
 
-## Project: Plexara
+## System Architecture
+The application is structured as a pnpm monorepo using TypeScript, with each package managing its own dependencies.
 
-**Plexara** is a premium health intelligence platform. Users upload blood panel PDFs or images, AI extracts structured biomarker data, runs a three-lens adversarial interpretation pipeline (Claude/GPT/Gemini), and results are displayed as health domain gauges and narratives.
+**UI/UX Decisions (April 2026 Redesign):**
+-   **Aesthetic Target**: Apple Health × Linear × One Medical (warm, premium-clinic, high trust).
+-   **Color System**: Light-mode by default with warm off-white background, deep charcoal text, and warm teal-blue primary. Semantic CSS variables for status, gauge states, and surface hierarchy.
+-   **Fonts**: Plus Jakarta Sans (sans/heading), Newsreader (serif for narrative), JetBrains Mono (clinical values).
+-   **Theme Management**: Synchronous inline script for anti-flash theme bootstrap. Segmented `light / dark / system` toggle persisting to `localStorage`.
+-   **Layout**: 64-px header with wordmark logo. Patient switcher on the left, Patient/Clinician mode as a segmented control on the right. Mobile-responsive navigation via hamburger menu.
+-   **Components**:
+    -   **Cards**: `rounded-xl`, `border`, subtle hover shadow for stability.
+    -   **Buttons**: 40-px minimum height for accessibility; destructive buttons are outlined-only.
+    -   **Gauges**: Three-quarter (270°) arc, 0-100 score color-bucketed, large bold centered score with trend arrow, confidence ring indicating lens agreement. Animates 0 → score with `ease-out-cubic`.
+    -   **Hero Card**: Full-width card at dashboard top, large gauge, narrative paragraph (Newsreader/JetBrains Mono), relative timestamp, baseline-delta chip, optional baseline reset.
+    -   **Alert Banners**: Severity-tinted background, left accent stripe, icon, "Dismiss with reason" functionality.
+-   **Reduced Motion**: Global `prefers-reduced-motion` rule and gauge hooks short-circuit animations.
 
-### Phase 1 Features (Complete)
-- Single record upload (PDF/image) → extraction → 3-lens AI analysis → gauge display
-- Privacy-first: Recursive PII stripping before all LLM calls
-- Patient onboarding flow: name, DOB, sex, ethnicity → used for age/sex-adjusted AI interpretations
-- Demographics flow into AI: age range (not raw DOB), biological sex, ethnicity passed to all lenses
-- Full Clerk authentication (email + Google OAuth)
-- PostgreSQL database with comprehensive schema
-- Dual display modes: Patient (plain English) and Clinician (clinical language)
-- Persistent AI disclaimer footer on all authenticated pages
-- Arc gauge SVG components for 8 health domains
-- **Failed-record retry**: `/api/patients/:id/records/:recordId/reanalyze` re-runs the pipeline. If a cached extraction exists it only re-runs the 3 lenses; otherwise it re-extracts the original file from disk via `processUploadedDocument`. Wired into the `/records` list (per-row Retry button next to the Failed pill) and the record detail drawer (Retry analysis CTA on the friendly error UI). The list and the drawer auto-poll every 4 seconds while any record is in pending/processing state, so the UI flips to Complete/Failed without a manual refresh. Backend returns 409 with a friendly message if the original upload is no longer on disk.
-- **Resilient extraction & honest failure**: `parseJSONFromLLM` (in `artifacts/api-server/src/lib/ai.ts`) strips ```json``` markdown fences, isolates the outer `{...}` object, and falls back to a static `jsonrepair` import when `JSON.parse` rejects the response — fixes silent extraction failures on long Anthropic responses (10 KB+). On unrecoverable failure it throws a sanitised error (length-only, never the candidate text) so PHI never bleeds into application logs. The upload pipeline in `routes/records.ts` now treats *both* a thrown extraction error *and* an extraction that returns zero biomarkers as a hard failure — but only for record types that *require* biomarkers (`recordTypeRequiresBiomarkers()` currently returns true only for `blood_panel`, so imaging/genetics/wearable reports that legitimately have no biomarkers continue through). Failed records are marked `error` and the 3-lens pipeline is **skipped entirely** rather than being run on `{}` (which previously wasted ~30 s of LLM calls and polluted the dashboard with fake "DATA EXTRACTION FAILURE" alerts and bogus gauges). The same fail-fast logic lives in the shared `processUploadedDocument()` helper, so the `/reanalyze` re-extract path and the imaging-attachment path get identical behaviour.
-- **Defensive reconciliation normalisation**: because the hardened parser can now coax a parseable object out of slightly malformed LLM output, the reconciliation step in `runInterpretationPipeline` no longer trusts the result blindly. Immediately after `runReconciliation()` it normalises the output: missing `unifiedHealthScore` defaults to 50, missing arrays (`urgentFlags`, `topConcerns`, `gaugeUpdates`, etc.) default to `[]`, individual gauges with no `domain` are filtered out, and each gauge's `currentValue/trend/confidence` are coerced/defaulted. This prevents `undefined.toString()` crashes inside the finalisation transaction (which would otherwise mark the record `error` even though all 3 lenses succeeded).
-- **Real upload progress feedback**: `UploadZone.tsx` no longer freezes on a single static "Extracting biomarker data…" line. It now ticks a 1 Hz elapsed-time clock and steps through realistic stage labels (Reading → Extracting → Running 3-lens analysis → Reconciling → Finalising), shows live `Xs elapsed`, and after 2 minutes adds a hint that the user can leave the page. It locks the patient ID at upload time so polling keeps working even if `useCurrentPatient` momentarily returns `null` (e.g. transient 401). State transitions live in a `useEffect` (no setState-during-render).
-- **Numeric-string-safe gauges**: `Gauge.tsx` defensively coerces `currentValue` and the four range fields with a `toNum()` helper before any arithmetic or `.toFixed(...)` call. PostgreSQL `numeric` columns are returned as strings by node-postgres, so the previous `currentValue?.toFixed(1)` crashed in clinician mode whenever the value was a populated string.
+**Technical Implementations & Feature Specifications:**
+-   **Data Extraction & AI Analysis**: Uploaded documents (PDF/image) undergo AI-driven biomarker extraction. A three-lens AI pipeline (Claude-Clinical Synthesist, GPT-Evidence Checker, Gemini-Contrarian Analyst) interprets the data, followed by Claude-based reconciliation into a unified output.
+-   **Privacy-First Design**: Recursive, pattern-based PII stripping (`stripPII()`) before all LLM calls. Raw DOB is converted to an age range bucket.
+-   **Robust Error Handling**:
+    -   **Failed Record Retry**: `/api/patients/:id/records/:recordId/reanalyze` endpoint to re-run the pipeline.
+    -   **Resilient Extraction**: `parseJSONFromLLM` handles malformed LLM JSON output, falls back to `jsonrepair`, and sanitizes errors to prevent PHI leakage.
+    -   **Fail-Fast Logic**: Upload pipeline treats thrown extraction errors or zero biomarkers as hard failures, skipping AI analysis for invalid records.
+    -   **Defensive Reconciliation**: Normalizes reconciled output (defaults missing scores to 50, arrays to `[]`, filters invalid gauges) to prevent crashes.
+-   **User Feedback**: `UploadZone.tsx` provides real-time progress feedback with stage labels and elapsed time during document processing.
+-   **Numeric Handling**: `Gauge.tsx` uses `toNum()` helper to defensively coerce `currentValue` and range fields, addressing string-based numeric issues from PostgreSQL.
+-   **DICOM Backend Hardening**: `lib/dicom.ts` provides `extractDicomMetadata` and `isDicomFile`. `routes/imaging.ts` implements validate-then-extract logic for DICOM uploads, preventing mime-spoofing and tightening `numberOfFrames` parsing.
+-   **Multer Hardening**: Explicit `fileSize`/`files`/`fields` limits on all multer instances. Expanded mime allow-list for `records.ts`. `MulterError` handling returns specific HTTP status codes (413/400).
+-   **Dev-Auth Double-Gating**: Development authentication (`dev-auth.ts`) is gated by both `NODE_ENV !== "production"` and `ENABLE_DEV_AUTH=true` for security.
+-   **Health Domains**: 8 core health domains (Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional) are used for gauges, scaled 0-100.
+-   **PHI Encryption**: `PHI_MASTER_KEY` (or `PHI_ENCRYPTION_KEY`) is required for at-rest encryption of sensitive data, with strict validation rules for production environments.
+-   **Migration Readiness**: Abstracted `StorageProvider` for different storage backends, configurable LLM models, Docker support, comprehensive security measures (Helmet, rate limiting, CORS), and a health endpoint (`/api/healthz`).
 
-### AI Pipeline
-- **Lens A**: Claude (`claude-sonnet-4-6`) — Clinical Synthesist
-- **Lens B**: GPT (`gpt-5.2`) — Evidence Checker  
-- **Lens C**: Gemini (`gemini-2.5-flash`) — Contrarian Analyst
-- **Reconciliation**: Claude (`claude-sonnet-4-6`) — synthesizes all three lenses into unified output
-- All AI calls via Replit AI Integrations proxy (no own API keys needed)
-- Patient demographics (age range, sex, ethnicity) passed to all lenses for age/sex-adjusted reference ranges
+**System Design Choices:**
+-   **Monorepo**: pnpm workspaces for managing packages.
+-   **Node.js**: Version 24.
+-   **API**: Express 5.
+-   **Database**: PostgreSQL with Drizzle ORM.
+-   **Validation**: Zod, `drizzle-zod`.
+-   **Frontend**: React + Vite, Tailwind v4.
+-   **Authentication**: Clerk (email + Google OAuth).
+-   **State Management/Data Fetching**: TanStack Query.
+-   **API Codegen**: Orval for generating API hooks and Zod schemas from `openapi.yaml`.
+-   **Build**: esbuild (CJS bundle).
 
-### Privacy
-- `stripPII()` in `lib/pii.ts`: recursive, pattern-based PII stripping across nested objects/arrays. Patterns cover SSN, NHS number (3-3-4), email, US phone, **UK mobile (07xxx)**, **UK landline (01x/02x/03x)**, and **international format (+44 / +1 / +353 etc.)** — international pattern is intentionally ordered first so a `+44 …` sequence cannot be partially eaten by the UK landline pattern. Field-name redaction covers `nhsNumber`, `nino`, `gpName`, `gpPractice`, `surgery`, `postcode`, `zipcode`, `hospitalNumber`, `hospitalId` in addition to the standard US set.
-- Raw DOB → age range bucket (e.g., "30-39") via `computeAgeRange()` before any LLM call
-- Name, DOB, email, phone, SSN, MRN, address — all stripped/redacted before AI
-- Onboarding UI transparently explains what is/isn't shared with AI
-
-### Code-Review Remediation (April 2026)
-Six audit findings from `attached_assets/plexara-remediation-prompt_*.md` resolved:
-1. **PII gaps closed** — UK / intl phone & NHS-number / GP-name / postcode patterns added (see Privacy above). 39 new tests guard the contract.
-2. **Test coverage** — `tests/pii.test.ts`, `tests/parse-json.test.ts`, `tests/extraction-prompt.test.ts` (80 total tests pass). `parseJSONFromLLM` and `buildExtractionPrompt` exported from `lib/ai.ts`.
-3. **CSP documented** — `app.ts` carries an explicit migration-path comment for the Clerk `unsafe-inline` requirement and emits a `logger.warn` on production boot so the TODO is visible in deploy logs.
-4. **DICOM backend hardened** — `lib/dicom.ts` exports `extractDicomMetadata(buffer)` returning `{ full, anonymised }` (anonymised view drops patientName / patientId / institutionName / referringPhysician) plus `isDicomFile(buffer)` (DICM-magic-byte check at offset 128). `routes/imaging.ts` now does **validate-then-extract**: `isDicomFile` first → 400 if no magic bytes, then `extractDicomMetadata` → 400 on parse failure, only then `storage.uploadBuffer` + DB insert. This closes a mime-spoofing gap where a non-DICOM payload sent as `application/octet-stream` could previously be persisted to object storage. `numberOfFrames` parsing tightened to `/^\d+$/` + `>0` (else null) so junk like `"12abc"`, `"0"`, or negatives no longer leak through. `parseDicomMetadata` retained as a deprecated export for any external callers but is no longer used in the upload path. **Frontend CornerstoneJS viewer (Issue 4b) deferred to Phase 2 per audit.**
-5. **Multer hardened** — every multer instance (`records.ts`, `imaging.ts × 2`, `wearables.ts`, `genetics.ts`) now declares explicit `fileSize`/`files`/`fields` limits. `records.ts` mime allow-list expanded to PDF / JPEG / PNG / WebP / GIF / TIFF / CSV / TXT / JSON. `errorHandler.ts` catches `multer.MulterError` and returns 413 (file too large) or 400 (other multer errors). FileFilter rejections now throw `HttpError(400)` so they hit the central 400 path instead of the generic 500.
-6. **Dev-auth double-gated** — `lib/auth.ts`, `routes/dev-auth.ts`, and the boot in `index.ts` now require BOTH `NODE_ENV !== "production"` AND `ENABLE_DEV_AUTH=true`. `routes/dev-auth.ts` registers a 404 catch-all when the gate is off, so a stale prod import can't expose the bypass. Every dev-cookie hit emits a `logger.warn` for audit trail. The dev script in `artifacts/api-server/package.json` exports `ENABLE_DEV_AUTH=true` so local workflows continue to work.
-
-### Health Domains (Gauges, 0-100 scale)
-Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
-
-## Stack
-
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
-- **Frontend**: React + Vite, Tailwind v4, Clerk auth, TanStack Query
-- **Auth**: Clerk (email + Google OAuth)
-
-## Key Environment Variables
-- `CLERK_SECRET_KEY` / `CLERK_PUBLISHABLE_KEY` / `VITE_CLERK_PUBLISHABLE_KEY` — Clerk auth
-- `AI_INTEGRATIONS_ANTHROPIC_API_KEY` / `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` — Claude
-- `AI_INTEGRATIONS_OPENAI_API_KEY` / `AI_INTEGRATIONS_OPENAI_BASE_URL` — GPT
-- `AI_INTEGRATIONS_GEMINI_API_KEY` / `AI_INTEGRATIONS_GEMINI_BASE_URL` — Gemini
-- `DATABASE_URL` — PostgreSQL connection
-- `SESSION_SECRET` — Express sessions
-
-## Key Files
-- `attached_assets/plexara-master-prompt_*.md` — Full product specification
-- `lib/api-spec/openapi.yaml` — API contract (source of truth)
-- `artifacts/api-server/src/lib/ai.ts` — Three-lens AI pipeline
-- `artifacts/api-server/src/routes/records.ts` — File upload + async interpretation pipeline
-- `artifacts/api-server/src/routes/index.ts` — Route registration
-- `lib/db/src/schema/index.ts` — All DB table exports
-- `artifacts/api-server/src/lib/pii.ts` — Recursive PII stripping (privacy layer)
-- `artifacts/plexara/src/App.tsx` — Frontend entry point with OnboardingGate
-- `artifacts/plexara/src/pages/Onboarding.tsx` — Patient onboarding form
-- `artifacts/plexara/src/hooks/use-current-patient.ts` — Current patient hook with needsOnboarding
-- `artifacts/plexara/src/pages/Dashboard.tsx` — Main dashboard
-- `artifacts/plexara/src/components/dashboard/Gauge.tsx` — Arc gauge SVG component
-- `artifacts/plexara/src/components/dashboard/UploadZone.tsx` — File upload with polling
-
-## Key Commands
-
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only, bypasses migration history)
-- `pnpm --filter @workspace/db run generate` — generate migration files from schema changes (use this in PRs, not push)
-- `pnpm --filter @workspace/db run migrate` — apply committed migrations against `DATABASE_URL` (deploy hook)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
-- `pnpm --filter @workspace/api-server run test` — run vitest unit suite (PHI crypto, boot guard, validate, errorHandler, pickAllowed)
-- `pnpm --filter @workspace/api-server run typecheck` — strict TS check on api-server (must exit 0)
-
-## PHI Encryption Key Configuration
-
-`PHI_MASTER_KEY` (or legacy alias `PHI_ENCRYPTION_KEY`) is the master key for at-rest encryption of patient narratives and lens outputs. Hardening rules enforced at boot by `assertPhiKeyConfigured()` in `artifacts/api-server/src/lib/phi-crypto.ts`:
-
-- **Production (`NODE_ENV=production`)**: an explicit `PHI_MASTER_KEY` is **required** — the SESSION_SECRET fallback is refused and the process aborts before `app.listen()`.
-- **All environments**: explicit key must be ≥32 characters and must not equal `SESSION_SECRET` (compromise-blast-radius defense).
-- **Development**: missing key falls back to `SESSION_SECRET` with a console warning. Acceptable for local work; never reaches production because the boot guard fires first.
-- A boot-time encrypt+decrypt self-test catches misconfigured keys before any write happens.
-
-## Migration Readiness
-
-The codebase is hardened for cloud migration off Replit. See **`MIGRATION.md`** for full status, the storage abstraction architecture, and the migration developer's scope. Highlights:
-
-- **Storage**: `artifacts/api-server/src/lib/storage/` exposes a `StorageProvider` interface with `LocalStorageProvider` + `ReplitObjectsStorageProvider` adapters; selectable via `STORAGE_PROVIDER` env var. S3/GCS adapters are the migration developer's task.
-- **LLM models**: Per-lens model selection via `LLM_LENS_A_MODEL` etc. (`lib/ai.ts` exports `LLM_MODELS`). Defaults to current production identifiers.
-- **Migrations**: Baseline at `lib/db/drizzle/0000_*.sql`. Use `generate` + `migrate`, not `push`, for schema changes that need to ship.
-- **Container**: `Dockerfile` + `docker-compose.yml` + `.dockerignore` at repo root. Builds esbuild + vite into a minimal alpine runtime.
-- **Security**: Helmet (CSP/HSTS/X-Frame), `express-rate-limit` two-tier (global + LLM-expensive), env-driven CORS allowlist (`CORS_ORIGIN`), `assertWithinUploads()` path-confinement on all fs ops, `pickAllowed()` prototype-pollution defence on user-supplied keys.
-- **Health**: `GET /api/healthz` pings DB with 1 s timeout; returns 503 on failure so orchestrators pull instances out of rotation.
-- **Env contract**: `.env.example` at repo root documents every variable the app reads.
-
-## Database Schema
-Tables: `patients`, `records`, `extracted_data`, `biomarker_results`, `biomarker_reference`, `interpretations`, `gauges`, `alerts`, `audit_log`
-
-Biomarker reference table seeded with 68 biomarkers across 10 categories: CBC (14), Metabolic (10), Liver (4), Lipid (7), Thyroid (5), Hormonal (7), Inflammatory (4), Vitamins (9), Metabolic Health (3), Kidney (2), Cardiac (3). Seed script: `lib/db/src/seed-biomarkers.ts`. All ranges include documented clinical and research references.
-
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+## External Dependencies
+-   **AI Services**:
+    -   Claude (via Replit AI Integrations proxy)
+    -   GPT (via Replit AI Integrations proxy)
+    -   Gemini (via Replit AI Integrations proxy)
+-   **Authentication**: Clerk
+-   **Database**: PostgreSQL
+-   **Google Fonts**: For Plus Jakarta Sans, Newsreader, JetBrains Mono

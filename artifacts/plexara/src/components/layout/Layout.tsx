@@ -1,11 +1,11 @@
+import { useState } from "react";
 import { useUser, useClerk } from "@clerk/react";
 import { Link, useLocation } from "wouter";
 import { useMode } from "../../context/ModeContext";
-import { devSignOut, isDevSignedIn } from "../../lib/dev-auth";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { devSignOut } from "../../lib/dev-auth";
+import { cn } from "@/lib/utils";
 import {
-  LogOut, Activity, Settings as SettingsIcon, ChevronDown,
+  LogOut, Settings as SettingsIcon, ChevronDown, Menu, X,
   LayoutDashboard, FileText, Sparkles, HeartPulse, MessageSquare,
 } from "lucide-react";
 import { PatientSwitcher } from "./PatientSwitcher";
@@ -49,34 +49,39 @@ const NAV: NavGroup[] = [
   { label: "Ask", href: "/chat", icon: MessageSquare },
 ];
 
-function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string }) {
-  const isActive = group.href
-    ? currentPath === group.href || currentPath.startsWith(group.href + "/")
-    : group.items?.some((i) => currentPath === i.href || currentPath.startsWith(i.href + "/"));
+function isGroupActive(group: NavGroup, currentPath: string): boolean {
+  if (group.href) return currentPath === group.href || currentPath.startsWith(group.href + "/");
+  return !!group.items?.some((i) => currentPath === i.href || currentPath.startsWith(i.href + "/"));
+}
 
-  const baseCls = `flex items-center gap-1.5 text-sm font-medium transition-colors px-2 py-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background ${
-    isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
-  }`;
+function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string }) {
+  const isActive = isGroupActive(group, currentPath);
+
+  const baseCls = cn(
+    "inline-flex items-center gap-1.5 px-3 h-10 rounded-lg text-sm font-medium transition-colors",
+    "outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+    isActive
+      ? "text-foreground bg-secondary"
+      : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+  );
 
   if (group.href) {
     return (
-      <Link href={group.href} className={baseCls}>
-        <group.icon className="w-3.5 h-3.5 opacity-70" />
+      <Link href={group.href} className={baseCls} data-testid={`nav-${group.label.toLowerCase()}`}>
         {group.label}
       </Link>
     );
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className={`${baseCls} outline-none`}>
-        <group.icon className="w-3.5 h-3.5 opacity-70" />
+      <DropdownMenuTrigger className={cn(baseCls, "data-[state=open]:bg-secondary data-[state=open]:text-foreground")}>
         {group.label}
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <ChevronDown className="w-3.5 h-3.5 opacity-60" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
+      <DropdownMenuContent align="start" className="w-64 p-1.5">
         {group.items?.map((item) => (
           <DropdownMenuItem key={item.href} asChild>
-            <Link href={item.href} className="flex flex-col items-start gap-0.5 cursor-pointer">
+            <Link href={item.href} className="flex flex-col items-start gap-0.5 cursor-pointer rounded-md px-2.5 py-2">
               <span className="text-sm font-medium">{item.label}</span>
               {item.hint && <span className="text-[11px] text-muted-foreground">{item.hint}</span>}
             </Link>
@@ -87,72 +92,129 @@ function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string 
   );
 }
 
+/* ── Segmented control: replaces the previous mode toggle Switch.
+   Segmented controls let the user see both options at a glance, which
+   matches the brief better than a binary switch.                       */
+function ModeSegment() {
+  const { mode, toggleMode } = useMode();
+  const setPatient = () => { if (mode !== "patient") toggleMode(); };
+  const setClinician = () => { if (mode !== "clinician") toggleMode(); };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Display mode"
+      className="inline-flex items-center rounded-lg bg-secondary p-0.5 text-xs font-medium"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "patient"}
+        onClick={setPatient}
+        data-testid="mode-patient"
+        className={cn(
+          "px-3 h-8 rounded-md transition-colors outline-none",
+          "focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          mode === "patient"
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        Patient
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={mode === "clinician"}
+        onClick={setClinician}
+        data-testid="mode-clinician"
+        className={cn(
+          "px-3 h-8 rounded-md transition-colors outline-none",
+          "focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          mode === "clinician"
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        Clinician
+      </button>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user } = useUser();
   const { signOut } = useClerk();
   const [location, setLocation] = useLocation();
-  const { mode, toggleMode } = useMode();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const handleSignOut = async () => {
+    // devSignOut() is idempotent; clerk signOut may fail if not signed in.
+    await devSignOut();
+    try { await signOut(); } catch { /* clerk may not be active */ }
+    setLocation("/");
+  };
+
+  const userInitial = (
+    user?.firstName?.[0] ?? user?.primaryEmailAddress?.emailAddress?.[0] ?? "U"
+  ).toUpperCase();
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-background text-foreground selection:bg-primary/30">
-      <header className="sticky top-0 z-40 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="flex items-center gap-2 group" data-testid="nav-logo">
-              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center border border-primary/20 group-hover:border-primary/50 transition-colors">
-                <Activity className="w-4 h-4 text-primary" />
-              </div>
-              <span className="font-heading font-semibold text-lg tracking-tight">Plexara<span className="text-primary">.</span></span>
-            </Link>
+    <div className="min-h-[100dvh] flex flex-col bg-background text-foreground selection:bg-primary/20">
+      <header className="sticky top-0 z-40 w-full border-b border-border bg-card">
+        <div className="mx-auto flex h-16 max-w-[1280px] items-center gap-4 px-6 md:px-8 lg:px-12">
+          {/* ── Left: logo + patient switcher (the most critical context indicator) ── */}
+          <Link
+            href="/dashboard"
+            className="font-heading text-lg font-bold tracking-tight text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-md"
+            data-testid="nav-logo"
+          >
+            Plexara
+          </Link>
 
-            <nav className="hidden md:flex items-center gap-1 ml-4">
-              {NAV.map((g) => <NavItem key={g.label} group={g} currentPath={location} />)}
-            </nav>
-          </div>
+          {/* Patient switcher stays visible on every breakpoint per brief §3 —
+              it is the most critical context indicator. */}
+          <PatientSwitcher />
 
+          {/* ── Centre: primary nav (desktop only) ── */}
+          <nav className="hidden md:flex flex-1 items-center justify-center gap-1">
+            {NAV.map((g) => <NavItem key={g.label} group={g} currentPath={location} />)}
+          </nav>
+
+          {/* Spacer keeps right cluster pinned right when nav is hidden on mobile */}
+          <div className="md:hidden flex-1" />
+
+          {/* ── Right: mode toggle + user menu ── */}
           <div className="flex items-center gap-3">
-            <PatientSwitcher />
-
-            <div className="hidden lg:flex items-center space-x-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border/50">
-              <Label htmlFor="mode-toggle" className={`text-xs cursor-pointer ${mode === "patient" ? "text-primary font-medium" : "text-muted-foreground"}`}>Patient</Label>
-              <Switch
-                id="mode-toggle"
-                checked={mode === "clinician"}
-                onCheckedChange={toggleMode}
-                className="data-[state=checked]:bg-primary"
-              />
-              <Label htmlFor="mode-toggle" className={`text-xs cursor-pointer ${mode === "clinician" ? "text-primary font-medium" : "text-muted-foreground"}`}>Clinician</Label>
-            </div>
+            {/* Mode toggle also stays visible on mobile per brief §3. */}
+            <ModeSegment />
 
             <DropdownMenu>
-              <DropdownMenuTrigger className="flex items-center gap-2 rounded-full bg-secondary/60 hover:bg-secondary px-1 py-1 pr-3 transition-colors outline-none" data-testid="user-menu">
-                <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center text-[11px] font-medium text-primary">
-                  {(user?.firstName?.[0] ?? user?.primaryEmailAddress?.emailAddress?.[0] ?? "U").toUpperCase()}
+              <DropdownMenuTrigger
+                className="flex items-center gap-2 rounded-full border border-border bg-card hover:bg-secondary/60 pl-1 pr-3 py-1 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                data-testid="user-menu"
+              >
+                <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary">
+                  {userInitial}
                 </div>
-                <span className="hidden sm:inline text-xs text-muted-foreground max-w-[120px] truncate">
+                <span className="hidden md:inline text-xs text-muted-foreground max-w-[120px] truncate">
                   {user?.fullName || user?.primaryEmailAddress?.emailAddress || "Test user"}
                 </span>
-                <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                <ChevronDown className="hidden md:inline w-3 h-3 text-muted-foreground" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">Account</DropdownMenuLabel>
-                <DropdownMenuItem asChild><Link href="/settings" className="flex items-center gap-2"><SettingsIcon className="w-3.5 h-3.5" /> Settings</Link></DropdownMenuItem>
-                <DropdownMenuItem asChild><Link href="/consents">Consent &amp; data control</Link></DropdownMenuItem>
-                <DropdownMenuItem asChild><Link href="/audit">Audit log</Link></DropdownMenuItem>
-                <DropdownMenuItem asChild><Link href="/admin">Admin console</Link></DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings" className="flex items-center gap-2 cursor-pointer">
+                    <SettingsIcon className="w-3.5 h-3.5" /> Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild><Link href="/consents" className="cursor-pointer">Consent &amp; data control</Link></DropdownMenuItem>
+                <DropdownMenuItem asChild><Link href="/audit" className="cursor-pointer">Audit log</Link></DropdownMenuItem>
+                <DropdownMenuItem asChild><Link href="/admin" className="cursor-pointer">Admin console</Link></DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={async () => {
-                    // Always clear the server-side dev cookie + local flag
-                    // unconditionally — the localStorage flag may be missing/stale
-                    // while a signed dev cookie is still active on the server.
-                    // devSignOut() is idempotent and safe to call when not signed in.
-                    await devSignOut();
-                    try {
-                      await signOut();
-                    } catch { /* clerk may not be signed in */ }
-                    setLocation("/");
-                  }}
+                  onClick={handleSignOut}
                   className="text-destructive focus:text-destructive cursor-pointer"
                   data-testid="signout-button"
                 >
@@ -160,18 +222,80 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* ── Mobile hamburger ── */}
+            <button
+              type="button"
+              onClick={() => setMobileOpen((v) => !v)}
+              aria-expanded={mobileOpen}
+              aria-controls="mobile-nav"
+              aria-label={mobileOpen ? "Close menu" : "Open menu"}
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-border bg-card hover:bg-secondary/60 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              data-testid="mobile-menu-toggle"
+            >
+              {mobileOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+            </button>
           </div>
         </div>
+
+        {/* ── Mobile drawer ── */}
+        {mobileOpen && (
+          <div
+            id="mobile-nav"
+            className="md:hidden border-t border-border bg-card px-6 py-4 space-y-3"
+          >
+            <nav className="flex flex-col gap-1">
+              {NAV.map((g) => {
+                const active = isGroupActive(g, location);
+                if (g.href) {
+                  return (
+                    <Link
+                      key={g.label}
+                      href={g.href}
+                      onClick={() => setMobileOpen(false)}
+                      className={cn(
+                        "flex items-center gap-2 px-3 h-11 rounded-lg text-sm font-medium transition-colors",
+                        active ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/60",
+                      )}
+                    >
+                      <g.icon className="w-4 h-4 opacity-70" />
+                      {g.label}
+                    </Link>
+                  );
+                }
+                return (
+                  <div key={g.label} className="space-y-1">
+                    <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+                      {g.label}
+                    </div>
+                    {g.items?.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setMobileOpen(false)}
+                        className="flex flex-col px-3 py-2 rounded-lg text-sm text-foreground hover:bg-secondary/60 transition-colors"
+                      >
+                        <span className="font-medium">{item.label}</span>
+                        {item.hint && <span className="text-[11px] text-muted-foreground">{item.hint}</span>}
+                      </Link>
+                    ))}
+                  </div>
+                );
+              })}
+            </nav>
+          </div>
+        )}
       </header>
 
-      <main className="flex-1 container mx-auto px-4 py-8">
+      <main className="flex-1 mx-auto w-full max-w-[1280px] px-6 md:px-8 lg:px-12 py-8 md:py-10">
         {children}
       </main>
 
-      <footer className="border-t border-border/40 bg-background py-6">
-        <div className="container mx-auto px-4">
-          <p className="text-xs text-muted-foreground text-center max-w-3xl mx-auto leading-relaxed">
-            <strong className="text-foreground">DISCLAIMER:</strong> Plexara provides AI-generated health interpretations for informational purposes only. These are not medical diagnoses. Always consult a qualified healthcare professional before making health decisions based on these results.
+      {/* Slim, muted disclaimer footer — present but not anxiety-inducing. */}
+      <footer className="border-t border-border bg-card">
+        <div className="mx-auto max-w-[1280px] px-6 md:px-8 lg:px-12 py-4">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Plexara provides AI-generated health interpretations for informational purposes only. These are not medical diagnoses — always consult a qualified healthcare professional before making health decisions.
           </p>
         </div>
       </footer>

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/reac
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ModeProvider } from "./context/ModeContext";
+import { ThemeMount } from "./hooks/useTheme";
 
 // Pages
 import Landing from "./pages/Landing";
@@ -155,6 +156,7 @@ function ClerkProviderWithRoutes() {
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
     >
       <QueryClientProvider client={queryClient}>
+        <ThemeMount />
         <ClerkQueryClientCacheInvalidator />
         <ModeProvider>
           <ActivePatientProvider>

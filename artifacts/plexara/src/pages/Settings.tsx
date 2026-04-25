@@ -11,7 +11,9 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, Loader2 } from "lucide-react";
+import { Download, Trash2, Loader2, Sun, Moon, Monitor } from "lucide-react";
+import { useTheme, type Theme } from "../hooks/useTheme";
+import { cn } from "@/lib/utils";
 
 interface AlertPrefs {
   enableUrgent: boolean;
@@ -85,9 +87,11 @@ export default function Settings() {
   return (
     <div className="max-w-3xl space-y-6">
       <div>
-        <h1 className="text-3xl font-heading font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-3xl font-heading font-bold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">Preferences, data export, and account.</p>
       </div>
+
+      <AppearanceSection />
 
       <Card>
         <CardHeader>
@@ -167,5 +171,60 @@ export default function Settings() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/* ── Appearance: theme picker (light / dark / system) ─────────────────────
+   Section 11 of the redesign brief: "Light is the default, dark is opt-in
+   via this toggle." The pref is persisted to localStorage and applied via
+   the anti-flash <script> in index.html on subsequent loads. */
+function AppearanceSection() {
+  const { theme, setTheme } = useTheme();
+  const options: { value: Theme; label: string; Icon: React.ComponentType<{ className?: string }> }[] = [
+    { value: "light",  label: "Light",  Icon: Sun },
+    { value: "dark",   label: "Dark",   Icon: Moon },
+    { value: "system", label: "System", Icon: Monitor },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Appearance</CardTitle>
+        <CardDescription>
+          Plexara is designed to feel calm in daylight. Switch to dark for evening review or to follow your system.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div
+          role="radiogroup"
+          aria-label="Theme"
+          className="inline-flex items-center gap-1 rounded-lg bg-secondary p-1"
+        >
+          {options.map(({ value, label, Icon }) => {
+            const active = theme === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setTheme(value)}
+                data-testid={`theme-${value}`}
+                className={cn(
+                  "inline-flex items-center gap-2 px-3 h-9 rounded-md text-sm font-medium transition-colors outline-none",
+                  "focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                  active
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" aria-hidden />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
