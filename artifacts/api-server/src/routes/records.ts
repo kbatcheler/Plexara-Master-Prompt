@@ -61,9 +61,23 @@ async function verifyPatientOwnership(patientId: number, userId: string): Promis
   return !!patient;
 }
 
+// Record types where extraction MUST yield biomarker rows for the result to
+// be considered useful. For other types (imaging reports, genetics summaries,
+// wearable narrative reports, etc.) the LLM legitimately returns structured
+// non-biomarker fields, so an empty `biomarkers` array is fine.
+function recordTypeRequiresBiomarkers(recordType: string): boolean {
+  return recordType === "blood_panel";
+}
+
 // Extracts a document (PDF/image) via the AI extraction pipeline and stores biomarkers,
 // then runs the multi-lens interpretation. Used by the records upload route AND by the
 // imaging report attachment route. Consent-gated against Anthropic.
+//
+// Failure semantics (shared with the upload route): if extraction throws OR if it
+// returns no biomarkers for a record type that requires them (e.g. blood_panel),
+// we mark the record `error` and SKIP the 3-lens pipeline. Running the lenses on
+// `{}` would waste ~30s of LLM calls and produce a misleading "DATA EXTRACTION
+// FAILURE" alert that pollutes the dashboard.
 export async function processUploadedDocument(opts: {
   patientId: number;
   recordId: number;
@@ -86,6 +100,9 @@ export async function processUploadedDocument(opts: {
       await db.update(recordsTable).set({ status: "consent_blocked" }).where(eq(recordsTable.id, recordId));
       return;
     }
+
+    let extractionFailed = false;
+    let extractionFailureReason: string | null = null;
 
     try {
       structuredData = await extractFromDocument(base64, mimeType, recordType);
@@ -123,14 +140,30 @@ export async function processUploadedDocument(opts: {
             testDate: (structuredData.testDate as string) || testDate || null,
           });
         }
+      } else if (recordTypeRequiresBiomarkers(recordType)) {
+        extractionFailed = true;
+        extractionFailureReason = "Extraction returned no biomarkers";
       }
     } catch (extractErr) {
-      logger.error({ extractErr }, "Extraction failed, using empty data");
+      extractionFailed = true;
+      extractionFailureReason = (extractErr as Error)?.message || "Extraction failed";
+      // Note: `extractErr.message` may include LLM error text but never the
+      // raw response candidate (see parseJSONFromLLM — snippets are redacted).
+      logger.error({ recordId, recordType, message: extractionFailureReason }, "Extraction failed");
+    }
+
+    if (extractionFailed) {
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+      logger.warn(
+        { recordId, recordType, reason: extractionFailureReason },
+        "Marking record as error — skipping 3-lens analysis",
+      );
+      return;
     }
 
     await runInterpretationPipeline(patientId, recordId, structuredData);
   } catch (bgErr) {
-    logger.error({ bgErr }, "Background processing failed");
+    logger.error({ recordId, message: (bgErr as Error)?.message }, "Background processing failed");
     await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
   }
 }
@@ -271,7 +304,40 @@ async function runInterpretationPipeline(
     if (lensAOutput) {
       const effectiveLensB = lensBOutput || lensAOutput;
       const effectiveLensC = lensCOutput || lensAOutput;
-      const reconciledOutput = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC, patientCtx);
+      const rawReconciled = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC, patientCtx);
+
+      // Defensive normalisation: the hardened JSON parser (jsonrepair fallback)
+      // can now coax a parseable object out of slightly malformed LLM output,
+      // but the parsed object may legitimately be missing optional/nested
+      // fields (e.g. `unifiedHealthScore` undefined, gauges with missing
+      // `currentValue`). The downstream transaction calls `.toString()` on
+      // numeric fields, so guarantee shape + safe defaults here.
+      const toFiniteNumber = (v: unknown, fallback: number): number => {
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const reconciledOutput: ReconciledOutput = {
+        ...rawReconciled,
+        agreements: rawReconciled.agreements ?? [],
+        disagreements: rawReconciled.disagreements ?? [],
+        urgentFlags: rawReconciled.urgentFlags ?? [],
+        topConcerns: rawReconciled.topConcerns ?? [],
+        topPositives: rawReconciled.topPositives ?? [],
+        patientNarrative: rawReconciled.patientNarrative ?? "",
+        clinicalNarrative: rawReconciled.clinicalNarrative ?? "",
+        unifiedHealthScore: toFiniteNumber(rawReconciled.unifiedHealthScore, 50),
+        gaugeUpdates: (rawReconciled.gaugeUpdates ?? [])
+          .filter((g): g is NonNullable<typeof g> => !!g && typeof g.domain === "string")
+          .map((g) => ({
+            ...g,
+            currentValue: toFiniteNumber(g.currentValue, 50),
+            trend: g.trend ?? "stable",
+            confidence: g.confidence ?? "low",
+            lensAgreement: g.lensAgreement ?? "partial",
+            label: g.label ?? "",
+            description: g.description ?? "",
+          })),
+      };
       const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
 
       // ── Atomic finalisation: reconciled output + gauge upserts + alert
@@ -497,6 +563,9 @@ router.post(
           return;
         }
 
+        let extractionFailed = false;
+        let extractionErrorMessage: string | null = null;
+
         try {
           structuredData = await extractFromDocument(base64, mimeType, recordType);
 
@@ -538,9 +607,31 @@ router.post(
                 testDate: (structuredData.testDate as string) || testDate || null,
               });
             }
+          } else if (recordTypeRequiresBiomarkers(recordType)) {
+            extractionFailed = true;
+            extractionErrorMessage = "Extraction returned no biomarkers";
           }
         } catch (extractErr) {
-          logger.error({ extractErr }, "Extraction failed, using empty data");
+          extractionFailed = true;
+          extractionErrorMessage = (extractErr as Error)?.message || "Extraction failed";
+          // PHI safety: log only the .message (parseJSONFromLLM redacts response snippets).
+          logger.error(
+            { recordId: record.id, recordType, message: extractionErrorMessage },
+            "Extraction failed",
+          );
+        }
+
+        // Skip the 3-lens pipeline entirely if extraction failed —
+        // running lenses on empty data wastes ~30s of LLM calls and
+        // produces a misleading "DATA EXTRACTION FAILURE" alert that
+        // pollutes the dashboard. Surface the failure to the UI instead.
+        if (extractionFailed) {
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
+          logger.warn(
+            { recordId: record.id, reason: extractionErrorMessage },
+            "Marking record as error — skipping 3-lens analysis",
+          );
+          return;
         }
 
         await runInterpretationPipeline(patientId, record.id, structuredData);

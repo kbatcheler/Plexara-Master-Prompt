@@ -7,19 +7,27 @@ interface GaugeProps {
   gauge: GaugeType;
 }
 
+// PostgreSQL `numeric` columns are returned as strings by node-postgres,
+// so values reaching the client may be `string | number | null`. Normalise
+// before using them in arithmetic or `.toFixed(...)`.
+function toNum(v: unknown, fallback: number | null = null): number | null {
+  if (v === null || v === undefined || v === "") return fallback;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function ArcGauge({ gauge }: GaugeProps) {
   const { mode } = useMode();
-  const {
-    domain,
-    currentValue = 0,
-    clinicalRangeLow = 0,
-    clinicalRangeHigh = 100,
-    optimalRangeLow = 20,
-    optimalRangeHigh = 80,
-    trend,
-    confidence,
-    lensAgreement,
-  } = gauge;
+  const domain = gauge.domain;
+  const trend = gauge.trend;
+  const confidence = gauge.confidence;
+  const lensAgreement = gauge.lensAgreement;
+
+  const currentValue = toNum(gauge.currentValue);
+  const clinicalRangeLow = toNum(gauge.clinicalRangeLow, 0) ?? 0;
+  const clinicalRangeHigh = toNum(gauge.clinicalRangeHigh, 100) ?? 100;
+  const optimalRangeLow = toNum(gauge.optimalRangeLow, 20) ?? 20;
+  const optimalRangeHigh = toNum(gauge.optimalRangeHigh, 80) ?? 80;
 
   // SVG parameters
   const size = 200;

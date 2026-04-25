@@ -30,6 +30,7 @@
     "google-auth-library": "^10.6.2",
     "helmet": "^8.1.0",
     "http-proxy-middleware": "^3.0.5",
+    "jsonrepair": "^3.14.0",
     "multer": "^2.1.1",
     "openai": "^6.34.0",
     "pino": "^9",

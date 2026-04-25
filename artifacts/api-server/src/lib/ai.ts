@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { jsonrepair } from "jsonrepair";
 import { logger } from "./logger";
 import { stripPII } from "./pii";
 
@@ -229,11 +230,40 @@ Respond with valid JSON:
 }`;
 
 function parseJSONFromLLM(text: string): unknown {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return JSON.parse(jsonMatch[0]);
+  if (!text || typeof text !== "string") {
+    throw new Error("Empty response from LLM");
   }
-  throw new Error("No valid JSON found in response");
+
+  let candidate = text.trim();
+
+  const fenced = candidate.match(/```(?:json|JSON)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    candidate = fenced[1].trim();
+  }
+
+  const firstBrace = candidate.indexOf("{");
+  const lastBrace = candidate.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidate = candidate.slice(firstBrace, lastBrace + 1);
+  } else {
+    throw new Error("No JSON object found in LLM response");
+  }
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    try {
+      const repaired = jsonrepair(candidate);
+      return JSON.parse(repaired);
+    } catch (repairErr) {
+      // Don't include the candidate text in the error — the LLM response may
+      // contain extracted health data (lab values, demographics) and we never
+      // want PHI bleeding into application logs or error reports.
+      throw new Error(
+        `LLM returned malformed JSON that could not be repaired (length=${candidate.length}): ${(repairErr as Error).message}`,
+      );
+    }
+  }
 }
 
 // Note: the interface declaration is the export — a separate `export type`

@@ -160,8 +160,14 @@ export default function Dashboard() {
             <div>
               <h2 className="text-2xl font-heading font-semibold text-foreground">System Intelligence</h2>
               <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-                {dashboard.recordCount} records analyzed across {dashboard.lensesCompleted || 0} AI lenses. 
-                {dashboard.activeAlertCount > 0 ? ` Tracking ${dashboard.activeAlertCount} active signals.` : " All primary systems nominal."}
+                {dashboard.recordCount} {dashboard.recordCount === 1 ? "record" : "records"} analyzed
+                {dashboard.lensesCompleted
+                  ? ` across ${dashboard.lensesCompleted} AI ${dashboard.lensesCompleted === 1 ? "lens" : "lenses"}`
+                  : ""}
+                .
+                {dashboard.activeAlertCount > 0
+                  ? ` Tracking ${dashboard.activeAlertCount} active ${dashboard.activeAlertCount === 1 ? "signal" : "signals"}.`
+                  : " All primary systems nominal."}
               </p>
             </div>
             <div className="w-full">
