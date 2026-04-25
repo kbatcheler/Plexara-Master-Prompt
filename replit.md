@@ -33,10 +33,19 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - Patient demographics (age range, sex, ethnicity) passed to all lenses for age/sex-adjusted reference ranges
 
 ### Privacy
-- `stripPII()` in `lib/pii.ts`: recursive, pattern-based PII stripping across nested objects/arrays
+- `stripPII()` in `lib/pii.ts`: recursive, pattern-based PII stripping across nested objects/arrays. Patterns cover SSN, NHS number (3-3-4), email, US phone, **UK mobile (07xxx)**, **UK landline (01x/02x/03x)**, and **international format (+44 / +1 / +353 etc.)** — international pattern is intentionally ordered first so a `+44 …` sequence cannot be partially eaten by the UK landline pattern. Field-name redaction covers `nhsNumber`, `nino`, `gpName`, `gpPractice`, `surgery`, `postcode`, `zipcode`, `hospitalNumber`, `hospitalId` in addition to the standard US set.
 - Raw DOB → age range bucket (e.g., "30-39") via `computeAgeRange()` before any LLM call
 - Name, DOB, email, phone, SSN, MRN, address — all stripped/redacted before AI
 - Onboarding UI transparently explains what is/isn't shared with AI
+
+### Code-Review Remediation (April 2026)
+Six audit findings from `attached_assets/plexara-remediation-prompt_*.md` resolved:
+1. **PII gaps closed** — UK / intl phone & NHS-number / GP-name / postcode patterns added (see Privacy above). 39 new tests guard the contract.
+2. **Test coverage** — `tests/pii.test.ts`, `tests/parse-json.test.ts`, `tests/extraction-prompt.test.ts` (80 total tests pass). `parseJSONFromLLM` and `buildExtractionPrompt` exported from `lib/ai.ts`.
+3. **CSP documented** — `app.ts` carries an explicit migration-path comment for the Clerk `unsafe-inline` requirement and emits a `logger.warn` on production boot so the TODO is visible in deploy logs.
+4. **DICOM backend hardened** — `lib/dicom.ts` exports `extractDicomMetadata(buffer)` returning `{ full, anonymised }` (anonymised view drops patientName / patientId / institutionName / referringPhysician) plus `isDicomFile(buffer)` (DICM-magic-byte check at offset 128). `routes/imaging.ts` now does **validate-then-extract**: `isDicomFile` first → 400 if no magic bytes, then `extractDicomMetadata` → 400 on parse failure, only then `storage.uploadBuffer` + DB insert. This closes a mime-spoofing gap where a non-DICOM payload sent as `application/octet-stream` could previously be persisted to object storage. `numberOfFrames` parsing tightened to `/^\d+$/` + `>0` (else null) so junk like `"12abc"`, `"0"`, or negatives no longer leak through. `parseDicomMetadata` retained as a deprecated export for any external callers but is no longer used in the upload path. **Frontend CornerstoneJS viewer (Issue 4b) deferred to Phase 2 per audit.**
+5. **Multer hardened** — every multer instance (`records.ts`, `imaging.ts × 2`, `wearables.ts`, `genetics.ts`) now declares explicit `fileSize`/`files`/`fields` limits. `records.ts` mime allow-list expanded to PDF / JPEG / PNG / WebP / GIF / TIFF / CSV / TXT / JSON. `errorHandler.ts` catches `multer.MulterError` and returns 413 (file too large) or 400 (other multer errors). FileFilter rejections now throw `HttpError(400)` so they hit the central 400 path instead of the generic 500.
+6. **Dev-auth double-gated** — `lib/auth.ts`, `routes/dev-auth.ts`, and the boot in `index.ts` now require BOTH `NODE_ENV !== "production"` AND `ENABLE_DEV_AUTH=true`. `routes/dev-auth.ts` registers a 404 catch-all when the gate is off, so a stale prod import can't expose the bypass. Every dev-cookie hit emits a `logger.warn` for audit trail. The dev script in `artifacts/api-server/package.json` exports `ENABLE_DEV_AUTH=true` so local workflows continue to work.
 
 ### Health Domains (Gauges, 0-100 scale)
 Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional

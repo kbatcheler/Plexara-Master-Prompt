@@ -12,7 +12,17 @@ import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
 
 const router = Router();
 const patientRouter = Router({ mergeParams: true });
-const upload = multer({ dest: UPLOADS_DIR, limits: { fileSize: 500 * 1024 * 1024 } });
+// Wearable bulk export upload — Apple Health export.zip can legitimately be
+// 500 MB+, so the fileSize ceiling stays high. files/fields caps added per
+// code review (Issue 5) to harden against multipart-bomb DoS.
+const upload = multer({
+  dest: UPLOADS_DIR,
+  limits: {
+    fileSize: 500 * 1024 * 1024,
+    files: 1,
+    fields: 20,
+  },
+});
 
 // ── Account-scoped: connection management ──
 router.get("/wearables", requireAuth, async (req, res): Promise<void> => {

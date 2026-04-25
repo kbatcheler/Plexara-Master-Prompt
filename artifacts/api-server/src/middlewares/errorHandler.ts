@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
+import multer from "multer";
 import { logger } from "../lib/logger";
 
 // Sentinel thrown by validate() and route handlers to surface a structured
@@ -56,6 +57,19 @@ export function errorHandler(
   // Pino-http populates req.id; surface it on every error response so users
   // and operators can correlate a failed call with structured server logs.
   const requestId = (req as Request & { id?: string }).id;
+
+  // Multer rejects (file too large, too many files, disallowed mime via the
+  // fileFilter) need user-friendly status codes — 413 for size, 400 for
+  // everything else — instead of leaking through the generic 500 path.
+  if (err instanceof multer.MulterError) {
+    const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    const message = err.code === "LIMIT_FILE_SIZE"
+      ? "File too large. Maximum size is 100MB per file."
+      : `Upload error: ${err.message}`;
+    req.log?.warn({ code: err.code, field: err.field }, "Multer rejected upload");
+    res.status(status).json({ error: message, code: err.code, requestId });
+    return;
+  }
 
   if (err instanceof ZodError) {
     res.status(400).json({

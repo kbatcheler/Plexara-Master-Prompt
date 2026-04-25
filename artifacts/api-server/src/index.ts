@@ -13,6 +13,25 @@ try {
   process.exit(1);
 }
 
+// Surface dev-auth state at boot so the operator sees it in deployment logs.
+// In production with the flag set we also DEMOTE it to a no-op via the
+// double-gate in lib/auth.ts and routes/dev-auth.ts, but log loud anyway so
+// the misconfiguration is visible.
+if (process.env.ENABLE_DEV_AUTH === "true") {
+  if (process.env.NODE_ENV === "production") {
+    logger.error(
+      "ENABLE_DEV_AUTH=true is set in production — this would be a critical " +
+      "security risk. The double-gate in lib/auth.ts will reject all dev " +
+      "cookies regardless. Unset ENABLE_DEV_AUTH on this deployment.",
+    );
+  } else {
+    logger.warn(
+      "Dev auth bypass is ENABLED (ENABLE_DEV_AUTH=true). Unset this for " +
+      "any production-like deployment.",
+    );
+  }
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {

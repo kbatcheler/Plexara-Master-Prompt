@@ -20,7 +20,16 @@ import { isProviderAllowed } from "../lib/consent";
 const router = Router({ mergeParams: true });
 const globalRouter = Router();
 const storage = new ObjectStorageService();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+// Genetics upload — VCF / 23andMe text exports / PGS panels can run large.
+// files/fields caps added per code review (Issue 5).
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024,
+    files: 1,
+    fields: 20,
+  },
+});
 
 async function verifyOwnership(patientId: number, userId: string): Promise<boolean> {
   const [p] = await db.select().from(patientsTable).where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));

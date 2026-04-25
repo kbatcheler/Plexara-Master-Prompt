@@ -8,7 +8,7 @@ import path from "path";
 import crypto from "crypto";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { stripPII, hashData } from "../lib/pii";
-import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext } from "../lib/ai";
+import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext, type ReconciledOutput } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
@@ -19,19 +19,45 @@ import {
   decryptStructuredJson,
 } from "../lib/phi-crypto";
 import { validate } from "../middlewares/validate";
+import { HttpError } from "../middlewares/errorHandler";
 import { recordCreateBody } from "../lib/validators";
 
 const router = Router({ mergeParams: true });
 
+// Multer limits / allow-list: hardened per code review (Issue 5).
+//   - fileSize 100 MB: medical PDFs and high-res scans can be large; the
+//     frontend dropzone enforces a tighter 10 MB cap so legitimate uploads
+//     stay small. The 100 MB ceiling here is a backstop against a malicious
+//     or runaway client.
+//   - files: 10 / fields: 20: prevent multipart bombs that exhaust memory
+//     by attaching thousands of empty fields.
+//   - fileFilter expanded for medical documents (TIFF scans, CSV lab dumps,
+//     plaintext narrative notes, JSON device exports).
 const upload = multer({
   dest: UPLOADS_DIR,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: {
+    fileSize: 100 * 1024 * 1024,
+    files: 10,
+    fields: 20,
+  },
   fileFilter: (_req, file, cb) => {
-    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"];
-    if (allowed.includes(file.mimetype)) {
+    const allowed = new Set([
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "image/tiff",
+      "text/csv",
+      "text/plain",
+      "application/json",
+    ]);
+    if (allowed.has(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Only PDF and image files are allowed"));
+      // HttpError (not a bare Error) so the central errorHandler returns
+      // a proper 400 instead of falling through to the generic 500 path.
+      cb(new HttpError(400, `File type not allowed: ${file.mimetype}. Accepted: PDF, JPEG, PNG, WebP, GIF, TIFF, CSV, TXT, JSON`));
     }
   },
 });
@@ -394,7 +420,7 @@ async function runInterpretationPipeline(
 
         if (allowUrgent && reconciledOutput.urgentFlags.length > 0) {
           await tx.insert(alertsTable).values(
-            reconciledOutput.urgentFlags.map((flag) => ({
+            reconciledOutput.urgentFlags.map((flag: string) => ({
               patientId,
               severity: "urgent" as const,
               title: "Urgent Finding",
@@ -407,7 +433,7 @@ async function runInterpretationPipeline(
         }
         if (allowWatch && reconciledOutput.topConcerns.length > 0) {
           await tx.insert(alertsTable).values(
-            reconciledOutput.topConcerns.slice(0, 2).map((concern) => ({
+            reconciledOutput.topConcerns.slice(0, 2).map((concern: string) => ({
               patientId,
               severity: "watch" as const,
               title: "Finding to Watch",

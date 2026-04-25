@@ -7,32 +7,56 @@ import { db, imagingStudiesTable, imagingAnnotationsTable, patientsTable, record
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
-import { parseDicomMetadata } from "../lib/dicom";
+import { extractDicomMetadata, isDicomFile } from "../lib/dicom";
 import { logger } from "../lib/logger";
 import { processUploadedDocument } from "./records";
 import { validate } from "../middlewares/validate";
+import { HttpError } from "../middlewares/errorHandler";
 import { annotationBody } from "../lib/validators";
 import { z } from "zod";
 
 const router = Router({ mergeParams: true });
 const dicomRouter = Router();
 const storage = new ObjectStorageService();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+// DICOM upload: large fileSize ceiling because a single multi-frame study can
+// be hundreds of MB. Files/fields caps prevent multipart-bomb DoS. The
+// fileFilter accepts the canonical "application/dicom" mime plus the generic
+// "application/octet-stream" that most browsers/clients send for DICOM.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 200 * 1024 * 1024,
+    files: 10,
+    fields: 20,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(["application/dicom", "application/octet-stream"]);
+    if (allowed.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new HttpError(400, `File type not allowed: ${file.mimetype}. Accepted: DICOM`));
+    }
+  },
+});
 
 const REPORTS_DIR = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
 const reportUpload = multer({
   dest: REPORTS_DIR,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: {
+    fileSize: 100 * 1024 * 1024,
+    files: 10,
+    fields: 20,
+  },
   fileFilter: (_req, file, cb) => {
-    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/tiff"];
     // multer's FileFilterCallback is overloaded: (error: Error) OR (null, acceptFile).
     // Branch so each call matches one overload exactly — passing Error|null with
     // an acceptFile arg lands on the `(null, ...)` overload and TypeError-fails.
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("PDF or image only"));
+      cb(new HttpError(400, `File type not allowed: ${file.mimetype}. Accepted: PDF, JPEG, PNG, WebP, TIFF`));
     }
   },
 });
@@ -67,26 +91,37 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
     return;
   }
 
-  let meta: Awaited<ReturnType<typeof parseDicomMetadata>> = {
-    modality: null, bodyPart: null, description: null, studyDate: null, sopInstanceUid: null, rows: null, columns: null,
-  };
+  // Validate-then-extract: enforce DICOM magic bytes BEFORE we touch storage,
+  // so a non-DICOM payload uploaded with mime "application/octet-stream" can't
+  // sneak past the multer filter and get persisted to object storage. This
+  // closes the audit gap the architect flagged on the DICOM endpoint.
+  if (!isDicomFile(req.file.buffer)) {
+    res.status(400).json({
+      error: "Uploaded file is not a valid DICOM file (missing 'DICM' magic bytes at offset 128).",
+    });
+    return;
+  }
+
+  let full: Awaited<ReturnType<typeof extractDicomMetadata>>["full"];
   try {
-    meta = parseDicomMetadata(req.file.buffer);
+    ({ full } = extractDicomMetadata(req.file.buffer));
   } catch (err) {
-    logger.warn({ err }, "DICOM parse failed — storing raw file with no metadata");
+    logger.warn({ err }, "DICOM extraction failed despite magic-byte match");
+    res.status(400).json({ error: "Invalid DICOM file: unable to extract metadata." });
+    return;
   }
 
   try {
     const objectKey = await storage.uploadBuffer(req.file.buffer, "application/dicom", "dicom");
     const [study] = await db.insert(imagingStudiesTable).values({
       patientId,
-      modality: meta.modality,
-      bodyPart: meta.bodyPart,
-      description: meta.description,
-      studyDate: meta.studyDate,
-      sopInstanceUid: meta.sopInstanceUid,
-      rows: meta.rows,
-      columns: meta.columns,
+      modality: full.modality,
+      bodyPart: full.bodyPartExamined,
+      description: full.studyDescription || full.seriesDescription,
+      studyDate: full.studyDate,
+      sopInstanceUid: full.sopInstanceUid,
+      rows: full.rows,
+      columns: full.columns,
       fileName: req.file.originalname,
       dicomObjectKey: objectKey,
       fileSize: req.file.size,

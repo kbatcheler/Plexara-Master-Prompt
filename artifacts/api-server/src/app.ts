@@ -43,6 +43,22 @@ app.use(
 // and a strict default CSP. We override CSP because the React frontend uses
 // inline <style> emitted by Tailwind/Vite chunks, plus data: images for icons,
 // plus connections to Clerk + the AI proxy origin.
+//
+// SECURITY NOTE (CSP 'unsafe-inline' for scripts):
+// 'unsafe-inline' on script-src / script-src-elem is required because
+// @clerk/react injects bootstrap scripts at runtime. This is a known tradeoff
+// documented by Clerk and weakens our XSS defence.
+//
+// Migration path to eliminate 'unsafe-inline':
+//   1. Check whether Clerk supports nonce-based script loading (preferred).
+//   2. If so, generate a per-request nonce in middleware, pass it to both
+//      helmet's CSP and the HTML template's <script nonce="..."> attributes.
+//   3. Replace 'unsafe-inline' with "'nonce-<value>'" in script-src.
+//   4. Verify the Clerk auth flow still works end-to-end.
+//
+// Until then, the combination of 'unsafe-inline' + frame-ancestors: 'none'
+// + X-Content-Type-Options: nosniff provides reasonable (not ideal) defence.
+// See: https://clerk.com/docs/security/csp
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -85,6 +101,17 @@ app.use(
     crossOriginEmbedderPolicy: false, // breaks DICOM/<img crossorigin=> use cases
   }),
 );
+
+// Surface the CSP 'unsafe-inline' tradeoff in production logs at boot so the
+// next maintainer reviewing deployment logs sees the migration TODO.
+if (process.env.NODE_ENV === "production") {
+  logger.warn(
+    { component: "csp" },
+    "CSP includes 'unsafe-inline' for script-src (required by Clerk SDK). " +
+    "Migration TODO: investigate Clerk nonce-based script loading to " +
+    "eliminate 'unsafe-inline'. See: https://clerk.com/docs/security/csp",
+  );
+}
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 // Production: lock down to the comma-separated CORS_ORIGIN list. We refuse

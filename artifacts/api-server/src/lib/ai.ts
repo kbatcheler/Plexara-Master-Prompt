@@ -229,7 +229,7 @@ Respond with valid JSON:
   ]
 }`;
 
-function parseJSONFromLLM(text: string): unknown {
+export function parseJSONFromLLM(text: string): unknown {
   if (!text || typeof text !== "string") {
     throw new Error("Empty response from LLM");
   }
@@ -370,7 +370,7 @@ export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: Le
   return parseJSONFromLLM(text) as ReconciledOutput;
 }
 
-function buildExtractionPrompt(recordType: string): string {
+export function buildExtractionPrompt(recordType: string): string {
   const t = (recordType || "blood_panel").toLowerCase();
   if (t.includes("imaging") || t.includes("mri") || t.includes("scan") || t.includes("xray") || t.includes("ct") || t.includes("ultrasound")) {
     return `You are a medical imaging extraction specialist. Extract structured data from this imaging report. Anonymise patient name as [PATIENT], facility as [FACILITY], radiologist as [PHYSICIAN].
