@@ -10,13 +10,9 @@ import { stripPII, hashData } from "../lib/pii";
 import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
+import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
 
 const router = Router({ mergeParams: true });
-
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
 
 const upload = multer({
   dest: UPLOADS_DIR,
@@ -53,7 +49,7 @@ export async function processUploadedDocument(opts: {
 }): Promise<void> {
   const { patientId, recordId, filePath, mimeType, recordType, testDate } = opts;
   try {
-    const fileBuffer = fs.readFileSync(filePath);
+    const fileBuffer = fs.readFileSync(assertWithinUploads(filePath));
     const base64 = fileBuffer.toString("base64");
     let structuredData: Record<string, unknown> = {};
 
@@ -414,7 +410,7 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
 
     setImmediate(async () => {
       try {
-        const fileBuffer = fs.readFileSync(req.file!.path);
+        const fileBuffer = fs.readFileSync(assertWithinUploads(req.file!.path));
         const base64 = fileBuffer.toString("base64");
         const mimeType = req.file!.mimetype;
 
@@ -564,8 +560,14 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
       return;
     }
 
-    if (record.filePath && fs.existsSync(record.filePath)) {
-      fs.unlinkSync(record.filePath);
+    if (record.filePath) {
+      try {
+        const safe = assertWithinUploads(record.filePath);
+        if (fs.existsSync(safe)) fs.unlinkSync(safe);
+      } catch (err) {
+        // Path escaped uploads dir — log + skip rather than crashing the delete.
+        logger.warn({ err, filePath: record.filePath, recordId }, "Refused to unlink record file outside uploads dir");
+      }
     }
 
     await db.delete(biomarkerResultsTable).where(eq(biomarkerResultsTable.recordId, recordId));

@@ -8,10 +8,11 @@ import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { parseAppleHealthXml, beginIngest, ingestBatch, finishIngest, SUPPORTED_PROVIDERS, type WearableProvider } from "../lib/wearables";
+import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
 
 const router = Router();
 const patientRouter = Router({ mergeParams: true });
-const upload = multer({ dest: "uploads/", limits: { fileSize: 500 * 1024 * 1024 } });
+const upload = multer({ dest: UPLOADS_DIR, limits: { fileSize: 500 * 1024 * 1024 } });
 
 // ── Account-scoped: connection management ──
 router.get("/wearables", requireAuth, async (req, res): Promise<void> => {
@@ -51,7 +52,7 @@ router.post("/wearables/apple/import/:patientId",
     let parseResult: { totalParsed: number } | null = null;
     let importErr: unknown = null;
     try {
-      const stream = createReadStream(filePath);
+      const stream = createReadStream(assertWithinUploads(filePath));
       parseResult = await parseAppleHealthXml(stream, (batch) => ingestBatch(ctx, batch));
 
       // Mark connection (file-based: no token).
@@ -67,7 +68,12 @@ router.post("/wearables/apple/import/:patientId",
     } finally {
       // Always: finalise ingest record + remove temp file.
       await finishIngest(ctx, importErr ?? undefined).catch((e) => logger.error({ e }, "finishIngest failed"));
-      fs.promises.unlink(filePath).catch((e) => logger.warn({ e, filePath }, "temp file cleanup failed"));
+      try {
+        const safeFilePath = assertWithinUploads(filePath);
+        fs.promises.unlink(safeFilePath).catch((e) => logger.warn({ e, filePath: safeFilePath }, "temp file cleanup failed"));
+      } catch (e) {
+        logger.warn({ e, filePath }, "Refused to unlink wearable upload outside uploads dir");
+      }
     }
 
     if (importErr) {

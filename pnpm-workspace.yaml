@@ -163,3 +163,12 @@ overrides:
   path-to-regexp: "^8.4.0"           # ReDoS via sequential optional groups (HIGH)
   picomatch: "^4.0.4"                # ReDoS via extglob quantifiers (HIGH)
   vite: "^7.3.2"                     # arbitrary file read + fs.deny bypass (HIGH)
+  brace-expansion: "^2.0.3"          # zero-step infinite loop / OOM (MOD)
+  fast-xml-parser: "^5.7.0"          # XMLBuilder comment/CDATA injection (MOD)
+  follow-redirects: "^1.16.0"        # auth header leak on cross-domain redirect (MOD)
+  js-yaml: "^3.14.2"                 # prototype pollution in merge (MOD)
+  postcss: "^8.5.10"                 # XSS via unescaped </style> (MOD, build-time only)
+  yaml: "^2.8.3"                     # stack overflow via deeply nested collections (MOD)
+  # uuid moderates intentionally NOT overridden: vulnerability is in v3/v5/v6 with `buf`
+  # argument; we do not import uuid directly anywhere, transitive paths do not trigger it.
+  # Major version bump to v14 deferred until needed.
