@@ -104,30 +104,75 @@ export default function Share() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>New share link</CardTitle>
+      <Card className="overflow-hidden">
+        <CardHeader className="bg-secondary/40 border-b border-border">
+          <CardTitle className="text-base font-heading font-semibold">New share link</CardTitle>
           <CardDescription>The recipient can open the link until it expires or you revoke it.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div>
-              <Label className="text-xs">Recipient name</Label>
-              <Input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Dr. Patel" />
-            </div>
-            <div>
-              <Label className="text-xs">Label</Label>
-              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Cardiology consult" />
-            </div>
-            <div>
-              <Label className="text-xs">Expires in (days)</Label>
-              <Input type="number" min={1} max={90} value={days} onChange={(e) => setDays(parseInt(e.target.value) || 14)} />
+        <CardContent className="space-y-6 pt-6">
+          {/* Step 1 — Recipient */}
+          <div className="flex gap-4">
+            <div className="w-7 h-7 shrink-0 rounded-full bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center mt-1" aria-hidden="true">1</div>
+            <div className="flex-1 space-y-3">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Who is this for?</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">A name and short label help you remember the audience later.</p>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs">Recipient name</Label>
+                  <Input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Dr. Patel" data-testid="input-share-recipient" />
+                </div>
+                <div>
+                  <Label className="text-xs">Label</Label>
+                  <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Cardiology consult" data-testid="input-share-label" />
+                </div>
+              </div>
             </div>
           </div>
-          <Button onClick={create} disabled={creating}>
-            {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Share2 className="w-4 h-4 mr-2" />}
-            Create link
-          </Button>
+
+          {/* Step 2 — Expiry */}
+          <div className="flex gap-4">
+            <div className="w-7 h-7 shrink-0 rounded-full bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center mt-1" aria-hidden="true">2</div>
+            <div className="flex-1 space-y-3">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">How long should it stay live?</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">After this window the link auto-expires. You can also revoke at any time.</p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {[7, 14, 30, 60].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDays(d)}
+                    className={`px-3 py-1.5 rounded-full text-xs border transition-colors ${days === d ? "border-primary bg-primary/10 text-primary font-medium" : "border-border text-muted-foreground hover:border-primary/40"}`}
+                    data-testid={`button-expiry-${d}`}
+                  >
+                    {d} days
+                  </button>
+                ))}
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground">Custom</Label>
+                  <Input type="number" min={1} max={90} value={days} onChange={(e) => setDays(parseInt(e.target.value) || 14)} className="w-20 h-8 text-xs" data-testid="input-share-days" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Step 3 — Generate */}
+          <div className="flex gap-4">
+            <div className="w-7 h-7 shrink-0 rounded-full bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center mt-1" aria-hidden="true">3</div>
+            <div className="flex-1 space-y-2">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Generate the link</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">We'll create a unique URL you can copy and send.</p>
+              </div>
+              <Button onClick={create} disabled={creating} data-testid="button-create-share">
+                {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Share2 className="w-4 h-4 mr-2" />}
+                Create link
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

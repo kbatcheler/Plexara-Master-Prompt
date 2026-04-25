@@ -8,7 +8,7 @@ import {
 } from "@workspace/api-client-react";
 import { UploadZone } from "../components/dashboard/UploadZone";
 import { RecordDetailModal } from "../components/dashboard/RecordDetailModal";
-import { FileText, Loader2, Trash2, Search, Filter, RotateCw } from "lucide-react";
+import { FileText, Loader2, Trash2, Search, Filter, RotateCw, UploadCloud, CheckCircle2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -118,10 +118,10 @@ export default function Records() {
         </div>
       </div>
 
-      <div className="bg-card border border-border/50 rounded-2xl p-6">
-        <h2 className="font-heading font-medium mb-4 flex items-center gap-2">
-          <UploadCloudIcon className="w-5 h-5 text-primary" />
-          Upload New Record
+      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+        <h2 className="font-heading font-semibold mb-4 flex items-center gap-2 text-base">
+          <UploadCloud className="w-5 h-5 text-primary" />
+          Upload new record
         </h2>
         <UploadZone />
       </div>
@@ -164,38 +164,41 @@ export default function Records() {
               <div 
                 key={record.id}
                 onClick={() => setSelectedRecordId(record.id)}
-                className="group flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-card border border-border/50 rounded-xl hover:border-primary/50 cursor-pointer transition-all"
+                className="group flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-card border border-border rounded-xl hover:border-primary/40 hover:shadow-md cursor-pointer transition-all"
+                data-testid={`record-row-${record.id}`}
               >
-                <div className="flex items-center gap-4 w-full sm:w-auto">
-                  <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center group-hover:bg-primary/10 transition-colors shrink-0">
-                    <FileText className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
+                <div className="flex items-center gap-4 w-full sm:w-auto sm:min-w-0 sm:flex-1">
+                  <div className="w-11 h-11 rounded-xl bg-secondary flex items-center justify-center group-hover:bg-primary/10 transition-colors shrink-0">
+                    <FileText className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <h4 className="font-medium text-foreground truncate">{record.fileName}</h4>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-1">
-                      <span className="capitalize">{record.recordType.replace('_', ' ')}</span>
-                      <span className="hidden sm:inline">•</span>
-                      <span>Uploaded: {new Date(record.uploadDate).toLocaleDateString()}</span>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground mt-1.5">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground/80 capitalize text-[11px] font-medium">
+                        {record.recordType.replace('_', ' ')}
+                      </span>
+                      <span>Uploaded {new Date(record.uploadDate).toLocaleDateString()}</span>
                       {record.testDate && (
                         <>
-                          <span className="hidden sm:inline">•</span>
-                          <span>Tested: {new Date(record.testDate).toLocaleDateString()}</span>
+                          <span className="text-border">·</span>
+                          <span>Tested {new Date(record.testDate).toLocaleDateString()}</span>
                         </>
                       )}
                     </div>
                   </div>
                 </div>
                 
-                <div className="flex items-center justify-between w-full sm:w-auto mt-4 sm:mt-0 pt-4 sm:pt-0 border-t sm:border-0 border-border/30 gap-4">
+                <div className="flex items-center justify-between w-full sm:w-auto mt-4 sm:mt-0 pt-4 sm:pt-0 border-t sm:border-0 border-border/40 gap-3 shrink-0">
                   <div className="flex items-center gap-2">
                     {record.status === "processing" || record.status === "pending" ? (
-                      <div className="flex items-center gap-1.5 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-xs font-medium border border-blue-500/20">
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-status-normal/10 text-status-normal border border-status-normal/20">
                         <Loader2 className="w-3 h-3 animate-spin" />
                         Processing
                       </div>
                     ) : record.status === "error" ? (
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5 px-3 py-1 bg-red-500/10 text-red-400 rounded-full text-xs font-medium border border-red-500/20">
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-status-urgent/10 text-status-urgent border border-status-urgent/20">
+                          <AlertCircle className="w-3 h-3" />
                           Failed
                         </div>
                         <Button
@@ -215,7 +218,8 @@ export default function Records() {
                         </Button>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1.5 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-xs font-medium border border-green-500/20">
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-status-optimal/10 text-status-optimal border border-status-optimal/20">
+                        <CheckCircle2 className="w-3 h-3" />
                         Complete
                       </div>
                     )}
@@ -257,26 +261,4 @@ export default function Records() {
       />
     </div>
   );
-}
-
-// Inline this icon since we forgot to import it from lucide
-function UploadCloudIcon(props: any) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
-      <path d="M12 12v9" />
-      <path d="m16 16-4-4-4 4" />
-    </svg>
-  )
 }

@@ -21,6 +21,14 @@ The application is structured as a pnpm monorepo using TypeScript, with each pac
     -   **Gauges**: Three-quarter (270°) arc, 0-100 score color-bucketed, large bold centered score with trend arrow, confidence ring indicating lens agreement. Animates 0 → score with `ease-out-cubic`.
     -   **Hero Card**: Full-width card at dashboard top, large gauge, narrative paragraph (Newsreader/JetBrains Mono), relative timestamp, baseline-delta chip, optional baseline reset.
     -   **Alert Banners**: Severity-tinted background, left accent stripe, icon, "Dismiss with reason" functionality.
+-   **Page-specific Polish (April 2026 §5)**:
+    -   **Records**: Lucide `UploadCloud` icon (no inline SVGs); status pills and record-type pills use `bg-status-{normal,urgent,optimal}` semantic vars.
+    -   **BiologicalAge**: Dramatic 7xl/8xl coloured delta as the centerpiece, status-tinted gradient background, Newsreader narrative.
+    -   **ChatPanel**: User bubbles right-aligned `bg-primary` with `rounded-br-sm`; assistant bubbles left-aligned `bg-secondary` with `rounded-bl-sm` and Newsreader font in patient mode; subjectLabel context indicator pill at top-right; animated thinking dots while streaming.
+    -   **Supplements**: Card stack with pill icon, "Active"/"Paused"/"No interactions" semantic badges, tighter `p-5` rhythm.
+    -   **Protocols**: `evidenceTone()` → semantic-colour evidence badges; eligible recommended cards get `border-l-4 border-l-primary`; serif descriptions.
+    -   **Share** (`/share-portal`): Numbered three-step wizard with circular step indicators and expiry preset chips.
+    -   **RecordDetailModal**: Tabs-based lens accordion (Reconciled / Lens A / Lens B / Lens C) replacing the previous hardcoded dark-mode lens cards; biomarker status dots use `bg-status-*` vars; serif patient narrative.
 -   **Reduced Motion**: Global `prefers-reduced-motion` rule and gauge hooks short-circuit animations.
 
 **Technical Implementations & Feature Specifications:**

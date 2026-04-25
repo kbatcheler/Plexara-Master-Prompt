@@ -10,6 +10,7 @@ import { useMode } from "../../context/ModeContext";
 import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 
@@ -140,88 +141,108 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
               </div>
             ) : (
               <div className="space-y-8">
-                {/* 3 Lens Output */}
-                <div className="space-y-6">
-                  <h3 className="text-lg font-heading font-medium flex items-center gap-2">
-                    <Brain className="w-5 h-5 text-primary" />
-                    Three-Lens Synthesis
+                {/* Three-lens synthesis with tabbed view */}
+                <div className="space-y-4">
+                  <h3 className="text-base font-heading font-semibold flex items-center gap-2">
+                    <Brain className="w-4 h-4 text-primary" />
+                    Three-lens synthesis
                   </h3>
-                  
-                  {/* Reconciled Output */}
-                  {record.reconciledOutput && (
-                    <div className="bg-card border border-border/50 rounded-xl p-5 shadow-lg relative overflow-hidden">
-                      <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary to-cyan-500" />
-                      <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-primary" />
-                        Reconciled Interpretation
-                      </h4>
-                      <p className="text-sm leading-relaxed text-muted-foreground">
-                        {mode === "patient" 
-                          ? (record.reconciledOutput as any).patientSummary || "Analysis synthesis."
-                          : (record.reconciledOutput as any).clinicalSummary || "Clinical synthesis."}
-                      </p>
-                    </div>
-                  )}
 
-                  {/* Individual Lenses */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* Lens A */}
-                    {record.lensAOutput && (
-                      <div className="bg-[#0f172a] border border-blue-900/30 rounded-xl p-4 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-blue-500/50" />
-                        <h4 className="text-sm font-medium text-blue-400 mb-2 flex items-center gap-1.5">
-                          <ShieldAlert className="w-4 h-4" /> Lens A
-                        </h4>
-                        <div className="text-xs text-slate-300 leading-relaxed">
-                          {(record.lensAOutput as any).summary || "Clinical Synthesist output."}
+                  <Tabs defaultValue="reconciled" className="w-full">
+                    <TabsList className="grid grid-cols-4 w-full" data-testid="lens-tabs">
+                      <TabsTrigger value="reconciled" className="text-xs gap-1.5" data-testid="tab-reconciled">
+                        <Activity className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Reconciled</span>
+                      </TabsTrigger>
+                      <TabsTrigger value="lensA" className="text-xs gap-1.5" data-testid="tab-lensA">
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        Lens A
+                      </TabsTrigger>
+                      <TabsTrigger value="lensB" className="text-xs gap-1.5" data-testid="tab-lensB">
+                        <Cpu className="w-3.5 h-3.5" />
+                        Lens B
+                      </TabsTrigger>
+                      <TabsTrigger value="lensC" className="text-xs gap-1.5" data-testid="tab-lensC">
+                        <Beaker className="w-3.5 h-3.5" />
+                        Lens C
+                      </TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="reconciled" className="mt-4">
+                      {record.reconciledOutput ? (
+                        <div className="relative bg-card border border-border rounded-xl p-5 overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1 h-full bg-primary" aria-hidden="true" />
+                          <div className="flex items-center gap-2 mb-3">
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-primary/40 text-primary bg-primary/5">Synthesised</Badge>
+                            <span className="text-xs text-muted-foreground">{mode === "patient" ? "Patient narrative" : "Clinical narrative"}</span>
+                          </div>
+                          <p className={`leading-relaxed text-foreground/90 ${mode === "patient" ? "font-serif text-[15px]" : "text-sm"}`}>
+                            {mode === "patient"
+                              ? (record.reconciledOutput as any).patientSummary || "Analysis synthesis."
+                              : (record.reconciledOutput as any).clinicalSummary || "Clinical synthesis."}
+                          </p>
                         </div>
-                      </div>
-                    )}
-                    {/* Lens B */}
-                    {record.lensBOutput && (
-                      <div className="bg-[#064e3b]/30 border border-emerald-900/30 rounded-xl p-4 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500/50" />
-                        <h4 className="text-sm font-medium text-emerald-400 mb-2 flex items-center gap-1.5">
-                          <Cpu className="w-4 h-4" /> Lens B
-                        </h4>
-                        <div className="text-xs text-emerald-100/70 leading-relaxed">
-                          {(record.lensBOutput as any).summary || "Evidence Checker output."}
+                      ) : (
+                        <p className="text-sm text-muted-foreground italic py-4">No reconciled output available.</p>
+                      )}
+                    </TabsContent>
+
+                    <TabsContent value="lensA" className="mt-4">
+                      <div className="bg-card border border-border rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-3">
+                          <ShieldAlert className="w-4 h-4 text-primary" />
+                          <h4 className="text-sm font-medium text-foreground">Lens A — Clinical synthesist</h4>
                         </div>
+                        <p className="text-sm leading-relaxed text-foreground/80">
+                          {record.lensAOutput ? ((record.lensAOutput as any).summary || "Clinical synthesist output.") : <span className="text-muted-foreground italic">No output available.</span>}
+                        </p>
                       </div>
-                    )}
-                    {/* Lens C */}
-                    {record.lensCOutput && (
-                      <div className="bg-[#451a03]/30 border border-amber-900/30 rounded-xl p-4 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-amber-500/50" />
-                        <h4 className="text-sm font-medium text-amber-500 mb-2 flex items-center gap-1.5">
-                          <Beaker className="w-4 h-4" /> Lens C
-                        </h4>
-                        <div className="text-xs text-amber-100/70 leading-relaxed">
-                          {(record.lensCOutput as any).summary || "Contrarian Analyst output."}
+                    </TabsContent>
+
+                    <TabsContent value="lensB" className="mt-4">
+                      <div className="bg-card border border-border rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Cpu className="w-4 h-4 text-status-optimal" />
+                          <h4 className="text-sm font-medium text-foreground">Lens B — Evidence checker</h4>
                         </div>
+                        <p className="text-sm leading-relaxed text-foreground/80">
+                          {record.lensBOutput ? ((record.lensBOutput as any).summary || "Evidence checker output.") : <span className="text-muted-foreground italic">No output available.</span>}
+                        </p>
                       </div>
-                    )}
-                  </div>
+                    </TabsContent>
+
+                    <TabsContent value="lensC" className="mt-4">
+                      <div className="bg-card border border-border rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Beaker className="w-4 h-4 text-status-watch" />
+                          <h4 className="text-sm font-medium text-foreground">Lens C — Contrarian analyst</h4>
+                        </div>
+                        <p className="text-sm leading-relaxed text-foreground/80">
+                          {record.lensCOutput ? ((record.lensCOutput as any).summary || "Contrarian analyst output.") : <span className="text-muted-foreground italic">No output available.</span>}
+                        </p>
+                      </div>
+                    </TabsContent>
+                  </Tabs>
                 </div>
 
                 {/* Biomarkers Table */}
                 {record.biomarkerResults && record.biomarkerResults.length > 0 && (
                   <div className="space-y-4">
-                    <h3 className="text-lg font-heading font-medium">Extracted Biomarkers</h3>
-                    <div className="border border-border/50 rounded-xl overflow-hidden bg-card">
+                    <h3 className="text-base font-heading font-semibold">Extracted biomarkers</h3>
+                    <div className="border border-border rounded-xl overflow-hidden bg-card">
                       <table className="w-full text-sm text-left">
-                        <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
+                        <thead className="bg-secondary/40 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
                           <tr>
-                            <th className="px-4 py-3 font-medium">Biomarker</th>
-                            <th className="px-4 py-3 font-medium">Value</th>
+                            <th className="px-4 py-3">Biomarker</th>
+                            <th className="px-4 py-3">Value</th>
                             {mode === "clinician" && (
-                              <th className="px-4 py-3 font-medium">Clinical Range</th>
+                              <th className="px-4 py-3">Clinical range</th>
                             )}
-                            <th className="px-4 py-3 font-medium">Optimal Range</th>
-                            <th className="px-4 py-3 font-medium text-right">Status</th>
+                            <th className="px-4 py-3">Optimal range</th>
+                            <th className="px-4 py-3 text-right">Status</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-border/30">
+                        <tbody className="divide-y divide-border">
                           {record.biomarkerResults.map((bm) => {
                             const val = bm.value;
                             const optLow = bm.optimalRangeLow;
@@ -229,34 +250,34 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                             const clinLow = bm.labReferenceLow;
                             const clinHigh = bm.labReferenceHigh;
                             
-                            let status = "bg-muted";
+                            let statusClass = "bg-muted";
                             if (val !== null && val !== undefined) {
                               if (optLow !== null && optHigh !== null && val >= optLow && val <= optHigh) {
-                                status = "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]";
+                                statusClass = "bg-status-optimal";
                               } else if (clinLow !== null && clinHigh !== null && val >= clinLow && val <= clinHigh) {
-                                status = "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]";
+                                statusClass = "bg-status-watch";
                               } else {
-                                status = "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]";
+                                statusClass = "bg-status-urgent";
                               }
                             }
 
                             return (
-                              <tr key={bm.id} className="hover:bg-secondary/20 transition-colors">
+                              <tr key={bm.id} className="hover:bg-secondary/30 transition-colors">
                                 <td className="px-4 py-3 font-medium text-foreground">{bm.biomarkerName}</td>
-                                <td className="px-4 py-3 font-mono text-primary">
+                                <td className="px-4 py-3 font-mono text-foreground tabular-nums">
                                   {val !== null ? val : "--"} <span className="text-xs text-muted-foreground ml-1">{bm.unit}</span>
                                 </td>
                                 {mode === "clinician" && (
-                                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                                    {clinLow ?? "--"} - {clinHigh ?? "--"}
+                                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums">
+                                    {clinLow ?? "--"} – {clinHigh ?? "--"}
                                   </td>
                                 )}
-                                <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                                  {optLow ?? "--"} - {optHigh ?? "--"}
+                                <td className="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums">
+                                  {optLow ?? "--"} – {optHigh ?? "--"}
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <div className="inline-flex justify-end w-full">
-                                    <div className={`w-2.5 h-2.5 rounded-full ${status}`} />
+                                    <div className={`w-2.5 h-2.5 rounded-full ${statusClass}`} aria-label="biomarker status" />
                                   </div>
                                 </td>
                               </tr>

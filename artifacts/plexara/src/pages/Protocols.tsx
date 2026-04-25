@@ -39,30 +39,37 @@ interface Adoption {
   protocol: Protocol | null;
 }
 
+function evidenceTone(level: string): string {
+  const l = level.toLowerCase();
+  if (l === "strong" || l === "high") return "border-status-optimal/40 text-status-optimal bg-status-optimal/5";
+  if (l === "moderate" || l === "medium") return "border-status-normal/40 text-status-normal bg-status-normal/5";
+  return "border-border text-muted-foreground bg-secondary/40";
+}
+
 function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: Protocol; eligible?: boolean; alreadyAdopted?: boolean; onAdopt?: () => void; adopting?: boolean }) {
   return (
-    <Card>
+    <Card className={`transition-shadow hover:shadow-md ${eligible ? "border-l-4 border-l-primary" : ""}`}>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-lg">{p.name}</CardTitle>
-            <CardDescription>{p.description}</CardDescription>
+          <div className="min-w-0">
+            <CardTitle className="text-lg font-heading font-semibold">{p.name}</CardTitle>
+            <CardDescription className="font-serif leading-relaxed mt-1">{p.description}</CardDescription>
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <Badge variant="outline" className="text-[10px]">{p.category}</Badge>
-            <Badge variant="outline" className="text-[10px] capitalize">{p.evidenceLevel} evidence</Badge>
-            {p.requiresPhysician && <Badge variant="outline" className="text-[10px] text-amber-500 border-amber-500/40">Physician-guided</Badge>}
+          <div className="flex flex-col items-end gap-1.5 shrink-0">
+            <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{p.category}</Badge>
+            <Badge variant="outline" className={`text-[10px] uppercase tracking-wide capitalize ${evidenceTone(p.evidenceLevel)}`}>{p.evidenceLevel} evidence</Badge>
+            {p.requiresPhysician && <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-status-watch/40 text-status-watch bg-status-watch/5">Physician-guided</Badge>}
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         <div>
-          <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Components</p>
-          <ul className="text-sm space-y-1">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium mb-2">Components</p>
+          <ul className="text-sm space-y-1.5">
             {p.componentsJson.map((c, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-muted-foreground capitalize w-24 shrink-0">{c.type}</span>
-                <span><strong>{c.name}</strong>{c.dosage ? ` — ${c.dosage}` : ""}{c.frequency ? `, ${c.frequency}` : ""}{c.notes ? ` (${c.notes})` : ""}</span>
+              <li key={i} className="flex gap-3">
+                <span className="text-muted-foreground capitalize w-24 shrink-0 text-xs pt-0.5">{c.type}</span>
+                <span className="leading-relaxed"><strong className="font-medium">{c.name}</strong>{c.dosage ? <span className="text-muted-foreground"> — {c.dosage}</span> : ""}{c.frequency ? <span className="text-muted-foreground">, {c.frequency}</span> : ""}{c.notes ? <span className="text-muted-foreground italic"> ({c.notes})</span> : ""}</span>
               </li>
             ))}
           </ul>
@@ -71,7 +78,7 @@ function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: P
           <p className="text-xs text-muted-foreground">Retest {p.retestBiomarkers.join(", ")} after {p.retestIntervalWeeks} weeks.</p>
         )}
         {p.citations && p.citations.length > 0 && (
-          <p className="text-[11px] text-muted-foreground italic">{p.citations.join(" · ")}</p>
+          <p className="text-[11px] text-muted-foreground italic border-l-2 border-border pl-3">{p.citations.join(" · ")}</p>
         )}
         {onAdopt && (
           <div className="flex items-center gap-2 pt-2">
@@ -85,7 +92,7 @@ function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: P
             )}
             {eligible !== undefined && !alreadyAdopted && (
               eligible
-                ? <span className="text-xs text-primary flex items-center gap-1"><Check className="w-3 h-3" />Matches your data</span>
+                ? <span className="text-xs text-status-optimal flex items-center gap-1 font-medium"><Check className="w-3 h-3" />Matches your data</span>
                 : <span className="text-xs text-muted-foreground flex items-center gap-1"><AlertCircle className="w-3 h-3" />No matching biomarker yet</span>
             )}
           </div>

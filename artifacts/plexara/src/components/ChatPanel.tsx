@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Send, Sparkles } from "lucide-react";
+import { Loader2, Send, Sparkles, FileText } from "lucide-react";
 import { useToast } from "../hooks/use-toast";
+import { useMode } from "../context/ModeContext";
 
 interface ChatMessage {
   id?: number;
@@ -21,7 +22,16 @@ interface Props {
   className?: string;
 }
 
+function subjectLabel(subjectType: string, subjectRef: string | null): string {
+  if (subjectType === "general") return "General health questions";
+  if (subjectType === "biomarker" && subjectRef) return `Biomarker: ${subjectRef}`;
+  if (subjectType === "record" && subjectRef) return `Record #${subjectRef}`;
+  if (subjectType === "interpretation") return "Latest interpretation";
+  return subjectType.charAt(0).toUpperCase() + subjectType.slice(1);
+}
+
 export function ChatPanel({ patientId, subjectType = "general", subjectRef = null, initialPrompt, conversationId: initialConvId = null, className }: Props) {
+  const { mode } = useMode();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<number | null>(initialConvId);
   const [draft, setDraft] = useState("");
@@ -67,16 +77,28 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
     }
   }
 
+  const assistantTextClass = mode === "patient"
+    ? "font-serif text-[15px] leading-relaxed"
+    : "text-sm leading-relaxed";
+
   return (
-    <div className={`flex flex-col rounded-lg border border-border/60 bg-card ${className ?? ""}`}>
-      <div className="px-4 py-2 border-b border-border/40 flex items-center gap-2 text-sm font-medium">
-        <Sparkles className="w-4 h-4 text-primary" />
-        Ask about your health data
+    <div className={`flex flex-col rounded-2xl border border-border bg-card shadow-sm ${className ?? ""}`}>
+      {/* Header with context indicator */}
+      <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Sparkles className="w-4 h-4 text-primary" />
+          Ask about your health data
+        </div>
+        <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground bg-secondary/60 rounded-full px-2.5 py-1" data-testid="chat-context">
+          <FileText className="w-3 h-3" />
+          {subjectLabel(subjectType, subjectRef)}
+        </div>
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[400px] min-h-[180px]">
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-4 max-h-[480px] min-h-[200px]">
         {messages.length === 0 && (
-          <div className="text-sm text-muted-foreground">
-            <p className="mb-2">Ask a question about your most recent interpretation, a specific biomarker, or a finding.</p>
+          <div className="text-sm text-muted-foreground space-y-3">
+            <p>Ask a question about your most recent interpretation, a specific biomarker, or a finding.</p>
             {initialPrompt && (
               <Button variant="outline" size="sm" onClick={() => send(initialPrompt)}>
                 {initialPrompt}
@@ -86,18 +108,31 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
         )}
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary/60 text-foreground"}`}>
-              {m.content}
-            </div>
+            {m.role === "user" ? (
+              <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm whitespace-pre-wrap shadow-sm">
+                {m.content}
+              </div>
+            ) : (
+              <div className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-secondary text-foreground px-4 py-3 whitespace-pre-wrap ${assistantTextClass}`}>
+                {m.content}
+              </div>
+            )}
           </div>
         ))}
         {sending && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="w-3 h-3 animate-spin" /> thinking…
+          <div className="flex justify-start">
+            <div className="rounded-2xl rounded-bl-sm bg-secondary text-muted-foreground px-4 py-3 text-sm flex items-center gap-2">
+              <span className="flex gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "0ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "150ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "300ms" }} />
+              </span>
+              thinking
+            </div>
           </div>
         )}
       </div>
-      <div className="p-3 border-t border-border/40 flex gap-2">
+      <div className="p-3 border-t border-border flex gap-2">
         <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -111,11 +146,11 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
             }
           }}
         />
-        <Button onClick={() => send(draft)} disabled={sending || !draft.trim()} size="icon">
+        <Button onClick={() => send(draft)} disabled={sending || !draft.trim()} size="icon" aria-label="Send message">
           <Send className="w-4 h-4" />
         </Button>
       </div>
-      <p className="px-3 pb-2 text-[10px] text-muted-foreground">Educational information only. Not a substitute for medical advice.</p>
+      <p className="px-4 pb-2.5 text-[10px] text-muted-foreground">Educational information only. Not a substitute for medical advice.</p>
     </div>
   );
 }

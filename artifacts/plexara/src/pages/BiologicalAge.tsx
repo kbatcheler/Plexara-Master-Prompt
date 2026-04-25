@@ -89,45 +89,60 @@ export default function BiologicalAge() {
         </Card>
       )}
 
-      {/* Latest result hero */}
-      {latest && (
-        <Card className="border-primary/30 bg-gradient-to-br from-primary/10 to-transparent" data-testid="card-latest-bioage">
-          <CardHeader>
-            <CardTitle>Most recent result</CardTitle>
-            <CardDescription>
-              {latest.testDate ? `Measured ${latest.testDate}` : `Computed ${new Date(latest.createdAt).toLocaleDateString()}`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Chronological</div>
-                <div className="text-4xl font-heading font-semibold">{Number(latest.chronologicalAge).toFixed(0)}</div>
-                <div className="text-xs text-muted-foreground mt-1">years</div>
-              </div>
-              <div className="border-x border-border/40">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Phenotypic</div>
-                <div className="text-4xl font-heading font-semibold text-primary">{Number(latest.phenotypicAge).toFixed(1)}</div>
-                <div className="text-xs text-muted-foreground mt-1">years</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Delta</div>
-                <div className={`text-4xl font-heading font-semibold ${Number(latest.ageDelta) <= 0 ? "text-emerald-400" : "text-amber-400"}`}>
-                  {Number(latest.ageDelta) > 0 ? "+" : ""}{Number(latest.ageDelta).toFixed(1)}
+      {/* Latest result hero — delta as the dramatic centerpiece */}
+      {latest && (() => {
+        const delta = Number(latest.ageDelta);
+        const isYounger = delta <= 0;
+        const deltaTone = delta <= -2 ? "text-status-optimal" : delta >= 2 ? "text-status-watch" : "text-foreground";
+        const accentBg = delta <= -2 ? "from-status-optimal/15" : delta >= 2 ? "from-status-watch/15" : "from-primary/10";
+        return (
+          <Card className={`relative overflow-hidden border-border bg-gradient-to-br ${accentBg} via-card to-card`} data-testid="card-latest-bioage">
+            <CardHeader className="pb-3">
+              <CardDescription className="text-xs uppercase tracking-wide font-medium">
+                Most recent result · {latest.testDate ? `measured ${new Date(latest.testDate).toLocaleDateString()}` : `computed ${new Date(latest.createdAt).toLocaleDateString()}`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-6 md:gap-10 items-center">
+                {/* Chronological */}
+                <div className="text-center md:text-right">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mb-2">Chronological</div>
+                  <div className="text-5xl font-heading font-semibold tabular-nums leading-none">{Number(latest.chronologicalAge).toFixed(0)}</div>
+                  <div className="text-xs text-muted-foreground mt-2">years old</div>
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">years vs chronological</div>
+
+                {/* Dramatic delta centerpiece */}
+                <div className="flex flex-col items-center md:px-6 py-4 md:border-x border-border/60">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-medium mb-2">
+                    {isYounger ? "Younger by" : "Older by"}
+                  </div>
+                  <div className={`text-7xl md:text-8xl font-heading font-bold tabular-nums leading-none ${deltaTone}`}>
+                    {delta > 0 ? "+" : ""}{Math.abs(delta).toFixed(1)}
+                  </div>
+                  <div className={`text-sm font-medium mt-3 ${deltaTone}`}>
+                    years {isYounger ? "younger" : "older"} than your age
+                  </div>
+                </div>
+
+                {/* Phenotypic */}
+                <div className="text-center md:text-left">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mb-2">Phenotypic</div>
+                  <div className="text-5xl font-heading font-semibold tabular-nums leading-none text-primary">{Number(latest.phenotypicAge).toFixed(1)}</div>
+                  <div className="text-xs text-muted-foreground mt-2">biological age</div>
+                </div>
               </div>
-            </div>
-            <p className="text-sm text-center mt-6 text-muted-foreground">
-              {Number(latest.ageDelta) <= -2
-                ? "Your biology is meaningfully younger than your chronological age — keep doing what you're doing."
-                : Number(latest.ageDelta) >= 2
-                  ? "Your biology is showing more wear than your chronological age. The drivers are visible in your biomarker panel."
-                  : "Your biological and chronological ages are well aligned."}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+
+              <p className="font-serif text-base leading-relaxed text-center max-w-2xl mx-auto text-foreground/80">
+                {delta <= -2
+                  ? "Your biology is meaningfully younger than your chronological age — keep doing what you're doing."
+                  : delta >= 2
+                    ? "Your biology is showing more wear than your chronological age. The drivers are visible in your biomarker panel."
+                    : "Your biological and chronological ages are well aligned."}
+              </p>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Trend chart */}
       {chartData.length >= 2 && (

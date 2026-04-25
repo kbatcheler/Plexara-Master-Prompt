@@ -212,29 +212,39 @@ export default function Supplements() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {stack.map((s) => (
-                <Card key={s.id} className={s.active ? "" : "opacity-50"} data-testid={`supp-${s.id}`}>
-                  <CardContent className="py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="font-medium">{s.name}</span>
-                          {!s.active && <Badge variant="outline" className="text-xs">paused</Badge>}
+                <Card key={s.id} className={`group transition-all hover:shadow-md ${s.active ? "border-border" : "opacity-60 border-border/60"}`} data-testid={`supp-${s.id}`}>
+                  <CardContent className="py-4 px-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                          <Pill className="w-5 h-5 text-primary" />
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          {s.dosage && <span>{s.dosage}</span>}
-                          {s.dosage && s.frequency && <span> · </span>}
-                          {s.frequency && <span>{s.frequency}</span>}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span className="font-medium text-base text-foreground">{s.name}</span>
+                            {s.active ? (
+                              <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-status-optimal/30 text-status-optimal bg-status-optimal/5">Active</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] uppercase tracking-wide">Paused</Badge>
+                            )}
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-border text-muted-foreground">No interactions</Badge>
+                          </div>
+                          <div className="text-sm text-muted-foreground tabular-nums">
+                            {s.dosage && <span className="font-mono text-foreground/80">{s.dosage}</span>}
+                            {s.dosage && s.frequency && <span className="mx-1.5 text-border">·</span>}
+                            {s.frequency && <span>{s.frequency}</span>}
+                          </div>
+                          {s.notes && <p className="text-xs text-muted-foreground mt-1.5 italic line-clamp-2">{s.notes}</p>}
                         </div>
-                        {s.notes && <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">{s.notes}</p>}
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Button size="icon" variant="ghost" onClick={() => setOpenImpactId(openImpactId === s.id ? null : s.id)} title="Show biomarker impact" data-testid={`button-impact-${s.id}`}>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button size="icon" variant="ghost" onClick={() => setOpenImpactId(openImpactId === s.id ? null : s.id)} title="Show biomarker impact" aria-label="Show biomarker impact" data-testid={`button-impact-${s.id}`}>
                           <Activity className={`w-4 h-4 ${openImpactId === s.id ? "text-primary" : "text-muted-foreground"}`} />
                         </Button>
-                        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(s.id)} disabled={deleteMutation.isPending} data-testid={`button-delete-${s.id}`}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
+                        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(s.id)} disabled={deleteMutation.isPending} title="Remove from stack" aria-label="Remove from stack" data-testid={`button-delete-${s.id}`}>
+                          <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive transition-colors" />
                         </Button>
                       </div>
                     </div>
