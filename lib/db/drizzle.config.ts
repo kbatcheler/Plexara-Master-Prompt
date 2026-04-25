@@ -7,6 +7,11 @@ if (!process.env.DATABASE_URL) {
 
 export default defineConfig({
   schema: path.join(__dirname, "./src/schema/index.ts"),
+  // Migration files live at lib/db/drizzle/. The baseline 0000_*.sql is
+  // committed; any subsequent schema changes should be captured with
+  // `pnpm --filter @workspace/db run generate` (NOT `push`) so the migration
+  // history is the source of truth in production.
+  out: path.join(__dirname, "./drizzle"),
   dialect: "postgresql",
   dbCredentials: {
     url: process.env.DATABASE_URL,

@@ -17,6 +17,28 @@ const openai = new OpenAI({
 const genAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
 const GEMINI_BASE_URL = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL;
 
+/**
+ * Per-lens model selection. Reading from env at runtime means the entire
+ * three-lens pipeline can be re-routed (different models, different
+ * providers, different sizes) without touching code. Defaults match
+ * Plexara's documented production configuration.
+ *
+ * Future migration path: when Vertex AI / Bedrock are available, write
+ * a VertexAnthropicProvider that accepts the same model string and swap
+ * via env. The model identifiers below are the only ones referenced in
+ * this file.
+ */
+export const LLM_MODELS = {
+  lensA: process.env.LLM_LENS_A_MODEL || "claude-sonnet-4-6",
+  lensB: process.env.LLM_LENS_B_MODEL || "gpt-5.2",
+  lensC: process.env.LLM_LENS_C_MODEL || "gemini-2.5-flash",
+  reconciliation: process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
+  // Utility model — used for lighter Claude calls (extraction, narratives,
+  // gauge labels). Defaults to the reconciliation model so the pipeline
+  // stays internally consistent without extra config.
+  utility: process.env.LLM_UTILITY_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
+} as const;
+
 export interface LensOutput {
   findings: Array<{
     category: string;
@@ -254,7 +276,7 @@ export async function runLensA(anonymisedData: AnonymisedData, patientCtx?: Pati
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
   
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: LLM_MODELS.lensA,
     max_tokens: 2000,
     system: LENS_A_PROMPT,
     messages: [
@@ -274,7 +296,7 @@ export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: Lens
   const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}\n\nPrior analysis (Lens A - Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}`;
   
   const completion = await openai.chat.completions.create({
-    model: "gpt-5.2",
+    model: LLM_MODELS.lensB,
     messages: [
       { role: "system", content: LENS_B_PROMPT },
       { role: "user", content: prompt },
@@ -293,7 +315,7 @@ export async function runLensC(anonymisedData: AnonymisedData, lensAOutput: Lens
   const customGenAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
   
   const model = customGenAI.getGenerativeModel(
-    { model: "gemini-2.5-flash" },
+    { model: LLM_MODELS.lensC },
     GEMINI_BASE_URL ? { baseUrl: GEMINI_BASE_URL } : undefined
   );
   
@@ -307,7 +329,7 @@ export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: Le
   const prompt = `Three independent analyses of the same anonymised patient data:${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}\n\nLens C (Contrarian Analyst):\n${JSON.stringify(lensCOutput, null, 2)}`;
   
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: LLM_MODELS.reconciliation,
     max_tokens: 3000,
     system: RECONCILIATION_PROMPT,
     messages: [{ role: "user", content: prompt }],
@@ -406,7 +428,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
     
     if (imageTypes.includes(mimeType as ImageType)) {
       const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: LLM_MODELS.utility,
         max_tokens: 4000,
         messages: [
           {
@@ -430,7 +452,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
     } else if (mimeType === "application/pdf") {
       // Anthropic native PDF support — model receives both visual and text layers.
       const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: LLM_MODELS.utility,
         max_tokens: 4000,
         messages: [
           {
@@ -466,7 +488,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
       }
       const truncated = decoded.length > 60000 ? decoded.slice(0, 60000) + "\n…[truncated]" : decoded;
       const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: LLM_MODELS.utility,
         max_tokens: 4000,
         messages: [
           {
@@ -563,7 +585,7 @@ export async function runCrossRecordCorrelation(
   const prompt = `${demographics}\n\nTime-ordered panel history (oldest to newest):\n${JSON.stringify(sanitisedHistory.panelHistory, null, 2)}`;
 
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: LLM_MODELS.utility,
     max_tokens: 4000,
     system: CORRELATION_PROMPT,
     messages: [{ role: "user", content: prompt }],
@@ -637,7 +659,7 @@ export async function runSupplementRecommendations(
   const prompt = `${demographics}\n\nCurrent supplement stack:\n${JSON.stringify((sanitised as { currentStack: unknown }).currentStack, null, 2)}\n\nReconciled biomarker findings:\n${JSON.stringify((sanitised as { findings: unknown }).findings, null, 2)}`;
 
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: LLM_MODELS.utility,
     max_tokens: 3000,
     system: SUPPLEMENT_PROMPT,
     messages: [{ role: "user", content: prompt }],
@@ -674,7 +696,7 @@ export async function runGeneticsInterpretation(input: {
 }`;
   const userPayload = `${demographics}\n\nPolygenic risk scores:\n${JSON.stringify(input.scores, null, 2)}\n\nNotable variants supplied (may be empty):\n${JSON.stringify(input.notableRsids ?? [], null, 2)}`;
   const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: LLM_MODELS.utility,
     max_tokens: 2500,
     system: sys,
     messages: [{ role: "user", content: userPayload }],

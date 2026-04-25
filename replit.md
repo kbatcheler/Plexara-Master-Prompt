@@ -78,8 +78,22 @@ Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological,
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only, bypasses migration history)
+- `pnpm --filter @workspace/db run generate` — generate migration files from schema changes (use this in PRs, not push)
+- `pnpm --filter @workspace/db run migrate` — apply committed migrations against `DATABASE_URL` (deploy hook)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+
+## Migration Readiness
+
+The codebase is hardened for cloud migration off Replit. See **`MIGRATION.md`** for full status, the storage abstraction architecture, and the migration developer's scope. Highlights:
+
+- **Storage**: `artifacts/api-server/src/lib/storage/` exposes a `StorageProvider` interface with `LocalStorageProvider` + `ReplitObjectsStorageProvider` adapters; selectable via `STORAGE_PROVIDER` env var. S3/GCS adapters are the migration developer's task.
+- **LLM models**: Per-lens model selection via `LLM_LENS_A_MODEL` etc. (`lib/ai.ts` exports `LLM_MODELS`). Defaults to current production identifiers.
+- **Migrations**: Baseline at `lib/db/drizzle/0000_*.sql`. Use `generate` + `migrate`, not `push`, for schema changes that need to ship.
+- **Container**: `Dockerfile` + `docker-compose.yml` + `.dockerignore` at repo root. Builds esbuild + vite into a minimal alpine runtime.
+- **Security**: Helmet (CSP/HSTS/X-Frame), `express-rate-limit` two-tier (global + LLM-expensive), env-driven CORS allowlist (`CORS_ORIGIN`), `assertWithinUploads()` path-confinement on all fs ops, `pickAllowed()` prototype-pollution defence on user-supplied keys.
+- **Health**: `GET /api/healthz` pings DB with 1 s timeout; returns 503 on failure so orchestrators pull instances out of rotation.
+- **Env contract**: `.env.example` at repo root documents every variable the app reads.
 
 ## Database Schema
 Tables: `patients`, `records`, `extracted_data`, `biomarker_results`, `biomarker_reference`, `interpretations`, `gauges`, `alerts`, `audit_log`

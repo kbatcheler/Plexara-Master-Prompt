@@ -135,7 +135,7 @@ Patient data payload:
 ${contextBlock}`;
 
     const completion = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
       max_tokens: 800,
       system,
       messages,

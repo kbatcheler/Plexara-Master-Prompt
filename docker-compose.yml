@@ -1,0 +1,63 @@
+# Local production-like stack for Plexara.
+#
+#   docker compose up --build
+#
+# Spins up the app container + a Postgres 16 instance, with a persistent
+# volume for uploads (so STORAGE_PROVIDER=local survives restarts).
+# This is the surface the migration developer will replicate on Cloud Run /
+# ECS / Kubernetes once cloud Postgres + cloud object storage are wired in.
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://plexara:plexara@db:5432/plexara
+      STORAGE_PROVIDER: local
+      FILE_STORAGE_PATH: /app/uploads
+      # The remainder must come from your local .env file (not committed).
+      # Compose merges .env from the project root automatically.
+      SESSION_SECRET: ${SESSION_SECRET}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY}
+      AI_INTEGRATIONS_ANTHROPIC_API_KEY: ${AI_INTEGRATIONS_ANTHROPIC_API_KEY}
+      AI_INTEGRATIONS_ANTHROPIC_BASE_URL: ${AI_INTEGRATIONS_ANTHROPIC_BASE_URL}
+      AI_INTEGRATIONS_OPENAI_API_KEY: ${AI_INTEGRATIONS_OPENAI_API_KEY}
+      AI_INTEGRATIONS_OPENAI_BASE_URL: ${AI_INTEGRATIONS_OPENAI_BASE_URL}
+      AI_INTEGRATIONS_GEMINI_API_KEY: ${AI_INTEGRATIONS_GEMINI_API_KEY}
+      AI_INTEGRATIONS_GEMINI_BASE_URL: ${AI_INTEGRATIONS_GEMINI_BASE_URL}
+      CORS_ORIGIN: http://localhost:8080
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: plexara
+      POSTGRES_PASSWORD: plexara
+      POSTGRES_DB: plexara
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plexara -d plexara"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  uploads:
