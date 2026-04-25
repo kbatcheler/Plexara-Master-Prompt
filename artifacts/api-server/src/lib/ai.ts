@@ -236,7 +236,8 @@ function parseJSONFromLLM(text: string): unknown {
   throw new Error("No valid JSON found in response");
 }
 
-export type { AnonymisedData };
+// Note: the interface declaration is the export — a separate `export type`
+// would conflict with the inline `export interface` below.
 export interface AnonymisedData {
   [key: string]: unknown;
 }

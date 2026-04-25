@@ -43,13 +43,13 @@ router.get("/audit", async (req, res) => {
     }
     const audit = await db.select().from(auditLogTable)
       .where(sql`patient_id IN (${sql.raw(patientIds.join(","))})`)
-      .orderBy(desc(auditLogTable.createdAt))
+      .orderBy(desc(auditLogTable.timestamp))
       .limit(500);
     res.json(audit);
     return;
   }
   const audit = await db.select().from(auditLogTable)
-    .orderBy(desc(auditLogTable.createdAt))
+    .orderBy(desc(auditLogTable.timestamp))
     .limit(500);
   res.json(audit);
 });
@@ -61,7 +61,7 @@ router.get("/data-requests", async (_req, res) => {
 
 router.patch("/data-requests/:id", validate({ body: adminDataRequestUpdateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const id = parseInt(req.params.id);
+  const id = parseInt((req.params.id as string));
   const { status, resolutionNotes } = req.body as z.infer<typeof adminDataRequestUpdateBody>;
   const update: Record<string, unknown> = { assignedAdminId: userId };
   if (status) {

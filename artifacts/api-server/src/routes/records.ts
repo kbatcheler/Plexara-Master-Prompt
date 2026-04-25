@@ -403,7 +403,7 @@ async function runInterpretationPipeline(
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -434,7 +434,7 @@ router.post(
   validate({ body: recordCreateBody }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -541,8 +541,8 @@ router.post(
 
 router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const recordId = parseInt(req.params.recordId);
+  const patientId = parseInt((req.params.patientId as string));
+  const recordId = parseInt((req.params.recordId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -597,8 +597,8 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
 
 router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const recordId = parseInt(req.params.recordId);
+  const patientId = parseInt((req.params.patientId as string));
+  const recordId = parseInt((req.params.recordId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -639,8 +639,8 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const recordId = parseInt(req.params.recordId);
+  const patientId = parseInt((req.params.patientId as string));
+  const recordId = parseInt((req.params.recordId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });

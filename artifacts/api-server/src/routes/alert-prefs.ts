@@ -28,7 +28,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -42,12 +42,21 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
+type AlertPrefsUpdate = {
+  enableUrgent: boolean;
+  enableWatch: boolean;
+  enableInfo: boolean;
+  emailNotifications: boolean;
+  pushNotifications: boolean;
+  customThresholds: Record<string, unknown> | null;
+};
+
 router.put("/", requireAuth, validate({ body: alertPrefsBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const updates = pickAllowed<{ enableUrgent: unknown; enableWatch: unknown; enableInfo: unknown; emailNotifications: unknown; pushNotifications: unknown; customThresholds: unknown }>(
+  const updates = pickAllowed<AlertPrefsUpdate>(
     req.body,
     ["enableUrgent", "enableWatch", "enableInfo", "emailNotifications", "pushNotifications", "customThresholds"] as const,
   );

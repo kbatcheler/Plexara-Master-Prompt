@@ -33,7 +33,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -51,8 +51,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/:conversationId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const conversationId = parseInt(req.params.conversationId);
+  const patientId = parseInt((req.params.patientId as string));
+  const conversationId = parseInt((req.params.conversationId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -71,7 +71,7 @@ router.get("/:conversationId", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { question, subjectType, subjectRef, conversationId } = req.body as z.infer<typeof chatBody>;
@@ -90,7 +90,14 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
     const contextBlock = JSON.stringify({
       reconciled: decryptJson(latest?.reconciledOutput) ?? null,
       gauges: gauges.map((g) => ({ domain: g.domain, value: g.currentValue, trend: g.trend, label: g.label })),
-      recentBiomarkers: biomarkers.map((b) => ({ name: b.biomarkerName, value: b.value, unit: b.unit, testDate: b.testDate, status: b.status })),
+      recentBiomarkers: biomarkers.map((b) => ({
+        name: b.biomarkerName,
+        value: b.value,
+        unit: b.unit,
+        testDate: b.testDate,
+        optimalLow: b.optimalRangeLow,
+        optimalHigh: b.optimalRangeHigh,
+      })),
       subjectType: subjectType ?? "general",
       subjectRef: subjectRef ?? null,
     }, null, 2).slice(0, 30000);
@@ -160,8 +167,8 @@ ${contextBlock}`;
 
 router.delete("/:conversationId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const conversationId = parseInt(req.params.conversationId);
+  const patientId = parseInt((req.params.patientId as string));
+  const conversationId = parseInt((req.params.conversationId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {

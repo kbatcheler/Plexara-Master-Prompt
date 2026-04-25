@@ -40,7 +40,7 @@ router.get("/storage/local/:key", (req: Request, res: Response) => {
     res.status(404).json({ error: "Local storage handler not active" });
     return;
   }
-  const key = decodeURIComponent(req.params.key);
+  const key = decodeURIComponent((req.params.key as string));
   const exp = Number(req.query.exp);
   const sig = String(req.query.sig ?? "");
   if (!provider.verifySignedUrl(key, exp, sig)) {
@@ -81,7 +81,7 @@ async function userOwnsObjectKey(userId: string, objectKey: string): Promise<boo
 // Public assets (unconditional)
 router.get("/storage/public-objects/*filePath", async (req: Request, res: Response) => {
   try {
-    const raw = req.params.filePath;
+    const raw = (req.params.filePath as string);
     const filePath = Array.isArray(raw) ? raw.join("/") : raw;
     const file = await objectStorageService.searchPublicObject(filePath);
     if (!file) {
@@ -107,7 +107,7 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
 router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Response) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const raw = req.params.path;
+    const raw = (req.params.path as string);
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
     const objectPath = `/objects/${wildcardPath}`;
     if (!(await userOwnsObjectKey(userId, objectPath))) {

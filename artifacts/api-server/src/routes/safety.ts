@@ -19,7 +19,7 @@ async function verifyOwnership(patientId: number, userId: string): Promise<boole
 // ── Interactions ──
 router.get("/interactions", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   const extras = (req.query.extra as string | undefined)?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
   try {
@@ -37,8 +37,8 @@ router.post(
   validate({ body: safetyDismissBody }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const ruleId = parseInt(req.params.ruleId);
+  const patientId = parseInt((req.params.patientId as string));
+  const ruleId = parseInt((req.params.ruleId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   await db.insert(interactionDismissalsTable).values({
     patientId, ruleId, note: (req.body as { note?: string | null }).note ?? null,
@@ -48,8 +48,8 @@ router.post(
 
 router.delete("/interactions/dismiss/:ruleId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const ruleId = parseInt(req.params.ruleId);
+  const patientId = parseInt((req.params.patientId as string));
+  const ruleId = parseInt((req.params.ruleId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   await db.delete(interactionDismissalsTable).where(and(
     eq(interactionDismissalsTable.patientId, patientId),
@@ -61,7 +61,7 @@ router.delete("/interactions/dismiss/:ruleId", requireAuth, async (req, res): Pr
 // ── Lens disagreements ──
 router.get("/disagreements", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   const onlyOpen = req.query.open === "true";
   const conds = [eq(lensDisagreementsTable.patientId, patientId)];
@@ -75,7 +75,7 @@ router.get("/disagreements", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/disagreements/backfill", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
     const extracted = await backfillDisagreementsForPatient(patientId);
@@ -92,8 +92,8 @@ router.patch(
   validate({ body: disagreementResolveBody }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const dId = parseInt(req.params.id);
+  const patientId = parseInt((req.params.patientId as string));
+  const dId = parseInt((req.params.id as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   const note = (req.body as { note?: string | null }).note ?? null;
   await db.update(lensDisagreementsTable).set({

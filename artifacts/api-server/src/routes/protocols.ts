@@ -244,7 +244,7 @@ function evaluateRule(rule: EligibilityRule, value: number, optimalLow: number |
 
 patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -275,7 +275,7 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
         if (!b) return { rule: r, met: false, observed: null, reason: "biomarker_missing" as const };
         const v = b.value ? parseFloat(b.value) : NaN;
         if (!isFinite(v)) return { rule: r, met: false, observed: null, reason: "value_invalid" as const };
-        const met = evaluateRule(r, v, b.optimalLow ? parseFloat(b.optimalLow) : null, b.optimalHigh ? parseFloat(b.optimalHigh) : null);
+        const met = evaluateRule(r, v, b.optimalRangeLow ? parseFloat(b.optimalRangeLow) : null, b.optimalRangeHigh ? parseFloat(b.optimalRangeHigh) : null);
         return { rule: r, met, observed: v, reason: met ? "matched" as const : "out_of_threshold" as const };
       });
       const eligible = matches.length > 0 && matches.some((m) => m.met);
@@ -290,7 +290,7 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
 
 patientRouter.get("/adoptions", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -308,7 +308,7 @@ patientRouter.get("/adoptions", requireAuth, async (req, res): Promise<void> => 
 
 patientRouter.post("/adoptions", requireAuth, validate({ body: protocolAdoptBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { protocolId } = req.body as { protocolId: number };
@@ -358,8 +358,8 @@ patientRouter.post("/adoptions", requireAuth, validate({ body: protocolAdoptBody
 
 patientRouter.patch("/adoptions/:adoptionId", requireAuth, validate({ body: protocolAdoptionUpdateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const adoptionId = parseInt(req.params.adoptionId);
+  const patientId = parseInt((req.params.patientId as string));
+  const adoptionId = parseInt((req.params.adoptionId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const updates: Record<string, unknown> = pickAllowed<{ status: unknown; notes: unknown; progressJson: unknown }>(

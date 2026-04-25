@@ -25,7 +25,7 @@ router.get("/consents", requireAuth, async (req, res): Promise<void> => {
 
 router.put("/consents/:scopeKey", requireAuth, validate({ body: consentBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const { scopeKey } = req.params;
+  const scopeKey = req.params.scopeKey as string;
   const { granted } = req.body as { granted: boolean };
   if (!CONSENT_SCOPES.find((s) => s.key === scopeKey)) {
     res.status(400).json({ error: "Unknown scope" });

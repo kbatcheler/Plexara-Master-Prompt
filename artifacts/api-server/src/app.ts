@@ -175,10 +175,13 @@ const LLM_SEGMENTS: ReadonlySet<string> = new Set([
   "supplements",
   "imaging",
 ]);
-app.use("/api", (req, res, next) => {
+app.use("/api", (req, res, next): void => {
   const segments = req.path.split("/").filter(Boolean);
   const isLLM = segments.some((s) => LLM_SEGMENTS.has(s));
-  if (isLLM) return llmLimiter(req, res, next);
+  if (isLLM) {
+    llmLimiter(req, res, next);
+    return;
+  }
   next();
 });
 

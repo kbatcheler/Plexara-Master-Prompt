@@ -37,7 +37,7 @@ globalRouter.get("/pgs-catalog", requireAuth, async (_req, res) => {
 // GET /patients/:pid/genetics
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -53,7 +53,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 // POST /patients/:pid/genetics  (multipart "file")
 router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -105,8 +105,8 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
 // DELETE /patients/:pid/genetics/:profileId
 router.delete("/:profileId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const profileId = parseInt(req.params.profileId);
+  const patientId = parseInt((req.params.patientId as string));
+  const profileId = parseInt((req.params.profileId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -126,7 +126,7 @@ router.delete("/:profileId", requireAuth, async (req, res): Promise<void> => {
 // GET /patients/:pid/prs  — returns existing scores; computes if missing.
 router.get("/prs", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -212,8 +212,8 @@ router.get("/prs", requireAuth, async (req, res): Promise<void> => {
 // POST /patients/:pid/genetics/:profileId/interpret  — Claude-driven plain-language interpretation.
 router.post("/:profileId/interpret", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const profileId = parseInt(req.params.profileId);
+  const patientId = parseInt((req.params.patientId as string));
+  const profileId = parseInt((req.params.profileId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -289,7 +289,7 @@ router.post("/:profileId/interpret", requireAuth, async (req, res): Promise<void
 // POST /patients/:pid/prs/recompute
 router.post("/prs/recompute", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;

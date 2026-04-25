@@ -18,7 +18,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const subjectType = typeof req.query.subjectType === "string" ? req.query.subjectType : undefined;
@@ -41,7 +41,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/", requireAuth, validate({ body: createNoteBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { subjectType, subjectId, body, authorRole } = req.body;
@@ -67,8 +67,8 @@ router.post("/", requireAuth, validate({ body: createNoteBody }), async (req, re
 
 router.patch("/:noteId", requireAuth, validate({ body: updateNoteBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const noteId = parseInt(req.params.noteId);
+  const patientId = parseInt((req.params.patientId as string));
+  const noteId = parseInt((req.params.noteId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { body } = req.body;
@@ -87,8 +87,8 @@ router.patch("/:noteId", requireAuth, validate({ body: updateNoteBody }), async 
 
 router.delete("/:noteId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const noteId = parseInt(req.params.noteId);
+  const patientId = parseInt((req.params.patientId as string));
+  const noteId = parseInt((req.params.noteId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {

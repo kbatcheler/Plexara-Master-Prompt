@@ -28,7 +28,7 @@ async function getPatient(patientId: number, userId: string) {
 
 authedRouter.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -44,7 +44,7 @@ authedRouter.get("/", requireAuth, async (req, res): Promise<void> => {
 
 authedRouter.post("/", requireAuth, validate({ body: shareLinkCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { label, recipientName, expiresInDays } = req.body as z.infer<typeof shareLinkCreateBody>;
@@ -70,8 +70,8 @@ authedRouter.post("/", requireAuth, validate({ body: shareLinkCreateBody }), asy
 
 authedRouter.delete("/:linkId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const linkId = parseInt(req.params.linkId);
+  const patientId = parseInt((req.params.patientId as string));
+  const linkId = parseInt((req.params.linkId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -87,8 +87,8 @@ authedRouter.delete("/:linkId", requireAuth, async (req, res): Promise<void> => 
 
 authedRouter.get("/:linkId/access", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const linkId = parseInt(req.params.linkId);
+  const patientId = parseInt((req.params.patientId as string));
+  const linkId = parseInt((req.params.linkId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -106,7 +106,7 @@ authedRouter.get("/:linkId/access", requireAuth, async (req, res): Promise<void>
 });
 
 publicRouter.get("/:token", async (req, res): Promise<void> => {
-  const token = req.params.token;
+  const token = (req.params.token as string);
   try {
     const [link] = await db.select().from(shareLinksTable).where(eq(shareLinksTable.token, token));
     if (!link) { res.status(404).json({ error: "Link not found" }); return; }

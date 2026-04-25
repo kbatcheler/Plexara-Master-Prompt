@@ -107,7 +107,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -129,7 +129,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/", requireAuth, validate({ body: supplementCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -171,15 +171,23 @@ router.patch(
   validate({ body: supplementUpdateBody.extend({ active: z.boolean().optional() }) }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const supplementId = parseInt(req.params.supplementId);
+  const patientId = parseInt((req.params.patientId as string));
+  const supplementId = parseInt((req.params.supplementId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }
 
-  const updates = pickAllowed<{ name: unknown; dosage: unknown; frequency: unknown; startedAt: unknown; notes: unknown; active: unknown }>(
+  type SupplementUpdate = {
+    name: string;
+    dosage: string | null;
+    frequency: string | null;
+    startedAt: string | null;
+    notes: string | null;
+    active: boolean;
+  };
+  const updates = pickAllowed<SupplementUpdate>(
     req.body,
     ["name", "dosage", "frequency", "startedAt", "notes", "active"] as const,
   );
@@ -225,8 +233,8 @@ router.patch(
 
 router.delete("/:supplementId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const supplementId = parseInt(req.params.supplementId);
+  const patientId = parseInt((req.params.patientId as string));
+  const supplementId = parseInt((req.params.supplementId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -260,7 +268,7 @@ router.delete("/:supplementId", requireAuth, async (req, res): Promise<void> => 
 // Stack-change event log
 router.get("/changes/log", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -282,8 +290,8 @@ router.get("/changes/log", requireAuth, async (req, res): Promise<void> => {
 // Supplement → biomarker impact attribution
 router.get("/:supplementId/impact", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const supplementId = parseInt(req.params.supplementId);
+  const patientId = parseInt((req.params.patientId as string));
+  const supplementId = parseInt((req.params.supplementId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -411,7 +419,7 @@ router.get("/:supplementId/impact", requireAuth, async (req, res): Promise<void>
 
 router.get("/recommendations/list", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -433,7 +441,7 @@ router.get("/recommendations/list", requireAuth, async (req, res): Promise<void>
 
 router.post("/recommendations/generate", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -515,8 +523,8 @@ router.patch(
   validate({ body: z.object({ status: z.enum(["suggested", "accepted", "dismissed"]) }) }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const recId = parseInt(req.params.recId);
+  const patientId = parseInt((req.params.patientId as string));
+  const recId = parseInt((req.params.recId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });

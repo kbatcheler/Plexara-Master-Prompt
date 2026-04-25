@@ -18,7 +18,7 @@ async function verifyPatientOwnership(patientId: number, userId: string): Promis
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   const { patientsTable } = await import("@workspace/db");
   const [patient] = await db

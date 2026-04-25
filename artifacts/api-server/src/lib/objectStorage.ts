@@ -274,6 +274,9 @@ async function signObjectURL({
     );
   }
 
-  const { signed_url: signedURL } = await response.json();
-  return signedURL;
+  const body = (await response.json()) as { signed_url?: string };
+  if (typeof body.signed_url !== "string") {
+    throw new Error("Sidecar returned no signed_url");
+  }
+  return body.signed_url;
 }

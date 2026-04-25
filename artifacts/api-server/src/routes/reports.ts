@@ -21,8 +21,8 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/:interpretationId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const interpretationId = parseInt(req.params.interpretationId);
+  const patientId = parseInt((req.params.patientId as string));
+  const interpretationId = parseInt((req.params.interpretationId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {

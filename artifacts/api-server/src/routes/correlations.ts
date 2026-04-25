@@ -22,7 +22,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/timeline", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -86,7 +86,7 @@ router.get("/timeline", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -109,7 +109,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/generate", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });

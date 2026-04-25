@@ -18,7 +18,7 @@ async function verifyPatientOwnership(patientId: number, userId: string): Promis
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -49,7 +49,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/latest", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
@@ -77,8 +77,8 @@ router.get("/latest", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/:interpretationId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const interpretationId = parseInt(req.params.interpretationId);
+  const patientId = parseInt((req.params.patientId as string));
+  const interpretationId = parseInt((req.params.interpretationId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });

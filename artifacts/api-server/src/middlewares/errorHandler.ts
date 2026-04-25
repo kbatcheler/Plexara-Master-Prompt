@@ -41,13 +41,16 @@ export function errorHandler(
   err: unknown,
   req: Request,
   res: Response,
-  _next: NextFunction,
+  next: NextFunction,
 ): void {
-  // Headers may already be flushed if a stream errored mid-response —
-  // delegate to Express's built-in handler in that case.
+  // Headers may already be flushed if a stream errored mid-response.
+  // Express's documented contract is: if you can't write a fresh response,
+  // you MUST delegate to the default handler by calling next(err) so it can
+  // close the connection cleanly. Logging-and-returning here would swallow
+  // the error and leak the half-open socket.
   if (res.headersSent) {
-    logger.error({ err }, "Error after headers sent");
-    return;
+    logger.error({ err }, "Error after headers sent — delegating to Express default handler");
+    return next(err);
   }
 
   // Pino-http populates req.id; surface it on every error response so users

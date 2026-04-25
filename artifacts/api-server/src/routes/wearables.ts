@@ -29,7 +29,7 @@ router.get("/wearables", requireAuth, async (req, res): Promise<void> => {
 
 router.delete("/wearables/:provider", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const provider = req.params.provider;
+  const provider = (req.params.provider as string);
   await db.update(wearableConnectionsTable)
     .set({ revokedAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null })
     .where(and(eq(wearableConnectionsTable.accountId, userId), eq(wearableConnectionsTable.provider, provider)));
@@ -41,7 +41,7 @@ router.post("/wearables/apple/import/:patientId",
   requireAuth, upload.single("file"),
   async (req, res): Promise<void> => {
     const { userId } = req as AuthenticatedRequest;
-    const patientId = parseInt(req.params.patientId);
+    const patientId = parseInt((req.params.patientId as string));
     const [p] = await db.select().from(patientsTable)
       .where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
     if (!p) { res.status(404).json({ error: "Patient not found" }); return; }
@@ -92,7 +92,7 @@ async function verifyOwnership(patientId: number, userId: string): Promise<boole
 
 patientRouter.get("/metrics", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" }); return;
   }
@@ -112,7 +112,7 @@ patientRouter.get("/metrics", requireAuth, async (req, res): Promise<void> => {
 
 patientRouter.get("/summary", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" }); return;
   }
@@ -138,7 +138,7 @@ patientRouter.get("/summary", requireAuth, async (req, res): Promise<void> => {
 
 patientRouter.get("/ingests", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" }); return;
   }

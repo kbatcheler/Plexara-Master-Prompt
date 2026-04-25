@@ -26,7 +26,14 @@ const reportUpload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
-    cb(allowed.includes(file.mimetype) ? null : new Error("PDF or image only"), allowed.includes(file.mimetype));
+    // multer's FileFilterCallback is overloaded: (error: Error) OR (null, acceptFile).
+    // Branch so each call matches one overload exactly — passing Error|null with
+    // an acceptFile arg lands on the `(null, ...)` overload and TypeError-fails.
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("PDF or image only"));
+    }
   },
 });
 
@@ -37,7 +44,7 @@ async function verifyOwnership(patientId: number, userId: string): Promise<boole
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -50,7 +57,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -95,8 +102,8 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
 // study and route it through the standard extraction + interpretation pipeline.
 router.post("/:studyId/report", requireAuth, reportUpload.single("file"), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -144,8 +151,8 @@ router.post("/:studyId/report", requireAuth, reportUpload.single("file"), async 
 
 router.get("/:studyId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -164,8 +171,8 @@ router.get("/:studyId", requireAuth, async (req, res): Promise<void> => {
 
 router.delete("/:studyId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -184,8 +191,8 @@ router.delete("/:studyId", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/:studyId/annotations", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -208,8 +215,8 @@ router.post(
   validate({ body: annotationBody }),
   async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -235,9 +242,9 @@ router.post(
 
 router.delete("/:studyId/annotations/:annotationId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const studyId = parseInt(req.params.studyId);
-  const annotationId = parseInt(req.params.annotationId);
+  const patientId = parseInt((req.params.patientId as string));
+  const studyId = parseInt((req.params.studyId as string));
+  const annotationId = parseInt((req.params.annotationId as string));
   if (!(await verifyOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -256,7 +263,7 @@ router.delete("/:studyId/annotations/:annotationId", requireAuth, async (req, re
 // Direct study lookup (used by viewer, which doesn't know the patientId).
 dicomRouter.get("/imaging/study/:studyId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const studyId = parseInt(req.params.studyId);
+  const studyId = parseInt((req.params.studyId as string));
   const [study] = await db.select().from(imagingStudiesTable).where(eq(imagingStudiesTable.id, studyId));
   if (!study) {
     res.status(404).json({ error: "Study not found" });
@@ -276,7 +283,7 @@ dicomRouter.get("/imaging/study/:studyId", requireAuth, async (req, res): Promis
 // GET /imaging/dicom/:studyId — returns the raw DICOM bytes if the requester owns the patient.
 dicomRouter.get("/imaging/dicom/:studyId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const studyId = parseInt(req.params.studyId);
+  const studyId = parseInt((req.params.studyId as string));
   const [study] = await db.select().from(imagingStudiesTable).where(eq(imagingStudiesTable.id, studyId));
   if (!study) {
     res.status(404).json({ error: "Study not found" });

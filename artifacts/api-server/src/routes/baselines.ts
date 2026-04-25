@@ -25,7 +25,7 @@ async function getPatient(patientId: number, userId: string) {
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
@@ -98,7 +98,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/", requireAuth, validate({ body: baselineCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });

@@ -82,6 +82,17 @@ Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological,
 - `pnpm --filter @workspace/db run generate` — generate migration files from schema changes (use this in PRs, not push)
 - `pnpm --filter @workspace/db run migrate` — apply committed migrations against `DATABASE_URL` (deploy hook)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/api-server run test` — run vitest unit suite (PHI crypto, boot guard, validate, errorHandler, pickAllowed)
+- `pnpm --filter @workspace/api-server run typecheck` — strict TS check on api-server (must exit 0)
+
+## PHI Encryption Key Configuration
+
+`PHI_MASTER_KEY` (or legacy alias `PHI_ENCRYPTION_KEY`) is the master key for at-rest encryption of patient narratives and lens outputs. Hardening rules enforced at boot by `assertPhiKeyConfigured()` in `artifacts/api-server/src/lib/phi-crypto.ts`:
+
+- **Production (`NODE_ENV=production`)**: an explicit `PHI_MASTER_KEY` is **required** — the SESSION_SECRET fallback is refused and the process aborts before `app.listen()`.
+- **All environments**: explicit key must be ≥32 characters and must not equal `SESSION_SECRET` (compromise-blast-radius defense).
+- **Development**: missing key falls back to `SESSION_SECRET` with a console warning. Acceptable for local work; never reaches production because the boot guard fires first.
+- A boot-time encrypt+decrypt self-test catches misconfigured keys before any write happens.
 
 ## Migration Readiness
 

@@ -56,7 +56,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/:patientId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   try {
     const [patient] = await db
@@ -77,7 +77,7 @@ router.get("/:patientId", requireAuth, async (req, res): Promise<void> => {
 
 router.patch("/:patientId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const parsed = UpdatePatientBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });

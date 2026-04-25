@@ -41,7 +41,7 @@ function linearRegression(points: Point[]): { slope: number; intercept: number; 
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
@@ -56,8 +56,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
         date: d,
         value: v,
         unit: b.unit,
-        optimalLow: b.optimalLow ? parseFloat(b.optimalLow) : null,
-        optimalHigh: b.optimalHigh ? parseFloat(b.optimalHigh) : null,
+        optimalLow: b.optimalRangeLow ? parseFloat(b.optimalRangeLow) : null,
+        optimalHigh: b.optimalRangeHigh ? parseFloat(b.optimalRangeHigh) : null,
       });
       groups.set(b.biomarkerName, arr);
     }

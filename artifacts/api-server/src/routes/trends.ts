@@ -15,7 +15,7 @@ async function verifyOwnership(patientId: number, userId: string): Promise<boole
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   const rows = await db.select().from(biomarkerTrendsTable)
     .where(eq(biomarkerTrendsTable.patientId, patientId))
@@ -25,7 +25,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/recompute", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
     const computed = await recomputeTrendsForPatient(patientId);
@@ -39,7 +39,7 @@ router.post("/recompute", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/change-alerts", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   const rows = await db.select().from(changeAlertsTable)
     .where(eq(changeAlertsTable.patientId, patientId))
@@ -50,8 +50,8 @@ router.get("/change-alerts", requireAuth, async (req, res): Promise<void> => {
 
 router.patch("/change-alerts/:id/ack", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
-  const alertId = parseInt(req.params.id);
+  const patientId = parseInt((req.params.patientId as string));
+  const alertId = parseInt((req.params.id as string));
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   await db.update(changeAlertsTable)
     .set({ acknowledgedAt: new Date() })

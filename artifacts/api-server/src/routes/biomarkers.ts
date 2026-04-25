@@ -19,7 +19,7 @@ export const biomarkerResultsRouter = Router({ mergeParams: true });
 
 biomarkerResultsRouter.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const patientId = parseInt(req.params.patientId);
+  const patientId = parseInt((req.params.patientId as string));
   
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
