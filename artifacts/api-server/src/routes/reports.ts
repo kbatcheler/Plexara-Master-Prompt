@@ -9,6 +9,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptInterpretationFields } from "../lib/phi-crypto";
 
 const router = Router({ mergeParams: true });
 
@@ -37,7 +38,7 @@ router.get("/:interpretationId", requireAuth, async (req, res): Promise<void> =>
       .where(and(eq(alertsTable.patientId, patientId), eq(alertsTable.status, "active")));
     res.json({
       patient: { displayName: patient.displayName, sex: patient.sex, ethnicity: patient.ethnicity },
-      interpretation: interp,
+      interpretation: decryptInterpretationFields(interp),
       gauges,
       biomarkers,
       alerts,

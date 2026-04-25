@@ -1,4 +1,5 @@
 import { pgTable, text, serial, timestamp, integer, jsonb, real, index, uniqueIndex, boolean } from "drizzle-orm/pg-core";
+import { patientsTable } from "./patients";
 
 // ─── Wearables ────────────────────────────────────────────────────────────
 export const wearableConnectionsTable = pgTable("wearable_connections", {
@@ -19,7 +20,7 @@ export const wearableConnectionsTable = pgTable("wearable_connections", {
 
 export const wearableMetricsTable = pgTable("wearable_metrics", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   provider: text("provider").notNull(),
   metricKey: text("metric_key").notNull(), // e.g. "hrv_rmssd_ms", "sleep_minutes_total", "steps", "rhr_bpm", "vo2max", "weight_kg"
   value: real("value").notNull(),
@@ -27,7 +28,7 @@ export const wearableMetricsTable = pgTable("wearable_metrics", {
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
   source: text("source"), // raw provider source label
   externalId: text("external_id").notNull().default(""), // for dedup; NOT NULL so unique index actually catches duplicates
-  ingestId: integer("ingest_id"),
+  ingestId: integer("ingest_id").references(() => wearableIngestsTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   patientKeyTimeIdx: index("wm_patient_key_time_idx").on(t.patientId, t.metricKey, t.recordedAt),
@@ -36,7 +37,7 @@ export const wearableMetricsTable = pgTable("wearable_metrics", {
 
 export const wearableIngestsTable = pgTable("wearable_ingests", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   provider: text("provider").notNull(),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -48,7 +49,7 @@ export const wearableIngestsTable = pgTable("wearable_ingests", {
 // ─── Trends & change alerts ────────────────────────────────────────────────
 export const biomarkerTrendsTable = pgTable("biomarker_trends", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   biomarkerName: text("biomarker_name").notNull(),
   slopePerDay: real("slope_per_day"),
   intercept: real("intercept"),
@@ -71,7 +72,7 @@ export const biomarkerTrendsTable = pgTable("biomarker_trends", {
 
 export const changeAlertsTable = pgTable("change_alerts", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   biomarkerName: text("biomarker_name").notNull(),
   windowDays: integer("window_days").notNull(),
   baselineValue: real("baseline_value").notNull(),

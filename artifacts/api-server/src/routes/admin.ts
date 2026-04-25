@@ -3,8 +3,15 @@ import { db, patientsTable, recordsTable, auditLogTable, dataRequestsTable, admi
 import { eq, desc, sql, and } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { requireAdmin } from "../lib/admin";
+import { validate } from "../middlewares/validate";
+import { z } from "zod";
 
 const router = Router();
+
+const adminDataRequestUpdateBody = z.object({
+  status: z.enum(["pending", "in_progress", "completed", "denied"]).optional(),
+  resolutionNotes: z.string().max(4_000).optional().nullable(),
+});
 
 router.use(requireAuth, requireAdmin);
 
@@ -52,15 +59,10 @@ router.get("/data-requests", async (_req, res) => {
   res.json(rows);
 });
 
-router.patch("/data-requests/:id", async (req, res): Promise<void> => {
+router.patch("/data-requests/:id", validate({ body: adminDataRequestUpdateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const id = parseInt(req.params.id);
-  const { status, resolutionNotes } = req.body || {};
-  const allowed = ["pending", "in_progress", "completed", "denied"];
-  if (status && !allowed.includes(status)) {
-    res.status(400).json({ error: `status must be one of ${allowed.join(", ")}` });
-    return;
-  }
+  const { status, resolutionNotes } = req.body as z.infer<typeof adminDataRequestUpdateBody>;
   const update: Record<string, unknown> = { assignedAdminId: userId };
   if (status) {
     update.status = status;

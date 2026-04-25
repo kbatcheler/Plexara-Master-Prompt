@@ -1,9 +1,11 @@
 import { pgTable, text, serial, timestamp, integer, jsonb, boolean, real, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { patientsTable } from "./patients";
+import { recordsTable } from "./records";
 
 // Genetics
 export const geneticProfilesTable = pgTable("genetic_profiles", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   source: text("source").notNull(), // "23andme" | "ancestry" | "myheritage" | "vcf"
   fileObjectKey: text("file_object_key").notNull(),
   fileName: text("file_name").notNull(),
@@ -17,7 +19,7 @@ export const geneticProfilesTable = pgTable("genetic_profiles", {
 
 export const geneticVariantsTable = pgTable("genetic_variants", {
   id: serial("id").primaryKey(),
-  profileId: integer("profile_id").notNull(),
+  profileId: integer("profile_id").notNull().references(() => geneticProfilesTable.id, { onDelete: "cascade" }),
   rsid: text("rsid").notNull(),
   chromosome: text("chromosome").notNull(),
   position: integer("position").notNull(),
@@ -43,7 +45,7 @@ export const pgsCatalogTable = pgTable("pgs_catalog", {
 
 export const pgsWeightsTable = pgTable("pgs_weights", {
   id: serial("id").primaryKey(),
-  catalogId: integer("catalog_id").notNull(),
+  catalogId: integer("catalog_id").notNull().references(() => pgsCatalogTable.id, { onDelete: "cascade" }),
   rsid: text("rsid").notNull(),
   effectAllele: text("effect_allele").notNull(),
   otherAllele: text("other_allele"),
@@ -54,9 +56,9 @@ export const pgsWeightsTable = pgTable("pgs_weights", {
 
 export const polygenicScoresTable = pgTable("polygenic_scores", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  profileId: integer("profile_id").notNull(),
-  catalogId: integer("catalog_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => geneticProfilesTable.id, { onDelete: "cascade" }),
+  catalogId: integer("catalog_id").notNull().references(() => pgsCatalogTable.id, { onDelete: "restrict" }),
   rawScore: real("raw_score").notNull(),
   zScore: real("z_score"),
   percentile: real("percentile"),
@@ -70,8 +72,8 @@ export const polygenicScoresTable = pgTable("polygenic_scores", {
 // Imaging
 export const imagingStudiesTable = pgTable("imaging_studies", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  recordId: integer("record_id"),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  recordId: integer("record_id").references(() => recordsTable.id, { onDelete: "set null" }),
   modality: text("modality"), // CT, MR, DX, US, MG, NM, PT, etc.
   bodyPart: text("body_part"),
   description: text("description"),
@@ -87,7 +89,7 @@ export const imagingStudiesTable = pgTable("imaging_studies", {
 
 export const imagingAnnotationsTable = pgTable("imaging_annotations", {
   id: serial("id").primaryKey(),
-  studyId: integer("study_id").notNull(),
+  studyId: integer("study_id").notNull().references(() => imagingStudiesTable.id, { onDelete: "cascade" }),
   type: text("type").notNull(), // length, angle, rectangle, ellipse, freehand, point
   geometryJson: jsonb("geometry_json").notNull(),
   label: text("label"),

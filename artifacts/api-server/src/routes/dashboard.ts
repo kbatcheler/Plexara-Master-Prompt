@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { recordsTable, interpretationsTable, gaugesTable, alertsTable } from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptText } from "../lib/phi-crypto";
 
 const router = Router({ mergeParams: true });
 
@@ -74,8 +75,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       activeAlertCount: activeAlerts.length,
       urgentAlertCount: urgentAlerts.length,
       gauges,
-      patientNarrative: latestInterpretation?.patientNarrative || null,
-      clinicalNarrative: latestInterpretation?.clinicalNarrative || null,
+      patientNarrative: decryptText(latestInterpretation?.patientNarrative),
+      clinicalNarrative: decryptText(latestInterpretation?.clinicalNarrative),
       recentRecords,
       lensesCompleted: latestInterpretation?.lensesCompleted || null,
     });

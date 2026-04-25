@@ -8,6 +8,12 @@
 import { Router, type Request, type Response } from "express";
 import { logger } from "../lib/logger";
 import { setConsent, isProviderAllowed } from "../lib/consent";
+import { validate } from "../middlewares/validate";
+import { z } from "zod";
+
+const devLoginBody = z.object({
+  userId: z.string().min(1).max(128).optional(),
+});
 
 const router = Router();
 
@@ -22,9 +28,9 @@ router.get("/status", (_req: Request, res: Response) => {
   res.json({ enabled: isDevMode() });
 });
 
-router.post("/login", async (req: Request, res: Response) => {
+router.post("/login", validate({ body: devLoginBody }), async (req: Request, res: Response) => {
   if (!isDevMode()) { res.status(404).json({ error: "Not found" }); return; }
-  const userId = (typeof req.body?.userId === "string" && req.body.userId.trim()) || DEV_TEST_USER_ID;
+  const userId = (req.body as { userId?: string }).userId?.trim() || DEV_TEST_USER_ID;
   res.cookie(DEV_COOKIE_NAME, userId, {
     httpOnly: true,
     sameSite: "lax",

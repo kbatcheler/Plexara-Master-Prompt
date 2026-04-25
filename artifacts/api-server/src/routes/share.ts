@@ -12,6 +12,10 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptText } from "../lib/phi-crypto";
+import { validate } from "../middlewares/validate";
+import { shareLinkCreateBody } from "../lib/validators";
+import { z } from "zod";
 
 const authedRouter = Router({ mergeParams: true });
 const publicRouter = Router();
@@ -38,13 +42,13 @@ authedRouter.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-authedRouter.post("/", requireAuth, async (req, res): Promise<void> => {
+authedRouter.post("/", requireAuth, validate({ body: shareLinkCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const { label, recipientName, expiresInDays } = req.body ?? {};
-  const days = Math.min(Math.max(parseInt(expiresInDays ?? "14"), 1), 90);
+  const { label, recipientName, expiresInDays } = req.body as z.infer<typeof shareLinkCreateBody>;
+  const days = expiresInDays ?? 14;
   try {
     const token = crypto.randomBytes(24).toString("base64url");
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -137,8 +141,8 @@ publicRouter.get("/:token", async (req, res): Promise<void> => {
         expiresAt: link.expiresAt,
         createdAt: link.createdAt,
       },
-      patientNarrative: latest?.patientNarrative ?? null,
-      clinicalNarrative: latest?.clinicalNarrative ?? null,
+      patientNarrative: decryptText(latest?.patientNarrative),
+      clinicalNarrative: decryptText(latest?.clinicalNarrative),
       unifiedHealthScore: latest?.unifiedHealthScore ?? null,
       gauges,
       biomarkers,

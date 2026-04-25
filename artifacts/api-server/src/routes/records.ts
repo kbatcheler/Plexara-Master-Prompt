@@ -1,16 +1,25 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { recordsTable, extractedDataTable, biomarkerResultsTable, interpretationsTable, gaugesTable, alertsTable, auditLogTable, biomarkerReferenceTable, baselinesTable, alertPreferencesTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { stripPII, hashData } from "../lib/pii";
 import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
+import {
+  encryptJson,
+  encryptInterpretationFields,
+  decryptInterpretationFields,
+  decryptStructuredJson,
+} from "../lib/phi-crypto";
+import { validate } from "../middlewares/validate";
+import { recordCreateBody } from "../lib/validators";
 
 const router = Router({ mergeParams: true });
 
@@ -69,7 +78,7 @@ export async function processUploadedDocument(opts: {
         recordId,
         patientId,
         dataType: (structuredData.documentType as string) || recordType,
-        structuredJson: structuredData,
+        structuredJson: encryptJson(structuredData) as object,
         extractionModel: "claude-sonnet-4-6",
         extractionConfidence: "high",
       });
@@ -110,8 +119,24 @@ export async function processUploadedDocument(opts: {
   }
 }
 
-async function runInterpretationPipeline(patientId: number, recordId: number, structuredData: Record<string, unknown>): Promise<void> {
+// Idempotency: stable key derived from (recordId, anonymised input, version).
+// A duplicate trigger (retry, double-click, message-bus redelivery) computes
+// the same key, hits the unique index, and ON CONFLICT DO NOTHING returns
+// no row → we re-fetch the existing interpretation and skip work if complete.
+function makeIdempotencyKey(recordId: number, anonymised: AnonymisedData, version: number): string {
+  const payload = JSON.stringify({ recordId, anonymised, version });
+  return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+async function runInterpretationPipeline(
+  patientId: number,
+  recordId: number,
+  structuredData: Record<string, unknown>,
+  opts: { version?: number } = {},
+): Promise<void> {
   const anonymised = stripPII(structuredData) as AnonymisedData;
+  const version = opts.version ?? 1;
+  const idempotencyKey = makeIdempotencyKey(recordId, anonymised, version);
 
   const { patientsTable: pt } = await import("@workspace/db");
   const [patient] = await db.select().from(pt).where(eq(pt.id, patientId));
@@ -126,21 +151,45 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
   const allowOpenAi = await isProviderAllowed(accountId, "openai");
   const allowGemini = await isProviderAllowed(accountId, "gemini");
 
-  let interpretationId: number | null = null;
+  // Atomically claim the idempotency slot. If another worker already claimed
+  // it, ON CONFLICT DO NOTHING returns nothing and we look up the existing row.
+  const inserted = await db
+    .insert(interpretationsTable)
+    .values({
+      patientId,
+      triggerRecordId: recordId,
+      version,
+      idempotencyKey,
+      lensesCompleted: 0,
+    })
+    .onConflictDoNothing({ target: interpretationsTable.idempotencyKey })
+    .returning();
+
+  let interpretationId: number;
+  if (inserted.length > 0) {
+    interpretationId = inserted[0].id;
+  } else {
+    const [existing] = await db
+      .select()
+      .from(interpretationsTable)
+      .where(eq(interpretationsTable.idempotencyKey, idempotencyKey));
+    if (!existing) {
+      logger.error({ patientId, recordId, idempotencyKey }, "Idempotency conflict but no existing row");
+      return;
+    }
+    if (existing.reconciledOutput) {
+      logger.info(
+        { patientId, recordId, interpretationId: existing.id },
+        "Skipping interpretation: idempotency key matched a completed run",
+      );
+      await db.update(recordsTable).set({ status: "complete" }).where(eq(recordsTable.id, recordId));
+      return;
+    }
+    // Resume an in-flight or partially failed run on the same key.
+    interpretationId = existing.id;
+  }
 
   try {
-    const [interpretation] = await db
-      .insert(interpretationsTable)
-      .values({
-        patientId,
-        triggerRecordId: recordId,
-        version: 1,
-        lensesCompleted: 0,
-      })
-      .returning();
-    
-    interpretationId = interpretation.id;
-
     await db.update(recordsTable)
       .set({ status: "processing" })
       .where(eq(recordsTable.id, recordId));
@@ -149,13 +198,15 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     let lensBOutput = null;
     let lensCOutput = null;
 
+    // ── LLM calls happen OUTSIDE any transaction (long-running, network I/O).
+    // Per-lens streaming writes give the UI live progress; final atomic write
+    // below is the consistency boundary.
     try {
       if (!allowAnthropic) throw new Error("consent_revoked:anthropic");
       lensAOutput = await runLensA(anonymised, patientCtx);
       await db.update(interpretationsTable)
-        .set({ lensAOutput, lensesCompleted: 1 })
+        .set(encryptInterpretationFields({ lensAOutput, lensesCompleted: 1 }))
         .where(eq(interpretationsTable.id, interpretationId));
-      
       await db.insert(auditLogTable).values({
         patientId,
         actionType: "llm_interpretation",
@@ -170,9 +221,8 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
       if (lensAOutput && allowOpenAi) {
         lensBOutput = await runLensB(anonymised, lensAOutput, patientCtx);
         await db.update(interpretationsTable)
-          .set({ lensBOutput, lensesCompleted: lensAOutput ? 2 : 1 })
+          .set(encryptInterpretationFields({ lensBOutput, lensesCompleted: lensAOutput ? 2 : 1 }))
           .where(eq(interpretationsTable.id, interpretationId));
-        
         await db.insert(auditLogTable).values({
           patientId,
           actionType: "llm_interpretation",
@@ -189,9 +239,8 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
         lensCOutput = await runLensC(anonymised, lensAOutput, lensBOutput || lensAOutput, patientCtx);
         const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
         await db.update(interpretationsTable)
-          .set({ lensCOutput, lensesCompleted: completedCount })
+          .set(encryptInterpretationFields({ lensCOutput, lensesCompleted: completedCount }))
           .where(eq(interpretationsTable.id, interpretationId));
-        
         await db.insert(auditLogTable).values({
           patientId,
           actionType: "llm_interpretation",
@@ -206,119 +255,115 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
     if (lensAOutput) {
       const effectiveLensB = lensBOutput || lensAOutput;
       const effectiveLensC = lensCOutput || lensAOutput;
-      
       const reconciledOutput = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC, patientCtx);
       const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
-      
-      await db.update(interpretationsTable)
-        .set({
-          reconciledOutput,
-          patientNarrative: reconciledOutput.patientNarrative,
-          clinicalNarrative: reconciledOutput.clinicalNarrative,
-          unifiedHealthScore: reconciledOutput.unifiedHealthScore.toString(),
-          lensesCompleted: completedCount,
-        })
-        .where(eq(interpretationsTable.id, interpretationId));
 
-      for (const gaugeUpdate of reconciledOutput.gaugeUpdates) {
-        const existing = await db
-          .select()
-          .from(gaugesTable)
-          .where(and(eq(gaugesTable.patientId, patientId), eq(gaugesTable.domain, gaugeUpdate.domain)));
-        
-        if (existing.length > 0) {
-          await db.update(gaugesTable)
-            .set({
-              currentValue: gaugeUpdate.currentValue.toString(),
-              trend: gaugeUpdate.trend,
-              confidence: gaugeUpdate.confidence,
-              lensAgreement: gaugeUpdate.lensAgreement,
-              label: gaugeUpdate.label,
-              description: gaugeUpdate.description,
-            })
-            .where(and(eq(gaugesTable.patientId, patientId), eq(gaugesTable.domain, gaugeUpdate.domain)));
-        } else {
-          await db.insert(gaugesTable).values({
+      // ── Atomic finalisation: reconciled output + gauge upserts + alert
+      // replacement + record-status flip happen as one tx. A crash mid-tx
+      // leaves zero partial state; a successful tx is the commit point.
+      await db.transaction(async (tx) => {
+        await tx.update(interpretationsTable)
+          .set(encryptInterpretationFields({
+            reconciledOutput,
+            patientNarrative: reconciledOutput.patientNarrative,
+            clinicalNarrative: reconciledOutput.clinicalNarrative,
+            unifiedHealthScore: reconciledOutput.unifiedHealthScore.toString(),
+            lensesCompleted: completedCount,
+          }))
+          .where(eq(interpretationsTable.id, interpretationId));
+
+        // Gauge upsert via the (patient_id, domain) unique index — a single
+        // round-trip per gauge instead of select-then-insert/update.
+        for (const g of reconciledOutput.gaugeUpdates) {
+          await tx.insert(gaugesTable).values({
             patientId,
-            domain: gaugeUpdate.domain,
-            currentValue: gaugeUpdate.currentValue.toString(),
-            trend: gaugeUpdate.trend,
-            confidence: gaugeUpdate.confidence,
-            lensAgreement: gaugeUpdate.lensAgreement,
-            label: gaugeUpdate.label,
-            description: gaugeUpdate.description,
+            domain: g.domain,
+            currentValue: g.currentValue.toString(),
+            trend: g.trend,
+            confidence: g.confidence,
+            lensAgreement: g.lensAgreement,
+            label: g.label,
+            description: g.description,
+          }).onConflictDoUpdate({
+            target: [gaugesTable.patientId, gaugesTable.domain],
+            set: {
+              currentValue: g.currentValue.toString(),
+              trend: g.trend,
+              confidence: g.confidence,
+              lensAgreement: g.lensAgreement,
+              label: g.label,
+              description: g.description,
+            },
           });
         }
-      }
 
-      const [prefs] = await db.select().from(alertPreferencesTable).where(eq(alertPreferencesTable.patientId, patientId));
-      const allowUrgent = prefs?.enableUrgent ?? true;
-      const allowWatch = prefs?.enableWatch ?? true;
+        // Replace alerts derived from THIS interpretation rather than appending
+        // — re-runs on the same record must not duplicate watch/urgent rows.
+        await tx.delete(alertsTable).where(
+          and(
+            eq(alertsTable.patientId, patientId),
+            eq(alertsTable.relatedInterpretationId, interpretationId),
+          ),
+        );
 
-      if (allowUrgent && reconciledOutput.urgentFlags.length > 0) {
-        for (const flag of reconciledOutput.urgentFlags) {
-          await db.insert(alertsTable).values({
-            patientId,
-            severity: "urgent",
-            title: "Urgent Finding",
-            description: flag,
-            triggerType: "interpretation",
-            relatedInterpretationId: interpretationId,
-            status: "active",
-          });
+        const [prefs] = await tx.select().from(alertPreferencesTable).where(eq(alertPreferencesTable.patientId, patientId));
+        const allowUrgent = prefs?.enableUrgent ?? true;
+        const allowWatch = prefs?.enableWatch ?? true;
+
+        if (allowUrgent && reconciledOutput.urgentFlags.length > 0) {
+          await tx.insert(alertsTable).values(
+            reconciledOutput.urgentFlags.map((flag) => ({
+              patientId,
+              severity: "urgent" as const,
+              title: "Urgent Finding",
+              description: flag,
+              triggerType: "interpretation" as const,
+              relatedInterpretationId: interpretationId,
+              status: "active" as const,
+            })),
+          );
         }
-      }
-
-      if (allowWatch && reconciledOutput.topConcerns.length > 0) {
-        for (const concern of reconciledOutput.topConcerns.slice(0, 2)) {
-          await db.insert(alertsTable).values({
-            patientId,
-            severity: "watch",
-            title: "Finding to Watch",
-            description: concern,
-            triggerType: "interpretation",
-            relatedInterpretationId: interpretationId,
-            status: "active",
-          });
+        if (allowWatch && reconciledOutput.topConcerns.length > 0) {
+          await tx.insert(alertsTable).values(
+            reconciledOutput.topConcerns.slice(0, 2).map((concern) => ({
+              patientId,
+              severity: "watch" as const,
+              title: "Finding to Watch",
+              description: concern,
+              triggerType: "interpretation" as const,
+              relatedInterpretationId: interpretationId,
+              status: "active" as const,
+            })),
+          );
         }
-      }
-    }
 
-    await db.update(recordsTable)
-      .set({ status: "complete" })
-      .where(eq(recordsTable.id, recordId));
+        await tx.update(recordsTable)
+          .set({ status: "complete" })
+          .where(eq(recordsTable.id, recordId));
 
-    if (lensAOutput && interpretationId) {
-      const [latest] = await db
-        .select()
-        .from(interpretationsTable)
-        .where(eq(interpretationsTable.id, interpretationId));
-      if (latest?.reconciledOutput) {
-        const allBiomarkers = await db
+        // Auto-establish version-1 baseline on first successful interpretation.
+        // The select-inside-tx + insert is atomic against concurrent pipelines.
+        const existingBaseline = await tx
           .select()
-          .from(biomarkerResultsTable)
-          .where(eq(biomarkerResultsTable.patientId, patientId));
-        const allGauges = await db
-          .select()
-          .from(gaugesTable)
-          .where(eq(gaugesTable.patientId, patientId));
-
-        // Atomic: re-check for existing baseline inside the tx so concurrent
-        // pipelines cannot both create version-1 baselines.
-        await db.transaction(async (tx) => {
-          const existing = await tx
+          .from(baselinesTable)
+          .where(eq(baselinesTable.patientId, patientId))
+          .limit(1);
+        if (existingBaseline.length === 0) {
+          const allBiomarkers = await tx
             .select()
-            .from(baselinesTable)
-            .where(eq(baselinesTable.patientId, patientId))
-            .limit(1);
-          if (existing.length > 0) return;
+            .from(biomarkerResultsTable)
+            .where(eq(biomarkerResultsTable.patientId, patientId));
+          const allGauges = await tx
+            .select()
+            .from(gaugesTable)
+            .where(eq(gaugesTable.patientId, patientId));
           await tx.insert(baselinesTable).values({
             patientId,
             version: 1,
             sourceInterpretationId: interpretationId,
             isActive: true,
             snapshotJson: {
-              unifiedHealthScore: latest.unifiedHealthScore,
+              unifiedHealthScore: reconciledOutput.unifiedHealthScore.toString(),
               gauges: allGauges.map((g) => ({
                 domain: g.domain,
                 value: g.currentValue,
@@ -332,20 +377,28 @@ async function runInterpretationPipeline(patientId: number, recordId: number, st
                 unit: b.unit,
                 testDate: b.testDate,
               })),
-              patientNarrative: latest.patientNarrative,
-              clinicalNarrative: latest.clinicalNarrative,
+              patientNarrative: reconciledOutput.patientNarrative,
+              clinicalNarrative: reconciledOutput.clinicalNarrative,
             },
             notes: "Auto-established from first complete interpretation",
           });
-        });
-      }
+        }
+      });
+    } else {
+      // No Lens A → can't reconcile. Mark the record as errored so the UI
+      // surfaces it instead of leaving status="processing" forever.
+      await db.update(recordsTable)
+        .set({ status: "error" })
+        .where(eq(recordsTable.id, recordId));
     }
   } catch (err) {
-    logger.error({ err }, "Interpretation pipeline failed");
+    logger.error({ err, recordId, interpretationId }, "Interpretation pipeline failed");
     await db.update(recordsTable)
       .set({ status: "error" })
       .where(eq(recordsTable.id, recordId));
   }
+  // Touch sql import so unused-import linting doesn't trip if future helpers move.
+  void sql;
 }
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
@@ -372,7 +425,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<void> => {
+router.post(
+  "/",
+  requireAuth,
+  upload.single("file"),
+  // multer puts the multipart text fields into req.body for us — validate them
+  // in the same shape any other JSON body would be validated.
+  validate({ body: recordCreateBody }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   
@@ -386,12 +446,7 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
     return;
   }
 
-  const { recordType, testDate } = req.body;
-  
-  if (!recordType) {
-    res.status(400).json({ error: "recordType is required" });
-    return;
-  }
+  const { recordType, testDate } = req.body as { recordType: string; testDate?: string | null };
 
   try {
     const [record] = await db
@@ -433,7 +488,7 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
             recordId: record.id,
             patientId,
             dataType: (structuredData.documentType as string) || recordType,
-            structuredJson: structuredData,
+            structuredJson: encryptJson(structuredData) as object,
             extractionModel: "claude-sonnet-4-6",
             extractionConfidence: "high",
           });
@@ -524,13 +579,14 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
       ))
       .orderBy(desc(interpretationsTable.createdAt));
 
+    const decryptedInterp = decryptInterpretationFields(interpretation);
     res.json({
       ...record,
-      extractedData: extracted?.structuredJson || null,
-      lensAOutput: interpretation?.lensAOutput || null,
-      lensBOutput: interpretation?.lensBOutput || null,
-      lensCOutput: interpretation?.lensCOutput || null,
-      reconciledOutput: interpretation?.reconciledOutput || null,
+      extractedData: decryptStructuredJson(extracted?.structuredJson),
+      lensAOutput: decryptedInterp?.lensAOutput || null,
+      lensBOutput: decryptedInterp?.lensBOutput || null,
+      lensCOutput: decryptedInterp?.lensCOutput || null,
+      reconciledOutput: decryptedInterp?.reconciledOutput || null,
       biomarkerResults,
     });
   } catch (err) {
@@ -609,7 +665,7 @@ router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void>
       .from(extractedDataTable)
       .where(eq(extractedDataTable.recordId, recordId));
 
-    const structuredData = (extracted?.structuredJson as Record<string, unknown>) || {};
+    const structuredData = (decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson) ?? {});
     
     setImmediate(() => {
       runInterpretationPipeline(patientId, recordId, structuredData).catch(err => {

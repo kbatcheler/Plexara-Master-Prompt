@@ -9,6 +9,7 @@ import path from "path";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
+import { errorHandler, notFoundHandler } from "./middlewares/errorHandler";
 
 const app: Express = express();
 
@@ -183,6 +184,10 @@ app.use("/api", (req, res, next) => {
 
 app.use("/api", router);
 
+// JSON 404 for anything under /api that no route matched — keeps the SPA
+// catch-all below from accidentally serving index.html for an API typo.
+app.use("/api", notFoundHandler);
+
 // ── Optional: serve the built frontend in single-container deploys ──────────
 // In production Docker images we ship the Vite build at /app/public and
 // point STATIC_DIR at it. Replit's preview pane uses a separate Vite dev
@@ -198,5 +203,13 @@ if (staticDir) {
   });
   logger.info({ staticDir }, "Serving static frontend");
 }
+
+// Central error handler MUST be the very last middleware. Catches:
+//   - errors thrown synchronously from any handler
+//   - rejected promises from async handlers (Express 5 forwards these)
+//   - ZodError raised by validate() → 400 with field-level detail
+//   - HttpError raised explicitly → its declared status
+//   - everything else → 500 with stack hidden in production
+app.use(errorHandler);
 
 export default app;

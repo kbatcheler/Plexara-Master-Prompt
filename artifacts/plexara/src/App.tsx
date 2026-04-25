@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ClerkProvider, Show, useClerk } from "@clerk/react";
+import { ClerkProvider, RedirectToSignIn, Show, useClerk } from "@clerk/react";
 import { Switch, Route, Redirect, useLocation, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -61,8 +61,13 @@ if (!clerkPubKey) {
   throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY in .env file");
 }
 
+// Dev-only static-login bypass should never ship to production. Gating on
+// import.meta.env.DEV (Vite) ensures the dead-code-eliminated production
+// bundle has no `/dev-login` reference at all.
+const DEV_BYPASS_ENABLED = import.meta.env.DEV;
+
 function HomeRedirect() {
-  if (isDevSignedIn()) return <Redirect to="/dashboard" />;
+  if (DEV_BYPASS_ENABLED && isDevSignedIn()) return <Redirect to="/dashboard" />;
   return (
     <>
       <Show when="signed-in">
@@ -75,8 +80,16 @@ function HomeRedirect() {
   );
 }
 
+function SignedOutRedirect() {
+  // In dev with the bypass enabled, fall back to the local dev-login page.
+  // In prod, send the user through Clerk's hosted sign-in (which may itself
+  // be a routed page within the SPA — Clerk handles that).
+  if (DEV_BYPASS_ENABLED) return <Redirect to="/dev-login" />;
+  return <RedirectToSignIn />;
+}
+
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
-  if (isDevSignedIn()) {
+  if (DEV_BYPASS_ENABLED && isDevSignedIn()) {
     return (
       <OnboardingGate>
         <Layout>
@@ -95,7 +108,7 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
         </OnboardingGate>
       </Show>
       <Show when="signed-out">
-        <Redirect to="/dev-login" />
+        <SignedOutRedirect />
       </Show>
     </>
   );
@@ -151,12 +164,14 @@ function ClerkProviderWithRoutes() {
                 <Route path="/share/:token" component={SharedView} />
                 <Route path="/sign-in/*?" component={SignInPage} />
                 <Route path="/sign-up/*?" component={SignUpPage} />
-                <Route path="/dev-login" component={DevSignIn} />
+                {DEV_BYPASS_ENABLED && (
+                  <Route path="/dev-login" component={DevSignIn} />
+                )}
                 <Route path="/onboarding">
-                  {isDevSignedIn() ? <Onboarding /> : (
+                  {DEV_BYPASS_ENABLED && isDevSignedIn() ? <Onboarding /> : (
                     <>
                       <Show when="signed-in"><Onboarding /></Show>
-                      <Show when="signed-out"><Redirect to="/dev-login" /></Show>
+                      <Show when="signed-out"><SignedOutRedirect /></Show>
                     </>
                   )}
                 </Route>

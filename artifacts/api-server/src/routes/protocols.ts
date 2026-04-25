@@ -11,6 +11,8 @@ import {
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { pickAllowed } from "../lib/pickAllowed";
+import { validate } from "../middlewares/validate";
+import { protocolAdoptBody, protocolAdoptionUpdateBody } from "../lib/validators";
 
 const globalRouter = Router();
 const patientRouter = Router({ mergeParams: true });
@@ -304,13 +306,12 @@ patientRouter.get("/adoptions", requireAuth, async (req, res): Promise<void> => 
   }
 });
 
-patientRouter.post("/adoptions", requireAuth, async (req, res): Promise<void> => {
+patientRouter.post("/adoptions", requireAuth, validate({ body: protocolAdoptBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const protocolId = parseInt(req.body?.protocolId);
-  if (!protocolId) { res.status(400).json({ error: "protocolId is required" }); return; }
+  const { protocolId } = req.body as { protocolId: number };
   try {
     const [protocol] = await db.select().from(protocolsTable).where(eq(protocolsTable.id, protocolId));
     if (!protocol) { res.status(404).json({ error: "Protocol not found" }); return; }
@@ -355,7 +356,7 @@ patientRouter.post("/adoptions", requireAuth, async (req, res): Promise<void> =>
   }
 });
 
-patientRouter.patch("/adoptions/:adoptionId", requireAuth, async (req, res): Promise<void> => {
+patientRouter.patch("/adoptions/:adoptionId", requireAuth, validate({ body: protocolAdoptionUpdateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const adoptionId = parseInt(req.params.adoptionId);

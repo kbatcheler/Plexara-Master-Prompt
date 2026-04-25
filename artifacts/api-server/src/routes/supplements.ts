@@ -11,12 +11,16 @@ import {
 import { eq, and, desc, isNotNull, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { pickAllowed } from "../lib/pickAllowed";
+import { decryptJson } from "../lib/phi-crypto";
 import {
   runSupplementRecommendations,
   computeAgeRange,
   type ReconciledOutput,
   type PatientContext,
 } from "../lib/ai";
+import { validate } from "../middlewares/validate";
+import { supplementCreateBody, supplementUpdateBody, supplementRecommendationStatusBody } from "../lib/validators";
+import { z } from "zod";
 
 const router = Router({ mergeParams: true });
 
@@ -123,7 +127,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/", requireAuth, async (req, res): Promise<void> => {
+router.post("/", requireAuth, validate({ body: supplementCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
@@ -132,11 +136,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const { name, dosage, frequency, startedAt, notes } = req.body ?? {};
-  if (!name || typeof name !== "string") {
-    res.status(400).json({ error: "name is required" });
-    return;
-  }
+  const { name, dosage, frequency, startedAt, notes } = req.body as z.infer<typeof supplementCreateBody>;
 
   try {
     const [supplement] = await db
@@ -165,7 +165,11 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.patch("/:supplementId", requireAuth, async (req, res): Promise<void> => {
+router.patch(
+  "/:supplementId",
+  requireAuth,
+  validate({ body: supplementUpdateBody.extend({ active: z.boolean().optional() }) }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const supplementId = parseInt(req.params.supplementId);
@@ -449,7 +453,7 @@ router.post("/recommendations/generate", requireAuth, async (req, res): Promise<
       return;
     }
 
-    const reconciled = latest.reconciledOutput as ReconciledOutput;
+    const reconciled = decryptJson<ReconciledOutput>(latest.reconciledOutput) as ReconciledOutput;
     const stack = await db
       .select()
       .from(supplementsTable)
@@ -505,7 +509,11 @@ router.post("/recommendations/generate", requireAuth, async (req, res): Promise<
   }
 });
 
-router.patch("/recommendations/:recId", requireAuth, async (req, res): Promise<void> => {
+router.patch(
+  "/recommendations/:recId",
+  requireAuth,
+  validate({ body: z.object({ status: z.enum(["suggested", "accepted", "dismissed"]) }) }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const recId = parseInt(req.params.recId);
@@ -515,11 +523,7 @@ router.patch("/recommendations/:recId", requireAuth, async (req, res): Promise<v
     return;
   }
 
-  const status = req.body?.status;
-  if (!status || !["suggested", "accepted", "dismissed"].includes(status)) {
-    res.status(400).json({ error: "status must be suggested|accepted|dismissed" });
-    return;
-  }
+  const { status } = req.body as { status: "suggested" | "accepted" | "dismissed" };
 
   try {
     const [updated] = await db

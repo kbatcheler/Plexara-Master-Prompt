@@ -5,6 +5,8 @@ import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { scanInteractions } from "../lib/interactions";
 import { extractDisagreementsForInterpretation, backfillDisagreementsForPatient } from "../lib/disagreements";
 import { logger } from "../lib/logger";
+import { validate } from "../middlewares/validate";
+import { safetyDismissBody, disagreementResolveBody } from "../lib/validators";
 
 const router = Router({ mergeParams: true });
 
@@ -29,13 +31,17 @@ router.get("/interactions", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/interactions/dismiss/:ruleId", requireAuth, async (req, res): Promise<void> => {
+router.post(
+  "/interactions/dismiss/:ruleId",
+  requireAuth,
+  validate({ body: safetyDismissBody }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const ruleId = parseInt(req.params.ruleId);
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
   await db.insert(interactionDismissalsTable).values({
-    patientId, ruleId, note: typeof req.body?.note === "string" ? req.body.note : null,
+    patientId, ruleId, note: (req.body as { note?: string | null }).note ?? null,
   }).onConflictDoNothing();
   res.json({ ok: true });
 });
@@ -80,12 +86,16 @@ router.post("/disagreements/backfill", requireAuth, async (req, res): Promise<vo
   }
 });
 
-router.patch("/disagreements/:id/resolve", requireAuth, async (req, res): Promise<void> => {
+router.patch(
+  "/disagreements/:id/resolve",
+  requireAuth,
+  validate({ body: disagreementResolveBody }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const dId = parseInt(req.params.id);
   if (!(await verifyOwnership(patientId, userId))) { res.status(404).json({ error: "Patient not found" }); return; }
-  const note = typeof req.body?.note === "string" ? req.body.note : null;
+  const note = (req.body as { note?: string | null }).note ?? null;
   await db.update(lensDisagreementsTable).set({
     resolvedAt: new Date(), resolutionNote: note,
   }).where(and(eq(lensDisagreementsTable.id, dId), eq(lensDisagreementsTable.patientId, patientId)));

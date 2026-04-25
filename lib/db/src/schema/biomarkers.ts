@@ -1,6 +1,8 @@
 import { pgTable, text, serial, timestamp, integer, numeric, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
+import { recordsTable } from "./records";
 
 export const biomarkerReferenceTable = pgTable("biomarker_reference", {
   id: serial("id").primaryKey(),
@@ -19,8 +21,8 @@ export const biomarkerReferenceTable = pgTable("biomarker_reference", {
 
 export const biomarkerResultsTable = pgTable("biomarker_results", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  recordId: integer("record_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  recordId: integer("record_id").notNull().references(() => recordsTable.id, { onDelete: "cascade" }),
   biomarkerName: text("biomarker_name").notNull(),
   category: text("category"),
   value: numeric("value"),

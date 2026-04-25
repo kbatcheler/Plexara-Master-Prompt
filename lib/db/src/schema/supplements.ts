@@ -1,10 +1,12 @@
 import { pgTable, text, serial, timestamp, integer, numeric, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
+import { recordsTable } from "./records";
 
 export const supplementsTable = pgTable("supplements", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   dosage: text("dosage"),
   frequency: text("frequency"),
@@ -17,8 +19,8 @@ export const supplementsTable = pgTable("supplements", {
 
 export const supplementRecommendationsTable = pgTable("supplement_recommendations", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  recordId: integer("record_id"),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  recordId: integer("record_id").references(() => recordsTable.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   dosage: text("dosage"),
   rationale: text("rationale").notNull(),

@@ -3,10 +3,19 @@ import { db, dataResidencyTable, dataRequestsTable, consentRecordsTable, patient
 import { eq, desc, inArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { CONSENT_SCOPES, getEffectiveConsents, setConsent } from "../lib/consent";
+import { validate } from "../middlewares/validate";
+import { z } from "zod";
 
 const router = Router();
 
 const ALLOWED_REGIONS = ["us-east", "us-west", "eu-west", "ap-southeast"] as const;
+
+const consentBody = z.object({ granted: z.boolean() });
+const dataResidencyBody = z.object({ region: z.enum(ALLOWED_REGIONS) });
+const dataRequestBody = z.object({
+  type: z.enum(["export", "delete", "access", "correction"]),
+  details: z.string().max(4_000).optional().nullable(),
+});
 
 router.get("/consents", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
@@ -14,14 +23,10 @@ router.get("/consents", requireAuth, async (req, res): Promise<void> => {
   res.json({ scopes: consents });
 });
 
-router.put("/consents/:scopeKey", requireAuth, async (req, res): Promise<void> => {
+router.put("/consents/:scopeKey", requireAuth, validate({ body: consentBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const { scopeKey } = req.params;
-  const { granted } = req.body || {};
-  if (typeof granted !== "boolean") {
-    res.status(400).json({ error: "granted (boolean) required" });
-    return;
-  }
+  const { granted } = req.body as { granted: boolean };
   if (!CONSENT_SCOPES.find((s) => s.key === scopeKey)) {
     res.status(400).json({ error: "Unknown scope" });
     return;
@@ -37,13 +42,9 @@ router.get("/data-residency", requireAuth, async (req, res): Promise<void> => {
   res.json(pref ?? { accountId: userId, region: "us-east", setAt: null });
 });
 
-router.put("/data-residency", requireAuth, async (req, res): Promise<void> => {
+router.put("/data-residency", requireAuth, validate({ body: dataResidencyBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const { region } = req.body || {};
-  if (!region || !ALLOWED_REGIONS.includes(region)) {
-    res.status(400).json({ error: `region must be one of ${ALLOWED_REGIONS.join(", ")}` });
-    return;
-  }
+  const { region } = req.body as { region: typeof ALLOWED_REGIONS[number] };
   const [existing] = await db.select().from(dataResidencyTable).where(eq(dataResidencyTable.accountId, userId));
   if (existing) {
     await db.update(dataResidencyTable).set({ region, setAt: new Date() }).where(eq(dataResidencyTable.accountId, userId));
@@ -103,14 +104,9 @@ router.get("/data-requests", requireAuth, async (req, res): Promise<void> => {
   res.json(reqs);
 });
 
-router.post("/data-requests", requireAuth, async (req, res): Promise<void> => {
+router.post("/data-requests", requireAuth, validate({ body: dataRequestBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const { type, details } = req.body || {};
-  const allowed = ["export", "delete", "access", "correction"];
-  if (!allowed.includes(type)) {
-    res.status(400).json({ error: `type must be one of ${allowed.join(", ")}` });
-    return;
-  }
+  const { type, details } = req.body as z.infer<typeof dataRequestBody>;
   const [created] = await db.insert(dataRequestsTable).values({
     accountId: userId,
     type,

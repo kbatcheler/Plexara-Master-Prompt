@@ -14,12 +14,10 @@ async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
 
-  await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+  const sharedConfig = {
     platform: "node",
     bundle: true,
     format: "esm",
-    outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
     // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
@@ -102,10 +100,6 @@ async function buildAll() {
       "electron",
     ],
     sourcemap: "linked",
-    plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
-    ],
     // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
@@ -117,6 +111,23 @@ globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
+  };
+
+  // Build the API server (with the pino plugin so worker bundles land in dist/)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    outdir: distDir,
+    plugins: [esbuildPluginPino({ transports: ["pino-pretty"] })],
+  });
+
+  // Build the migration runner separately so its output lands at dist/migrate.mjs
+  // regardless of the entrypoint's source path. The compose `migrate` sidecar
+  // runs `node dist/migrate.mjs` against /app/drizzle.
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: { migrate: path.resolve(artifactDir, "../../lib/db/src/migrate.ts") },
+    outdir: distDir,
   });
 }
 

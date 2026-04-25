@@ -9,6 +9,9 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptText } from "../lib/phi-crypto";
+import { validate } from "../middlewares/validate";
+import { baselineCreateBody } from "../lib/validators";
 
 const router = Router({ mergeParams: true });
 
@@ -93,7 +96,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/", requireAuth, async (req, res): Promise<void> => {
+router.post("/", requireAuth, validate({ body: baselineCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
@@ -160,8 +163,8 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
               unit: b.unit,
               testDate: b.testDate,
             })),
-            patientNarrative: latest.patientNarrative,
-            clinicalNarrative: latest.clinicalNarrative,
+            patientNarrative: decryptText(latest.patientNarrative),
+            clinicalNarrative: decryptText(latest.clinicalNarrative),
           },
           notes: req.body?.notes ?? "Manually re-baselined",
         })

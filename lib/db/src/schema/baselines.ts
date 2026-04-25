@@ -1,12 +1,17 @@
 import { pgTable, text, serial, timestamp, integer, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
+import { interpretationsTable } from "./interpretations";
+import { supplementsTable } from "./supplements";
 
 export const baselinesTable = pgTable("baselines", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   version: integer("version").notNull().default(1),
-  sourceInterpretationId: integer("source_interpretation_id"),
+  // SET NULL: a baseline is a clinical snapshot — keep it even if the source
+  // interpretation is later replaced.
+  sourceInterpretationId: integer("source_interpretation_id").references(() => interpretationsTable.id, { onDelete: "set null" }),
   establishedAt: timestamp("established_at", { withTimezone: true }).notNull().defaultNow(),
   snapshotJson: jsonb("snapshot_json").notNull(),
   notes: text("notes"),
@@ -16,8 +21,8 @@ export const baselinesTable = pgTable("baselines", {
 
 export const stackChangesTable = pgTable("stack_changes", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  supplementId: integer("supplement_id"),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  supplementId: integer("supplement_id").references(() => supplementsTable.id, { onDelete: "set null" }),
   supplementName: text("supplement_name").notNull(),
   eventType: text("event_type").notNull(),
   dosageBefore: text("dosage_before"),

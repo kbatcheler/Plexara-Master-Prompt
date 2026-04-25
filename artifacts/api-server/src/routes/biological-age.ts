@@ -9,6 +9,9 @@ import {
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { tryComputePhenoAge, computeChronologicalAge } from "../lib/biological-age";
+import { validate } from "../middlewares/validate";
+import { computeBiologicalAgeBody } from "../lib/validators";
+import { z } from "zod";
 
 const router = Router({ mergeParams: true });
 
@@ -47,7 +50,11 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/compute", requireAuth, async (req, res): Promise<void> => {
+router.post(
+  "/compute",
+  requireAuth,
+  validate({ body: computeBiologicalAgeBody.extend({ recordId: z.coerce.number().int().positive() }) }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
@@ -56,11 +63,7 @@ router.post("/compute", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const recordId = parseInt(req.body?.recordId);
-  if (!recordId || isNaN(recordId)) {
-    res.status(400).json({ error: "recordId is required" });
-    return;
-  }
+  const recordId = req.body.recordId as number;
 
   try {
     const [record] = await db

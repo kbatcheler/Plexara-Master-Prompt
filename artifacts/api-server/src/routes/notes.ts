@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { patientNotesTable, patientsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { validate } from "../middlewares/validate";
+import { createNoteBody, updateNoteBody } from "../lib/validators";
 
 const router = Router({ mergeParams: true });
 
@@ -37,14 +39,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/", requireAuth, async (req, res): Promise<void> => {
+router.post("/", requireAuth, validate({ body: createNoteBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const { subjectType, subjectId, body, authorRole } = req.body ?? {};
-  if (!subjectType || !body || typeof body !== "string") {
-    res.status(400).json({ error: "subjectType and body are required" });
+  const { subjectType, subjectId, body, authorRole } = req.body;
+  if (!subjectType) {
+    res.status(400).json({ error: "subjectType is required" });
     return;
   }
   try {
@@ -63,17 +65,13 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.patch("/:noteId", requireAuth, async (req, res): Promise<void> => {
+router.patch("/:noteId", requireAuth, validate({ body: updateNoteBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const noteId = parseInt(req.params.noteId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const { body } = req.body ?? {};
-  if (!body || typeof body !== "string") {
-    res.status(400).json({ error: "body is required" });
-    return;
-  }
+  const { body } = req.body;
   try {
     const [updated] = await db.update(patientNotesTable)
       .set({ body })

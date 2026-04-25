@@ -1,11 +1,13 @@
 import { pgTable, text, serial, timestamp, integer, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
+import { recordsTable } from "./records";
 
 export const biologicalAgeTable = pgTable("biological_age", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  recordId: integer("record_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  recordId: integer("record_id").notNull().references(() => recordsTable.id, { onDelete: "cascade" }),
   testDate: text("test_date"),
   chronologicalAge: numeric("chronological_age").notNull(),
   phenotypicAge: numeric("phenotypic_age").notNull(),
@@ -20,7 +22,7 @@ export const biologicalAgeTable = pgTable("biological_age", {
 
 export const correlationsTable = pgTable("correlations", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
   recordCount: integer("record_count").notNull(),
   earliestRecordDate: text("earliest_record_date"),

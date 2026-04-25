@@ -10,6 +10,9 @@ import { ObjectStorageService } from "../lib/objectStorage";
 import { parseDicomMetadata } from "../lib/dicom";
 import { logger } from "../lib/logger";
 import { processUploadedDocument } from "./records";
+import { validate } from "../middlewares/validate";
+import { annotationBody } from "../lib/validators";
+import { z } from "zod";
 
 const router = Router({ mergeParams: true });
 const dicomRouter = Router();
@@ -199,7 +202,11 @@ router.get("/:studyId/annotations", requireAuth, async (req, res): Promise<void>
   res.json(annotations);
 });
 
-router.post("/:studyId/annotations", requireAuth, async (req, res): Promise<void> => {
+router.post(
+  "/:studyId/annotations",
+  requireAuth,
+  validate({ body: annotationBody }),
+  async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const studyId = parseInt(req.params.studyId);
@@ -213,11 +220,7 @@ router.post("/:studyId/annotations", requireAuth, async (req, res): Promise<void
     res.status(404).json({ error: "Study not found" });
     return;
   }
-  const { type, geometry, label, measurementValue, measurementUnit } = req.body || {};
-  if (!type || geometry == null) {
-    res.status(400).json({ error: "type and geometry required" });
-    return;
-  }
+  const { type, geometry, label, measurementValue, measurementUnit } = req.body as z.infer<typeof annotationBody>;
   const [created] = await db.insert(imagingAnnotationsTable).values({
     studyId,
     type,

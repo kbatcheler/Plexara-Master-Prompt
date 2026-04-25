@@ -1,10 +1,11 @@
 import { pgTable, text, serial, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
 
 export const recordsTable = pgTable("records", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   recordType: text("record_type").notNull(),
   filePath: text("file_path"),
   fileName: text("file_name").notNull(),
@@ -16,9 +17,11 @@ export const recordsTable = pgTable("records", {
 
 export const extractedDataTable = pgTable("extracted_data", {
   id: serial("id").primaryKey(),
-  recordId: integer("record_id").notNull(),
-  patientId: integer("patient_id").notNull(),
+  recordId: integer("record_id").notNull().references(() => recordsTable.id, { onDelete: "cascade" }),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   dataType: text("data_type"),
+  // PHI: extracted lab data, encrypted via lib/phi-crypto envelope wrapper.
+  // Stored as jsonb so we can query envelope metadata (.enc version) without decrypt.
   structuredJson: jsonb("structured_json"),
   extractionConfidence: text("extraction_confidence"),
   extractionModel: text("extraction_model"),

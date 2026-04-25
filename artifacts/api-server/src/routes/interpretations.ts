@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { interpretationsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptInterpretationFields } from "../lib/phi-crypto";
 
 const router = Router({ mergeParams: true });
 
@@ -67,7 +68,7 @@ router.get("/latest", requireAuth, async (req, res): Promise<void> => {
       res.status(404).json({ error: "No interpretation found" });
       return;
     }
-    res.json(interpretation);
+    res.json(decryptInterpretationFields(interpretation));
   } catch (err) {
     req.log.error({ err }, "Failed to get latest interpretation");
     res.status(500).json({ error: "Internal server error" });
@@ -97,7 +98,7 @@ router.get("/:interpretationId", requireAuth, async (req, res): Promise<void> =>
       res.status(404).json({ error: "Interpretation not found" });
       return;
     }
-    res.json(interpretation);
+    res.json(decryptInterpretationFields(interpretation));
   } catch (err) {
     req.log.error({ err }, "Failed to get interpretation");
     res.status(500).json({ error: "Internal server error" });

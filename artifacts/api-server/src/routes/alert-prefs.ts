@@ -4,8 +4,19 @@ import { alertPreferencesTable, patientsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { pickAllowed } from "../lib/pickAllowed";
+import { validate } from "../middlewares/validate";
+import { z } from "zod";
 
 const router = Router({ mergeParams: true });
+
+const alertPrefsBody = z.object({
+  enableUrgent: z.boolean().optional(),
+  enableWatch: z.boolean().optional(),
+  enableInfo: z.boolean().optional(),
+  emailNotifications: z.boolean().optional(),
+  pushNotifications: z.boolean().optional(),
+  customThresholds: z.record(z.string(), z.unknown()).optional().nullable(),
+});
 
 async function getPatient(patientId: number, userId: string) {
   const [patient] = await db
@@ -31,7 +42,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.put("/", requireAuth, async (req, res): Promise<void> => {
+router.put("/", requireAuth, validate({ body: alertPrefsBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);

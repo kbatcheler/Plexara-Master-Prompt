@@ -1,10 +1,11 @@
 import { pgTable, text, serial, timestamp, integer, jsonb, boolean, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { patientsTable } from "./patients";
 
 export const patientNotesTable = pgTable("patient_notes", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   authorAccountId: text("author_account_id").notNull(),
   authorRole: text("author_role").notNull().default("patient"),
   subjectType: text("subject_type").notNull(),
@@ -16,7 +17,7 @@ export const patientNotesTable = pgTable("patient_notes", {
 
 export const alertPreferencesTable = pgTable("alert_preferences", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull().unique(),
+  patientId: integer("patient_id").notNull().unique().references(() => patientsTable.id, { onDelete: "cascade" }),
   enableUrgent: boolean("enable_urgent").notNull().default(true),
   enableWatch: boolean("enable_watch").notNull().default(true),
   enableInfo: boolean("enable_info").notNull().default(true),
@@ -28,7 +29,7 @@ export const alertPreferencesTable = pgTable("alert_preferences", {
 
 export const shareLinksTable = pgTable("share_links", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   createdBy: text("created_by").notNull(),
   token: text("token").notNull().unique(),
   label: text("label"),
@@ -41,7 +42,7 @@ export const shareLinksTable = pgTable("share_links", {
 
 export const shareLinkAccessTable = pgTable("share_link_access", {
   id: serial("id").primaryKey(),
-  shareLinkId: integer("share_link_id").notNull(),
+  shareLinkId: integer("share_link_id").notNull().references(() => shareLinksTable.id, { onDelete: "cascade" }),
   accessedAt: timestamp("accessed_at", { withTimezone: true }).notNull().defaultNow(),
   ipHash: text("ip_hash"),
   userAgent: text("user_agent"),
@@ -50,7 +51,7 @@ export const shareLinkAccessTable = pgTable("share_link_access", {
 
 export const chatConversationsTable = pgTable("chat_conversations", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   accountId: text("account_id").notNull(),
   subjectType: text("subject_type").notNull(),
   subjectRef: text("subject_ref"),
@@ -61,7 +62,7 @@ export const chatConversationsTable = pgTable("chat_conversations", {
 
 export const chatMessagesTable = pgTable("chat_messages", {
   id: serial("id").primaryKey(),
-  conversationId: integer("conversation_id").notNull(),
+  conversationId: integer("conversation_id").notNull().references(() => chatConversationsTable.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: text("content").notNull(),
   citations: jsonb("citations"),
@@ -70,7 +71,7 @@ export const chatMessagesTable = pgTable("chat_messages", {
 
 export const predictionsTable = pgTable("predictions", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   biomarkerName: text("biomarker_name").notNull(),
   method: text("method").notNull().default("linear"),
   slopePerDay: real("slope_per_day"),
@@ -104,8 +105,9 @@ export const protocolsTable = pgTable("protocols", {
 
 export const protocolAdoptionsTable = pgTable("protocol_adoptions", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  protocolId: integer("protocol_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  // RESTRICT: protocols are catalog data — refuse delete if anyone has adopted it.
+  protocolId: integer("protocol_id").notNull().references(() => protocolsTable.id, { onDelete: "restrict" }),
   status: text("status").notNull().default("active"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),

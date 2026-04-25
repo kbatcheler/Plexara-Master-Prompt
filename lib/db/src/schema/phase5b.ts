@@ -1,4 +1,6 @@
 import { pgTable, text, serial, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { patientsTable } from "./patients";
+import { interpretationsTable } from "./interpretations";
 
 // ─── Multi-lens disagreement surfacing ──────────────────────────────────
 // Flattens the disagreements[] array embedded in interpretations.reconciledOutput
@@ -6,8 +8,9 @@ import { pgTable, text, serial, timestamp, integer, jsonb, index, uniqueIndex } 
 // across all interpretations.
 export const lensDisagreementsTable = pgTable("lens_disagreements", {
   id: serial("id").primaryKey(),
-  interpretationId: integer("interpretation_id").notNull(),
-  patientId: integer("patient_id").notNull(),
+  // CASCADE so when an interpretation is deleted, its disagreements go too.
+  interpretationId: integer("interpretation_id").notNull().references(() => interpretationsTable.id, { onDelete: "cascade" }),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   finding: text("finding").notNull(),
   lensAView: text("lens_a_view"),
   lensBView: text("lens_b_view"),
@@ -43,8 +46,8 @@ export const interactionRulesTable = pgTable("interaction_rules", {
 
 export const interactionDismissalsTable = pgTable("interaction_dismissals", {
   id: serial("id").primaryKey(),
-  patientId: integer("patient_id").notNull(),
-  ruleId: integer("rule_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  ruleId: integer("rule_id").notNull().references(() => interactionRulesTable.id, { onDelete: "cascade" }),
   dismissedAt: timestamp("dismissed_at", { withTimezone: true }).notNull().defaultNow(),
   note: text("note"),
 }, (t) => ({

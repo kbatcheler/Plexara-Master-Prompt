@@ -11,6 +11,10 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { decryptJson } from "../lib/phi-crypto";
+import { validate } from "../middlewares/validate";
+import { chatBody } from "../lib/validators";
+import { z } from "zod";
 
 const router = Router({ mergeParams: true });
 
@@ -65,13 +69,12 @@ router.get("/:conversationId", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
-router.post("/", requireAuth, async (req, res): Promise<void> => {
+router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const { question, subjectType, subjectRef, conversationId } = req.body ?? {};
-  if (!question || typeof question !== "string") { res.status(400).json({ error: "question is required" }); return; }
+  const { question, subjectType, subjectRef, conversationId } = req.body as z.infer<typeof chatBody>;
 
   try {
     const [latest] = await db.select().from(interpretationsTable)
@@ -85,7 +88,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
     const gauges = await db.select().from(gaugesTable).where(eq(gaugesTable.patientId, patientId));
 
     const contextBlock = JSON.stringify({
-      reconciled: latest?.reconciledOutput ?? null,
+      reconciled: decryptJson(latest?.reconciledOutput) ?? null,
       gauges: gauges.map((g) => ({ domain: g.domain, value: g.currentValue, trend: g.trend, label: g.label })),
       recentBiomarkers: biomarkers.map((b) => ({ name: b.biomarkerName, value: b.value, unit: b.unit, testDate: b.testDate, status: b.status })),
       subjectType: subjectType ?? "general",

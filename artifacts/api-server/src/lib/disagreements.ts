@@ -1,6 +1,7 @@
 import { db, lensDisagreementsTable, interpretationsTable } from "@workspace/db";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { decryptJson } from "./phi-crypto";
 
 // Heuristic severity classifier: looks at lens-view text for tokens that
 // imply clinical urgency or safety stakes. Cheap and explainable; we can
@@ -37,7 +38,7 @@ export async function extractDisagreementsForInterpretation(interpretationId: nu
     .where(eq(lensDisagreementsTable.interpretationId, interpretationId)).limit(1);
   if (existing.length > 0) return 0;
 
-  const reconciled = row.reconciledOutput as { disagreements?: Array<{ finding: string; lensAView?: string; lensBView?: string; lensCView?: string }> } | null;
+  const reconciled = decryptJson<{ disagreements?: Array<{ finding: string; lensAView?: string; lensBView?: string; lensCView?: string }> }>(row.reconciledOutput);
   if (!reconciled?.disagreements?.length) return 0;
 
   const values = reconciled.disagreements
