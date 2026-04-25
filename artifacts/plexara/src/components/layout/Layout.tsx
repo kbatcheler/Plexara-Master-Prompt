@@ -1,6 +1,7 @@
 import { useUser, useClerk } from "@clerk/react";
 import { Link, useLocation } from "wouter";
 import { useMode } from "../../context/ModeContext";
+import { devSignOut, isDevSignedIn } from "../../lib/dev-auth";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -53,7 +54,7 @@ function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string 
     ? currentPath === group.href || currentPath.startsWith(group.href + "/")
     : group.items?.some((i) => currentPath === i.href || currentPath.startsWith(i.href + "/"));
 
-  const baseCls = `flex items-center gap-1.5 text-sm font-medium transition-colors px-2 py-1 rounded-md ${
+  const baseCls = `flex items-center gap-1.5 text-sm font-medium transition-colors px-2 py-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background ${
     isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
   }`;
 
@@ -141,8 +142,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <DropdownMenuItem asChild><Link href="/admin">Admin console</Link></DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => signOut(() => setLocation("/"))}
+                  onClick={async () => {
+                    // Always clear the server-side dev cookie + local flag
+                    // unconditionally — the localStorage flag may be missing/stale
+                    // while a signed dev cookie is still active on the server.
+                    // devSignOut() is idempotent and safe to call when not signed in.
+                    await devSignOut();
+                    try {
+                      await signOut();
+                    } catch { /* clerk may not be signed in */ }
+                    setLocation("/");
+                  }}
                   className="text-destructive focus:text-destructive cursor-pointer"
+                  data-testid="signout-button"
                 >
                   <LogOut className="w-3.5 h-3.5 mr-2" /> Sign out
                 </DropdownMenuItem>

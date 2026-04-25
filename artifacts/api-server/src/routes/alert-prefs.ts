@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { alertPreferencesTable, patientsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { pickAllowed } from "../lib/pickAllowed";
 
 const router = Router({ mergeParams: true });
 
@@ -35,10 +36,10 @@ router.put("/", requireAuth, async (req, res): Promise<void> => {
   const patientId = parseInt(req.params.patientId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const updates: Record<string, unknown> = {};
-  for (const k of ["enableUrgent", "enableWatch", "enableInfo", "emailNotifications", "pushNotifications", "customThresholds"]) {
-    if (req.body && k in req.body) updates[k] = req.body[k];
-  }
+  const updates = pickAllowed<{ enableUrgent: unknown; enableWatch: unknown; enableInfo: unknown; emailNotifications: unknown; pushNotifications: unknown; customThresholds: unknown }>(
+    req.body,
+    ["enableUrgent", "enableWatch", "enableInfo", "emailNotifications", "pushNotifications", "customThresholds"] as const,
+  );
   try {
     const [existing] = await db.select().from(alertPreferencesTable).where(eq(alertPreferencesTable.patientId, patientId));
     if (existing) {

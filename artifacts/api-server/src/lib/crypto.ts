@@ -10,9 +10,11 @@ function key(): Buffer {
   return crypto.createHash("sha256").update(secret).digest();
 }
 
+const GCM_TAG_LENGTH = 16;
+
 export function encryptToken(plaintext: string): string {
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key(), iv);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key(), iv, { authTagLength: GCM_TAG_LENGTH });
   const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [iv.toString("base64"), tag.toString("base64"), ct.toString("base64")].join(".");
@@ -21,8 +23,10 @@ export function encryptToken(plaintext: string): string {
 export function decryptToken(payload: string): string {
   const [ivB64, tagB64, ctB64] = payload.split(".");
   if (!ivB64 || !tagB64 || !ctB64) throw new Error("Malformed encrypted token");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key(), Buffer.from(ivB64, "base64"));
-  decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+  const tag = Buffer.from(tagB64, "base64");
+  if (tag.length !== GCM_TAG_LENGTH) throw new Error("Invalid auth tag length");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key(), Buffer.from(ivB64, "base64"), { authTagLength: GCM_TAG_LENGTH });
+  decipher.setAuthTag(tag);
   const pt = Buffer.concat([decipher.update(Buffer.from(ctB64, "base64")), decipher.final()]);
   return pt.toString("utf8");
 }

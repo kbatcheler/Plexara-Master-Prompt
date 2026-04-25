@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { pickAllowed } from "../lib/pickAllowed";
 
 const globalRouter = Router();
 const patientRouter = Router({ mergeParams: true });
@@ -360,10 +361,10 @@ patientRouter.patch("/adoptions/:adoptionId", requireAuth, async (req, res): Pro
   const adoptionId = parseInt(req.params.adoptionId);
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
-  const updates: Record<string, unknown> = {};
-  for (const k of ["status", "notes", "progressJson"]) {
-    if (req.body && k in req.body) updates[k] = req.body[k];
-  }
+  const updates: Record<string, unknown> = pickAllowed<{ status: unknown; notes: unknown; progressJson: unknown }>(
+    req.body,
+    ["status", "notes", "progressJson"] as const,
+  );
   if (req.body?.status === "completed" || req.body?.status === "discontinued") {
     updates.endedAt = new Date();
   }

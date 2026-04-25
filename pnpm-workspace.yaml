@@ -52,7 +52,7 @@ catalog:
   '@vitejs/plugin-react': ^5.0.4
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
-  drizzle-orm: ^0.45.1
+  drizzle-orm: ^0.45.2
   framer-motion: ^12.23.24
   lucide-react: ^0.545.0
   # Must be this exact version because expo requires it
@@ -157,3 +157,9 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # Patch transitive vulnerabilities flagged by osv-scanner
+  "@clerk/shared": "^4.8.1"          # GHSA-vqx2-fgx2-5wq9 middleware bypass (CRITICAL)
+  lodash: "^4.18.0"                  # _.template code injection (HIGH)
+  path-to-regexp: "^8.4.0"           # ReDoS via sequential optional groups (HIGH)
+  picomatch: "^4.0.4"                # ReDoS via extglob quantifiers (HIGH)
+  vite: "^7.3.2"                     # arbitrary file read + fs.deny bypass (HIGH)

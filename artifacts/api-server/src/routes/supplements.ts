@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { pickAllowed } from "../lib/pickAllowed";
 import {
   runSupplementRecommendations,
   computeAgeRange,
@@ -174,10 +175,10 @@ router.patch("/:supplementId", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const updates: Record<string, unknown> = {};
-  for (const key of ["name", "dosage", "frequency", "startedAt", "notes", "active"]) {
-    if (req.body && key in req.body) updates[key] = req.body[key];
-  }
+  const updates = pickAllowed<{ name: unknown; dosage: unknown; frequency: unknown; startedAt: unknown; notes: unknown; active: unknown }>(
+    req.body,
+    ["name", "dosage", "frequency", "startedAt", "notes", "active"] as const,
+  );
 
   try {
     const [previous] = await db
