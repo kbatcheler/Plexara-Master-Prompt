@@ -160,11 +160,12 @@ export default function Records() {
 
         {filteredRecords && filteredRecords.length > 0 ? (
           <div className="grid gap-3">
-            {filteredRecords.map(record => (
+            {filteredRecords.map((record, idx) => (
               <div 
                 key={record.id}
                 onClick={() => setSelectedRecordId(record.id)}
-                className="group flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-card border border-border rounded-xl hover:border-primary/40 hover:shadow-md cursor-pointer transition-all"
+                className="group flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-card border border-border rounded-xl hover:border-primary/40 hover:shadow-md cursor-pointer transition-all animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none"
+                style={{ animationDelay: `${Math.min(idx, 12) * 50}ms`, animationFillMode: "backwards" }}
                 data-testid={`record-row-${record.id}`}
               >
                 <div className="flex items-center gap-4 w-full sm:w-auto sm:min-w-0 sm:flex-1">
