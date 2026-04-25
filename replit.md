@@ -18,6 +18,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - Dual display modes: Patient (plain English) and Clinician (clinical language)
 - Persistent AI disclaimer footer on all authenticated pages
 - Arc gauge SVG components for 8 health domains
+- **Failed-record retry**: `/api/patients/:id/records/:recordId/reanalyze` re-runs the pipeline. If a cached extraction exists it only re-runs the 3 lenses; otherwise it re-extracts the original file from disk via `processUploadedDocument`. Wired into the `/records` list (per-row Retry button next to the Failed pill) and the record detail drawer (Retry analysis CTA on the friendly error UI). The list and the drawer auto-poll every 4 seconds while any record is in pending/processing state, so the UI flips to Complete/Failed without a manual refresh. Backend returns 409 with a friendly message if the original upload is no longer on disk.
 
 ### AI Pipeline
 - **Lens A**: Claude (`claude-sonnet-4-6`) — Clinical Synthesist

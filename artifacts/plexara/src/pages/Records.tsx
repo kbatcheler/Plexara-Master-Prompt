@@ -1,14 +1,20 @@
 import { useState } from "react";
 import { useCurrentPatient } from "../hooks/use-current-patient";
-import { useListRecords, useDeleteRecord, getListRecordsQueryKey } from "@workspace/api-client-react";
+import {
+  useListRecords,
+  useDeleteRecord,
+  useReanalyzeRecord,
+  getListRecordsQueryKey,
+} from "@workspace/api-client-react";
 import { UploadZone } from "../components/dashboard/UploadZone";
 import { RecordDetailModal } from "../components/dashboard/RecordDetailModal";
-import { FileText, Loader2, Trash2, Search, Filter } from "lucide-react";
+import { FileText, Loader2, Trash2, Search, Filter, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Records() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
@@ -17,14 +23,27 @@ export default function Records() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
 
+  // Poll the list while any record is in a non-terminal state (pending /
+  // processing). This makes Retry feel responsive — the user sees the row
+  // flip from Processing → Complete/Failed without manually refreshing.
+  // Stops polling once everything is in a terminal state to avoid waste.
   const { data: records, isLoading: recordsLoading } = useListRecords(patientId!, {}, {
     query: {
       enabled: !!patientId,
-      queryKey: getListRecordsQueryKey(patientId!)
+      queryKey: getListRecordsQueryKey(patientId!),
+      refetchInterval: (query) => {
+        const list = query.state.data;
+        if (!list) return false;
+        const anyInFlight = list.some((r) => r.status === "pending" || r.status === "processing");
+        return anyInFlight ? 4000 : false;
+      },
     }
   });
 
   const deleteRecord = useDeleteRecord();
+  const reanalyzeRecord = useReanalyzeRecord();
+  const { toast } = useToast();
+  const [retryingId, setRetryingId] = useState<number | null>(null);
 
   const handleDelete = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
@@ -35,6 +54,39 @@ export default function Records() {
         }
       });
     }
+  };
+
+  // Retry the AI pipeline for a failed record. The backend re-extracts from
+  // the original upload if no cached extraction exists, then runs all three
+  // lenses again. We refresh the list immediately so the row flips to
+  // "Processing"; the polling already set up by UploadZone will pick up the
+  // final state.
+  const handleRetry = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    setRetryingId(id);
+    reanalyzeRecord.mutate(
+      { patientId: patientId!, recordId: id },
+      {
+        onSuccess: () => {
+          toast({
+            title: "Re-analysis started",
+            description: "We'll re-run the AI pipeline on this record. Refresh in a moment to see the result.",
+          });
+          queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(patientId!) });
+        },
+        onError: (err: unknown) => {
+          const detail = (err as { detail?: { error?: string }; message?: string }).detail?.error
+            ?? (err as Error).message
+            ?? "Could not restart the analysis.";
+          toast({
+            title: "Could not restart analysis",
+            description: detail,
+            variant: "destructive",
+          });
+        },
+        onSettled: () => setRetryingId(null),
+      },
+    );
   };
 
   if (patientLoading || recordsLoading) {
@@ -142,8 +194,25 @@ export default function Records() {
                         Processing
                       </div>
                     ) : record.status === "error" ? (
-                      <div className="flex items-center gap-1.5 px-3 py-1 bg-red-500/10 text-red-400 rounded-full text-xs font-medium border border-red-500/20">
-                        Failed
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-red-500/10 text-red-400 rounded-full text-xs font-medium border border-red-500/20">
+                          Failed
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs gap-1.5"
+                          onClick={(e) => handleRetry(e, record.id)}
+                          disabled={retryingId === record.id || reanalyzeRecord.isPending}
+                          data-testid={`button-retry-record-${record.id}`}
+                        >
+                          {retryingId === record.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <RotateCw className="w-3 h-3" />
+                          )}
+                          Retry
+                        </Button>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-xs font-medium border border-green-500/20">

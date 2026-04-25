@@ -159,7 +159,13 @@ export const ListRecordsResponseItem = zod.object({
   fileName: zod.string(),
   uploadDate: zod.coerce.date(),
   testDate: zod.string().nullish(),
-  status: zod.enum(["pending", "processing", "complete", "error"]),
+  status: zod.enum([
+    "pending",
+    "processing",
+    "complete",
+    "error",
+    "consent_blocked",
+  ]),
   createdAt: zod.coerce.date(),
 });
 export const ListRecordsResponse = zod.array(ListRecordsResponseItem);
@@ -211,7 +217,13 @@ export const GetRecordResponse = zod
     fileName: zod.string(),
     uploadDate: zod.coerce.date(),
     testDate: zod.string().nullish(),
-    status: zod.enum(["pending", "processing", "complete", "error"]),
+    status: zod.enum([
+      "pending",
+      "processing",
+      "complete",
+      "error",
+      "consent_blocked",
+    ]),
     createdAt: zod.coerce.date(),
   })
   .and(
@@ -560,7 +572,13 @@ export const GetDashboardResponse = zod.object({
       fileName: zod.string(),
       uploadDate: zod.coerce.date(),
       testDate: zod.string().nullish(),
-      status: zod.enum(["pending", "processing", "complete", "error"]),
+      status: zod.enum([
+        "pending",
+        "processing",
+        "complete",
+        "error",
+        "consent_blocked",
+      ]),
       createdAt: zod.coerce.date(),
     }),
   ),

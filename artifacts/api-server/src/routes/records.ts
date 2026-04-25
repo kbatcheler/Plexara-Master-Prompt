@@ -36,6 +36,22 @@ const upload = multer({
   },
 });
 
+// File-extension → MIME map for re-extraction when the original upload's
+// MIME type is no longer available (e.g. retrying an old failed record).
+// Keep in sync with the multer fileFilter allowlist above.
+function inferMimeFromFileName(fileName: string): string {
+  const ext = path.extname(fileName).toLowerCase();
+  switch (ext) {
+    case ".pdf": return "application/pdf";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".png": return "image/png";
+    case ".webp": return "image/webp";
+    case ".gif": return "image/gif";
+    default: return "application/octet-stream";
+  }
+}
+
 async function verifyPatientOwnership(patientId: number, userId: string): Promise<boolean> {
   const { patientsTable: pt } = await import("@workspace/db");
   const [patient] = await db
@@ -637,11 +653,20 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
+// Re-trigger the interpretation pipeline for an existing record.
+// Two paths:
+//   (a) Cached extraction exists → just re-run the 3-lens interpretation
+//       (cheap, useful when only the AI side failed).
+//   (b) No cached extraction (extraction itself failed the first time, or
+//       this record is in 'error' state with nothing extracted) → re-read
+//       the file from disk and re-run the FULL pipeline (extract +
+//       biomarker insert + interpretation). This is the case that was
+//       previously useless: reanalyze would just feed `{}` to the lenses.
 router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));
   const recordId = parseInt((req.params.recordId as string));
-  
+
   if (!(await verifyPatientOwnership(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -652,32 +677,76 @@ router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void>
       .select()
       .from(recordsTable)
       .where(and(eq(recordsTable.id, recordId), eq(recordsTable.patientId, patientId)));
-    
+
     if (!record) {
       res.status(404).json({ error: "Record not found" });
       return;
     }
 
-    await db.update(recordsTable).set({ status: "pending" }).where(eq(recordsTable.id, recordId));
-    
     const [extracted] = await db
       .select()
       .from(extractedDataTable)
       .where(eq(extractedDataTable.recordId, recordId));
 
-    const structuredData = (decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson) ?? {});
-    
-    setImmediate(() => {
-      runInterpretationPipeline(patientId, recordId, structuredData).catch(err => {
-        logger.error({ err }, "Re-analysis failed");
+    const cached = decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson);
+    const hasUsefulExtraction = !!cached && Object.keys(cached).length > 0;
+
+    // Mark as pending immediately so the UI shows "Processing" while the
+    // background work runs.
+    await db.update(recordsTable).set({ status: "pending" }).where(eq(recordsTable.id, recordId));
+
+    if (hasUsefulExtraction) {
+      setImmediate(() => {
+        runInterpretationPipeline(patientId, recordId, cached!).catch(async (err) => {
+          logger.error({ err, recordId }, "Re-analysis failed (cached path)");
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        });
       });
-    });
+    } else if (record.filePath) {
+      // No cached extraction → re-run the full pipeline against the file.
+      // Refuse cleanly if the upload is missing on disk (e.g. cleaned up by
+      // a deploy) so the user gets a clear message rather than a silent
+      // "stuck in pending".
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        assertWithinUploads(record.filePath);
+        if (!fs.existsSync(record.filePath)) {
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+          res.status(409).json({ error: "Original file is no longer available — please re-upload." });
+          return;
+        }
+      } catch {
+        await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        res.status(409).json({ error: "Stored file path is invalid — please re-upload." });
+        return;
+      }
+
+      const mimeType = inferMimeFromFileName(record.fileName);
+      setImmediate(() => {
+        processUploadedDocument({
+          patientId,
+          recordId,
+          filePath: record.filePath!,
+          mimeType,
+          recordType: record.recordType,
+          testDate: record.testDate,
+        }).catch(async (err) => {
+          logger.error({ err, recordId }, "Re-analysis failed (full re-extract path)");
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        });
+      });
+    } else {
+      // Pathological case: no extraction AND no file path. Nothing to do.
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+      res.status(409).json({ error: "Nothing to re-analyze — please re-upload the document." });
+      return;
+    }
 
     const [updatedRecord] = await db
       .select()
       .from(recordsTable)
       .where(eq(recordsTable.id, recordId));
-    
+
     res.status(202).json(updatedRecord);
   } catch (err) {
     req.log.error({ err }, "Failed to trigger reanalysis");

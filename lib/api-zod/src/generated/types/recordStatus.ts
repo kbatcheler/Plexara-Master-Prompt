@@ -13,4 +13,5 @@ export const RecordStatus = {
   processing: "processing",
   complete: "complete",
   error: "error",
+  consent_blocked: "consent_blocked",
 } as const;

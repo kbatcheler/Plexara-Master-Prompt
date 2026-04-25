@@ -1,18 +1,76 @@
 import { useState } from "react";
-import { useGetRecord } from "@workspace/api-client-react";
+import {
+  useGetRecord,
+  useReanalyzeRecord,
+  getGetRecordQueryKey,
+  getListRecordsQueryKey,
+} from "@workspace/api-client-react";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerBody } from "@/components/ui/drawer";
 import { useMode } from "../../context/ModeContext";
-import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu } from "lucide-react";
+import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+
+// Human-friendly label + colour for each backend status string. Kept here
+// (not in the badge component) so the rest of the app can stay agnostic to
+// the pipeline's internal vocabulary.
+function statusLabel(status: string | undefined): { label: string; tone: "default" | "secondary" | "destructive" } {
+  switch (status) {
+    case "complete": return { label: "Complete", tone: "default" };
+    case "error": return { label: "Failed", tone: "destructive" };
+    case "consent_blocked": return { label: "Consent required", tone: "secondary" };
+    case "pending":
+    case "processing": return { label: "Processing", tone: "secondary" };
+    default: return { label: status ?? "Unknown", tone: "secondary" };
+  }
+}
 
 export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: { patientId: number, recordId: number | null, open: boolean, onOpenChange: (o: boolean) => void }) {
   const { mode } = useMode();
-  
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
   const { data: record, isLoading } = useGetRecord(patientId, recordId!, {
     query: {
-      enabled: !!patientId && !!recordId && open
+      enabled: !!patientId && !!recordId && open,
+      queryKey: getGetRecordQueryKey(patientId, recordId!),
+      // Keep the drawer in sync while a record is being analyzed in the
+      // background — the record detail object carries the lens outputs and
+      // status, so we want it to refresh as soon as the pipeline finishes.
+      refetchInterval: (query) => {
+        const status = query.state.data?.status;
+        if (!status || status === "complete" || status === "error" || status === "consent_blocked") return false;
+        return 4000;
+      },
     }
   });
+
+  const reanalyze = useReanalyzeRecord();
+
+  const handleRetry = () => {
+    if (!recordId) return;
+    reanalyze.mutate(
+      { patientId, recordId },
+      {
+        onSuccess: () => {
+          toast({
+            title: "Re-analysis started",
+            description: "We'll re-run the AI pipeline on this record.",
+          });
+          queryClient.invalidateQueries({ queryKey: getGetRecordQueryKey(patientId, recordId) });
+          queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(patientId) });
+        },
+        onError: (err: unknown) => {
+          const detail = (err as { detail?: { error?: string }; message?: string }).detail?.error
+            ?? (err as Error).message
+            ?? "Could not restart the analysis.";
+          toast({ title: "Could not restart analysis", description: detail, variant: "destructive" });
+        },
+      },
+    );
+  };
 
   if (!recordId) return null;
 
@@ -28,11 +86,10 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                   {record?.fileName || "Loading..."} • {record?.testDate ? new Date(record.testDate).toLocaleDateString() : "No date"}
                 </DrawerDescription>
               </div>
-              {record?.status && (
-                <Badge variant={record.status === "complete" ? "default" : "secondary"}>
-                  {record.status}
-                </Badge>
-              )}
+              {record?.status && (() => {
+                const { label, tone } = statusLabel(record.status);
+                return <Badge variant={tone}>{label}</Badge>;
+              })()}
             </div>
           </DrawerHeader>
 
@@ -44,8 +101,43 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
               </div>
             ) : !record ? (
               <div className="text-center p-8 text-muted-foreground">Record not found.</div>
+            ) : record.status === "error" ? (
+              <div className="flex flex-col items-center text-center py-12 px-6 space-y-4 max-w-md mx-auto">
+                <div className="w-14 h-14 rounded-full bg-destructive/10 flex items-center justify-center">
+                  <AlertTriangle className="w-7 h-7 text-destructive" />
+                </div>
+                <h3 className="text-lg font-medium text-foreground">Analysis failed</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Something went wrong while analyzing this record. This usually means the document was hard to read or one of the AI lenses returned an error. You can re-run the analysis below.
+                </p>
+                <Button
+                  onClick={handleRetry}
+                  disabled={reanalyze.isPending}
+                  className="gap-2"
+                  data-testid="button-retry-record-modal"
+                >
+                  {reanalyze.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCw className="w-4 h-4" />}
+                  Retry analysis
+                </Button>
+              </div>
+            ) : record.status === "consent_blocked" ? (
+              <div className="flex flex-col items-center text-center py-12 px-6 space-y-3 max-w-md mx-auto">
+                <div className="w-14 h-14 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <ShieldAlert className="w-7 h-7 text-amber-500" />
+                </div>
+                <h3 className="text-lg font-medium text-foreground">AI analysis paused</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  AI extraction is paused because you've revoked consent for one of the AI providers. Restore consent in <span className="text-foreground">Consents</span>, then come back to retry.
+                </p>
+              </div>
             ) : record.status !== "complete" ? (
-              <div className="text-center p-8 text-muted-foreground">Analysis is still processing. Please check back later.</div>
+              <div className="flex flex-col items-center text-center py-12 px-6 space-y-3 max-w-md mx-auto">
+                <Loader2 className="w-7 h-7 text-primary animate-spin" />
+                <h3 className="text-lg font-medium text-foreground">Analysis in progress</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Three AI lenses are evaluating this record. This usually takes 20–60 seconds. The page will update automatically.
+                </p>
+              </div>
             ) : (
               <div className="space-y-8">
                 {/* 3 Lens Output */}

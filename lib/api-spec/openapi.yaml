@@ -614,7 +614,7 @@ components:
           type: ["string", "null"]
         status:
           type: string
-          enum: [pending, processing, complete, error]
+          enum: [pending, processing, complete, error, consent_blocked]
         createdAt:
           type: string
           format: date-time
