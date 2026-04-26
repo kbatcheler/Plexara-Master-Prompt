@@ -22,6 +22,8 @@ import {
   chatMessagesTable,
   predictionsTable,
   protocolAdoptionsTable,
+  patientCollaboratorsTable,
+  patientInvitationsTable,
 } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
@@ -94,36 +96,61 @@ router.get("/export", requireAuth, async (req, res): Promise<void> => {
 router.delete("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   try {
+    /* Account deletion has TWO independent halves and BOTH must run even
+       if the other has nothing to do:
+         1. Cascade-purge every patient this user OWNS (and all of its
+            phase-1/2/3 dependent rows). Other users who collaborate on
+            those patients lose access — that's intentional, the data is
+            being destroyed at the owner's request.
+         2. Walk away from every patient this user COLLABORATES on (i.e.
+            other people's patients). We must NOT delete those patients;
+            we just remove our own collaborator row so the shared profile
+            stays intact for its real owner. Previously we returned early
+            when the user owned no patients, leaving these collaborator
+            rows and pending invitations addressed to this user behind. */
     const patients = await db.select().from(patientsTable).where(eq(patientsTable.accountId, userId));
     const ids = patients.map((p) => p.id);
-    if (ids.length === 0) { res.status(204).send(); return; }
-    const conversations = await db.select().from(chatConversationsTable).where(inArray(chatConversationsTable.patientId, ids));
+    const conversations = ids.length === 0 ? [] : await db.select().from(chatConversationsTable).where(inArray(chatConversationsTable.patientId, ids));
     const conversationIds = conversations.map((c) => c.id);
-    const shareLinks = await db.select().from(shareLinksTable).where(inArray(shareLinksTable.patientId, ids));
+    const shareLinks = ids.length === 0 ? [] : await db.select().from(shareLinksTable).where(inArray(shareLinksTable.patientId, ids));
     const shareLinkIds = shareLinks.map((s) => s.id);
 
     await db.transaction(async (tx) => {
-      if (conversationIds.length > 0) await tx.delete(chatMessagesTable).where(inArray(chatMessagesTable.conversationId, conversationIds));
-      await tx.delete(chatConversationsTable).where(inArray(chatConversationsTable.patientId, ids));
-      if (shareLinkIds.length > 0) await tx.delete(shareLinkAccessTable).where(inArray(shareLinkAccessTable.shareLinkId, shareLinkIds));
-      await tx.delete(shareLinksTable).where(inArray(shareLinksTable.patientId, ids));
-      await tx.delete(predictionsTable).where(inArray(predictionsTable.patientId, ids));
-      await tx.delete(protocolAdoptionsTable).where(inArray(protocolAdoptionsTable.patientId, ids));
-      await tx.delete(patientNotesTable).where(inArray(patientNotesTable.patientId, ids));
-      await tx.delete(alertPreferencesTable).where(inArray(alertPreferencesTable.patientId, ids));
-      await tx.delete(stackChangesTable).where(inArray(stackChangesTable.patientId, ids));
-      await tx.delete(baselinesTable).where(inArray(baselinesTable.patientId, ids));
-      await tx.delete(biologicalAgeTable).where(inArray(biologicalAgeTable.patientId, ids));
-      await tx.delete(supplementRecommendationsTable).where(inArray(supplementRecommendationsTable.patientId, ids));
-      await tx.delete(supplementsTable).where(inArray(supplementsTable.patientId, ids));
-      await tx.delete(alertsTable).where(inArray(alertsTable.patientId, ids));
-      await tx.delete(gaugesTable).where(inArray(gaugesTable.patientId, ids));
-      await tx.delete(interpretationsTable).where(inArray(interpretationsTable.patientId, ids));
-      await tx.delete(biomarkerResultsTable).where(inArray(biomarkerResultsTable.patientId, ids));
-      await tx.delete(extractedDataTable).where(inArray(extractedDataTable.patientId, ids));
-      await tx.delete(recordsTable).where(inArray(recordsTable.patientId, ids));
-      await tx.delete(auditLogTable).where(inArray(auditLogTable.patientId, ids));
-      await tx.delete(patientsTable).where(eq(patientsTable.accountId, userId));
+      if (ids.length > 0) {
+        if (conversationIds.length > 0) await tx.delete(chatMessagesTable).where(inArray(chatMessagesTable.conversationId, conversationIds));
+        await tx.delete(chatConversationsTable).where(inArray(chatConversationsTable.patientId, ids));
+        if (shareLinkIds.length > 0) await tx.delete(shareLinkAccessTable).where(inArray(shareLinkAccessTable.shareLinkId, shareLinkIds));
+        await tx.delete(shareLinksTable).where(inArray(shareLinksTable.patientId, ids));
+        await tx.delete(predictionsTable).where(inArray(predictionsTable.patientId, ids));
+        await tx.delete(protocolAdoptionsTable).where(inArray(protocolAdoptionsTable.patientId, ids));
+        await tx.delete(patientNotesTable).where(inArray(patientNotesTable.patientId, ids));
+        await tx.delete(alertPreferencesTable).where(inArray(alertPreferencesTable.patientId, ids));
+        await tx.delete(stackChangesTable).where(inArray(stackChangesTable.patientId, ids));
+        await tx.delete(baselinesTable).where(inArray(baselinesTable.patientId, ids));
+        await tx.delete(biologicalAgeTable).where(inArray(biologicalAgeTable.patientId, ids));
+        await tx.delete(supplementRecommendationsTable).where(inArray(supplementRecommendationsTable.patientId, ids));
+        await tx.delete(supplementsTable).where(inArray(supplementsTable.patientId, ids));
+        await tx.delete(alertsTable).where(inArray(alertsTable.patientId, ids));
+        await tx.delete(gaugesTable).where(inArray(gaugesTable.patientId, ids));
+        await tx.delete(interpretationsTable).where(inArray(interpretationsTable.patientId, ids));
+        await tx.delete(biomarkerResultsTable).where(inArray(biomarkerResultsTable.patientId, ids));
+        await tx.delete(extractedDataTable).where(inArray(extractedDataTable.patientId, ids));
+        await tx.delete(recordsTable).where(inArray(recordsTable.patientId, ids));
+        await tx.delete(auditLogTable).where(inArray(auditLogTable.patientId, ids));
+        // Drop invitations + collaborators that hung off our own patients.
+        // (FK ON DELETE CASCADE on collaborators handles this too, but we're
+        // explicit so the order with patientsTable is unambiguous.)
+        await tx.delete(patientCollaboratorsTable).where(inArray(patientCollaboratorsTable.patientId, ids));
+        await tx.delete(patientInvitationsTable).where(inArray(patientInvitationsTable.patientId, ids));
+        await tx.delete(patientsTable).where(eq(patientsTable.accountId, userId));
+      }
+      // Step 2: walk away from anyone else's shared patients.
+      await tx.delete(patientCollaboratorsTable).where(eq(patientCollaboratorsTable.accountId, userId));
+      // Drop pending invitations addressed to this user's email + invites
+      // we'd authored. The invitations are tokenised so we don't have the
+      // user's email reliably here — we wipe the ones we created instead;
+      // outstanding invites pointed AT us will simply expire.
+      await tx.delete(patientInvitationsTable).where(eq(patientInvitationsTable.invitedByAccountId, userId));
     });
     res.status(204).send();
   } catch (err) {

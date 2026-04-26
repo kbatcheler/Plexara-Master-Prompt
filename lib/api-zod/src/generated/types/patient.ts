@@ -5,6 +5,8 @@
  * Plexara Health Intelligence Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { HealthListItem } from "./healthListItem";
+import type { PatientRelation } from "./patientRelation";
 import type { PatientSex } from "./patientSex";
 
 export interface Patient {
@@ -18,6 +20,49 @@ export interface Patient {
   /** @nullable */
   ethnicity?: string | null;
   isPrimary: boolean;
+  /** @nullable */
+  platformConsentAcceptedAt?: Date | null;
+  /** @nullable */
+  platformConsentVersion?: string | null;
+  /** @nullable */
+  heightCm?: number | null;
+  /** @nullable */
+  weightKg?: string | null;
+  /** @nullable */
+  physicianName?: string | null;
+  /** @nullable */
+  physicianContact?: string | null;
+  /** @nullable */
+  emergencyContactName?: string | null;
+  /** @nullable */
+  emergencyContactPhone?: string | null;
+  /** @nullable */
+  emergencyContactRelationship?: string | null;
+  /** @nullable */
+  allergies?: HealthListItem[] | null;
+  /** @nullable */
+  medications?: HealthListItem[] | null;
+  /** @nullable */
+  conditions?: HealthListItem[] | null;
+  /** @nullable */
+  priorSurgeries?: string | null;
+  /** @nullable */
+  priorHospitalizations?: string | null;
+  /** @nullable */
+  familyHistory?: string | null;
+  /** @nullable */
+  additionalHistory?: string | null;
+  /** @nullable */
+  smokingStatus?: string | null;
+  /** @nullable */
+  alcoholStatus?: string | null;
+  /** @nullable */
+  onboardingTourCompletedAt?: Date | null;
+  /**
+   * How the calling account relates to this patient.
+   * @nullable
+   */
+  relation?: PatientRelation;
   createdAt: Date;
   updatedAt: Date;
 }

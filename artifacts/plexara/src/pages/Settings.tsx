@@ -4,14 +4,15 @@ import { api } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "../hooks/use-toast";
 import { useUser, useClerk } from "@clerk/react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, Loader2, Sun, Moon, Monitor } from "lucide-react";
+import { Download, Trash2, Loader2, Sun, Moon, Monitor, AlertTriangle } from "lucide-react";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,12 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Typed-confirmation gate. The user must type "DELETE" exactly before the
+  // destructive button enables — a tiny but effective brake against
+  // misclicks. Controlled open + reset on every state change so a fresh
+  // dialog always starts blank.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
 
   useEffect(() => {
     if (!patientId) return;
@@ -148,23 +155,62 @@ export default function Settings() {
           <CardDescription>Permanently remove all patients, records, interpretations, alerts, supplements, conversations, and share links associated with {user?.primaryEmailAddress?.emailAddress}.</CardDescription>
         </CardHeader>
         <CardContent>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive" disabled={deleting}>
-                {deleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                Delete all my data
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
+          <Button
+            variant="destructive"
+            disabled={deleting}
+            data-testid="btn-open-delete"
+            onClick={() => { setDeleteConfirm(""); setDeleteOpen(true); }}
+          >
+            {deleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+            Delete all my data
+          </Button>
+          <AlertDialog
+            open={deleteOpen}
+            onOpenChange={(open) => {
+              setDeleteOpen(open);
+              if (!open) setDeleteConfirm("");
+            }}
+          >
+            <AlertDialogContent data-testid="delete-dialog">
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete everything?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This irreversibly removes all data Plexara holds for your account. You will be signed out.
+                <AlertDialogTitle className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-destructive" />
+                  Delete everything?
+                </AlertDialogTitle>
+                <AlertDialogDescription className="space-y-3 text-left">
+                  <span className="block">
+                    This irreversibly removes all patients, records, interpretations,
+                    alerts, supplements, conversations, and share links Plexara
+                    holds for your account. You will be signed out immediately.
+                  </span>
+                  <span className="block font-medium text-foreground">
+                    This action cannot be undone.
+                  </span>
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              <div className="space-y-2 pt-2">
+                <Label htmlFor="delete-confirm" className="text-sm">
+                  Type <span className="font-mono font-semibold">DELETE</span> to confirm
+                </Label>
+                <Input
+                  id="delete-confirm"
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="DELETE"
+                  autoComplete="off"
+                  data-testid="input-delete-confirm"
+                />
+              </div>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Delete forever</AlertDialogAction>
+                <AlertDialogCancel data-testid="btn-cancel-delete">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  disabled={deleteConfirm !== "DELETE" || deleting}
+                  className="bg-destructive hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-testid="btn-confirm-delete"
+                >
+                  Delete forever
+                </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

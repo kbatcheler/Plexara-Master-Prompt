@@ -3,6 +3,20 @@
 ## Overview
 Plexara is a premium health intelligence platform designed to transform raw blood panel data into actionable health insights. Users upload blood panel PDFs or images, which are then processed by AI to extract structured biomarker data. A unique three-lens adversarial interpretation pipeline (using Claude, GPT, and Gemini) analyzes this data, presenting results as intuitive health domain gauges and narrative summaries. The platform prioritizes user privacy through recursive PII stripping and offers dual display modes for patients and clinicians.
 
+Recent additions (V1 polish, April 2026):
+- **Platform consent gate**: `ConsentGate` blocks all routes until the user accepts current platform Terms / Privacy / Disclaimer versions. Acceptance is recorded server-side on the patient row.
+- **Expanded health profile**: 3-step onboarding wizard (basics+body / current state / prior history) plus standalone `/profile` page covering height/weight/physician/allergies/medications/conditions/family history/etc. Profile fields feed `buildHistoryBlock` so the AI sees full context (with PII still stripped).
+- **Account self-service**: `GET /me/export` returns a JSON dump of all patient data. `DELETE /me` with typed-confirmation modal (must type "DELETE") cascades through Phase-1/2/3 tables and signs the user out. Settings page exposes both.
+- **Help / FAQ page** at `/help` reachable from the user menu.
+- **Coach-mark guided tour**: 4-step popover tour on first dashboard visit, persisted via `onboardingTourCompletedAt` on the patient row.
+- **Friend access (magic-link invitations)**:
+  - Schema: `patient_invitations` (token = SHA-256 of 32-byte random; raw returned ONCE) + `patient_collaborators` (UNIQUE (patient_id, account_id)).
+  - Owner-only routes: create/list/revoke invites + list/remove collaborators. Public routes: lookup invite by token + accept (auth required).
+  - Per-patient access checks centralised in `lib/patient-access.ts`: `verifyPatientAccess` (owner OR collaborator, used by all read+write routes) vs `verifyPatientOwner` (owner-only, used by invite/revoke/delete-account/etc).
+  - `GET /patients` now UNIONs owner + collaborator patients and returns each row tagged with `relation: "owner" | "collaborator"`. PatientSwitcher shows a "Shared" badge for collaborator rows.
+  - `/sharing` page (in-UI URL display, no email infra — inviter copies the one-time link) + public `/invitations/:token` accept page.
+- **Mobile pass**: Layout already responsive — `md:hidden` hamburger drawer, NarrativeRail `hidden lg:block`, all page grids `grid-cols-1` at small breakpoints.
+
 Recent additions (Phases 1-4):
 - **Batch upload**: `POST /api/patients/:id/records/batch` accepts up to 10 panels in one request, queued through a per-patient in-memory limiter (max 2 in flight) so we don't bombard the LLM providers. The frontend `UploadZone` shows per-file progress cards with a single global polling effect.
 - **Parallel lenses**: Lens A/B/C now run via `Promise.allSettled` (independent prompts, no chaining). Per-lens progress is persisted to `lensesCompleted` via an atomic SQL `COALESCE(...) + 1` increment, monotonic regardless of completion order.

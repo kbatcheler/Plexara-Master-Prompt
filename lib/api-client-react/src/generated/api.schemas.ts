@@ -10,6 +10,13 @@ export interface HealthStatus {
 }
 
 /**
+ * Generic free-form item used for allergies, medications, conditions.
+ */
+export interface HealthListItem {
+  [key: string]: string | null;
+}
+
+/**
  * @nullable
  */
 export type PatientSex = (typeof PatientSex)[keyof typeof PatientSex] | null;
@@ -18,6 +25,19 @@ export const PatientSex = {
   male: "male",
   female: "female",
   other: "other",
+} as const;
+
+/**
+ * How the calling account relates to this patient.
+ * @nullable
+ */
+export type PatientRelation =
+  | (typeof PatientRelation)[keyof typeof PatientRelation]
+  | null;
+
+export const PatientRelation = {
+  owner: "owner",
+  collaborator: "collaborator",
 } as const;
 
 export interface Patient {
@@ -31,6 +51,49 @@ export interface Patient {
   /** @nullable */
   ethnicity?: string | null;
   isPrimary: boolean;
+  /** @nullable */
+  platformConsentAcceptedAt?: string | null;
+  /** @nullable */
+  platformConsentVersion?: string | null;
+  /** @nullable */
+  heightCm?: number | null;
+  /** @nullable */
+  weightKg?: string | null;
+  /** @nullable */
+  physicianName?: string | null;
+  /** @nullable */
+  physicianContact?: string | null;
+  /** @nullable */
+  emergencyContactName?: string | null;
+  /** @nullable */
+  emergencyContactPhone?: string | null;
+  /** @nullable */
+  emergencyContactRelationship?: string | null;
+  /** @nullable */
+  allergies?: HealthListItem[] | null;
+  /** @nullable */
+  medications?: HealthListItem[] | null;
+  /** @nullable */
+  conditions?: HealthListItem[] | null;
+  /** @nullable */
+  priorSurgeries?: string | null;
+  /** @nullable */
+  priorHospitalizations?: string | null;
+  /** @nullable */
+  familyHistory?: string | null;
+  /** @nullable */
+  additionalHistory?: string | null;
+  /** @nullable */
+  smokingStatus?: string | null;
+  /** @nullable */
+  alcoholStatus?: string | null;
+  /** @nullable */
+  onboardingTourCompletedAt?: string | null;
+  /**
+   * How the calling account relates to this patient.
+   * @nullable
+   */
+  relation?: PatientRelation;
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +143,40 @@ export interface UpdatePatientBody {
   sex?: UpdatePatientBodySex;
   /** @nullable */
   ethnicity?: string | null;
+  /** @nullable */
+  heightCm?: number | null;
+  /** @nullable */
+  weightKg?: string | null;
+  /** @nullable */
+  physicianName?: string | null;
+  /** @nullable */
+  physicianContact?: string | null;
+  /** @nullable */
+  emergencyContactName?: string | null;
+  /** @nullable */
+  emergencyContactPhone?: string | null;
+  /** @nullable */
+  emergencyContactRelationship?: string | null;
+  /** @nullable */
+  allergies?: HealthListItem[] | null;
+  /** @nullable */
+  medications?: HealthListItem[] | null;
+  /** @nullable */
+  conditions?: HealthListItem[] | null;
+  /** @nullable */
+  priorSurgeries?: string | null;
+  /** @nullable */
+  priorHospitalizations?: string | null;
+  /** @nullable */
+  familyHistory?: string | null;
+  /** @nullable */
+  additionalHistory?: string | null;
+  /** @nullable */
+  smokingStatus?: string | null;
+  /** @nullable */
+  alcoholStatus?: string | null;
+  /** @nullable */
+  onboardingTourCompletedAt?: string | null;
 }
 
 export type RecordRecordType =

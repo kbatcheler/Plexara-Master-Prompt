@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { db, geneticProfilesTable, geneticVariantsTable, pgsCatalogTable, polygenicScoresTable, patientsTable, auditLogTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 import { ObjectStorageService } from "../lib/objectStorage";
 import { logger } from "../lib/logger";
 import {
@@ -14,7 +15,7 @@ import {
   computePolygenicScore,
   persistScore,
 } from "../lib/genetics";
-import { runGeneticsInterpretation, computeAgeRange, type PatientContext } from "../lib/ai";
+import { runGeneticsInterpretation, buildPatientContext, type PatientContext } from "../lib/ai";
 import { isProviderAllowed } from "../lib/consent";
 
 const router = Router({ mergeParams: true });
@@ -31,9 +32,11 @@ const upload = multer({
   },
 });
 
+/* Genetics is part of the shared "view this patient" surface — owners and
+   active collaborators can both upload/view/score variants. Owner-only
+   gates (e.g. invite a new collaborator) live elsewhere. */
 async function verifyOwnership(patientId: number, userId: string): Promise<boolean> {
-  const [p] = await db.select().from(patientsTable).where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
-  return !!p;
+  return verifyPatientAccess(patientId, userId);
 }
 
 // GET /pgs-catalog
@@ -238,11 +241,7 @@ router.post("/:profileId/interpret", requireAuth, async (req, res): Promise<void
     return;
   }
   const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
-  const patientCtx: PatientContext = {
-    ageRange: computeAgeRange(patient?.dateOfBirth),
-    sex: patient?.sex || null,
-    ethnicity: patient?.ethnicity || null,
-  };
+  const patientCtx: PatientContext = buildPatientContext(patient);
 
   await ensureCatalogSeeded();
   const catalog = await db.select().from(pgsCatalogTable);

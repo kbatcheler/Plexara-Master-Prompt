@@ -29,6 +29,11 @@ import wearablesRouter, { wearablesPatientRouter } from "./wearables";
 import trendsRouter from "./trends";
 import safetyRouter from "./safety";
 import devAuthRouter from "./dev-auth";
+import {
+  patientInvitationsRouter,
+  patientCollaboratorsRouter,
+  publicInvitationsRouter,
+} from "./invitations";
 
 const router: IRouter = Router();
 
@@ -69,5 +74,8 @@ router.use("/patients/:patientId/wearables", wearablesPatientRouter);
 router.use("/patients/:patientId/trends", trendsRouter);
 router.use("/patients/:patientId/safety", safetyRouter);
 router.use("/dev-auth", devAuthRouter);
+router.use("/patients/:patientId/invitations", patientInvitationsRouter);
+router.use("/patients/:patientId/collaborators", patientCollaboratorsRouter);
+router.use("/invitations", publicInvitationsRouter);
 
 export default router;

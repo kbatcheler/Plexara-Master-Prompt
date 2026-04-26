@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import {
@@ -21,7 +22,7 @@ import {
 } from "../lib/phi-crypto";
 import {
   runComprehensiveReport,
-  computeAgeRange,
+  buildPatientContext,
   type PatientContext,
   type ReconciledOutput,
   type BiomarkerHistoryEntry,
@@ -32,11 +33,16 @@ import { sanitizeFreeText } from "../lib/imaging-interpretation";
 
 const router = Router({ mergeParams: true });
 
-async function getOwnedPatient(patientId: number, userId: string) {
+/* Returns the patient row if the caller is an owner OR an active
+   collaborator. Used by both read- and write-style endpoints in this
+   file because comprehensive-report generation is part of the shared
+   "view this patient" surface. */
+async function getAccessiblePatient(patientId: number, userId: string) {
+  if (!(await verifyPatientAccess(patientId, userId))) return undefined;
   const [patient] = await db
     .select()
     .from(patientsTable)
-    .where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
+    .where(eq(patientsTable.id, patientId));
   return patient;
 }
 
@@ -172,7 +178,7 @@ export async function buildReportInputs(patientId: number) {
 router.post("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId as string);
-  const patient = await getOwnedPatient(patientId, userId);
+  const patient = await getAccessiblePatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
     return;
@@ -194,11 +200,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       return;
     }
 
-    const ctx: PatientContext = {
-      ageRange: computeAgeRange(patient.dateOfBirth),
-      sex: patient.sex || null,
-      ethnicity: patient.ethnicity || null,
-    };
+    const ctx: PatientContext = buildPatientContext(patient);
 
     const report = await runComprehensiveReport({
       patientCtx: ctx,
@@ -259,7 +261,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 router.get("/latest", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt(req.params.patientId as string);
-  const patient = await getOwnedPatient(patientId, userId);
+  const patient = await getAccessiblePatient(patientId, userId);
   if (!patient) {
     res.status(404).json({ error: "Patient not found" });
     return;

@@ -7,8 +7,9 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 import { stripPII, hashData } from "../lib/pii";
-import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext, type ReconciledOutput, type BiomarkerHistoryEntry } from "../lib/ai";
+import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, buildPatientContext, type AnonymisedData, type PatientContext, type ReconciledOutput, type BiomarkerHistoryEntry } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
@@ -100,15 +101,6 @@ function inferMimeFromFileName(fileName: string): string {
     case ".json": return "application/json";
     default: return "application/octet-stream";
   }
-}
-
-async function verifyPatientOwnership(patientId: number, userId: string): Promise<boolean> {
-  const { patientsTable: pt } = await import("@workspace/db");
-  const [patient] = await db
-    .select()
-    .from(pt)
-    .where(and(eq(pt.id, patientId), eq(pt.accountId, userId)));
-  return !!patient;
 }
 
 // Record types where extraction MUST yield biomarker rows for the result to
@@ -305,11 +297,7 @@ async function runInterpretationPipeline(
 
   const { patientsTable: pt } = await import("@workspace/db");
   const [patient] = await db.select().from(pt).where(eq(pt.id, patientId));
-  const patientCtx: PatientContext = {
-    ageRange: computeAgeRange(patient?.dateOfBirth),
-    sex: patient?.sex || null,
-    ethnicity: patient?.ethnicity || null,
-  };
+  const patientCtx: PatientContext = buildPatientContext(patient);
 
   // Phase 3a: load anonymised history before running the lenses so each
   // analyst can interpret trajectories instead of point-in-time only.
@@ -655,7 +643,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));
   
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }
@@ -686,7 +674,7 @@ router.post(
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));
   
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }
@@ -946,7 +934,7 @@ router.post(
     const { userId } = req as AuthenticatedRequest;
     const patientId = parseInt(req.params.patientId as string);
 
-    if (!(await verifyPatientOwnership(patientId, userId))) {
+    if (!(await verifyPatientAccess(patientId, userId))) {
       res.status(404).json({ error: "Patient not found" });
       return;
     }
@@ -1021,7 +1009,7 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
   const patientId = parseInt((req.params.patientId as string));
   const recordId = parseInt((req.params.recordId as string));
   
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }
@@ -1077,7 +1065,7 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
   const patientId = parseInt((req.params.patientId as string));
   const recordId = parseInt((req.params.recordId as string));
   
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }
@@ -1128,7 +1116,7 @@ router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void>
   const patientId = parseInt((req.params.patientId as string));
   const recordId = parseInt((req.params.recordId as string));
 
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }

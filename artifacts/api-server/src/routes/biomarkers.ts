@@ -3,17 +3,9 @@ import { db } from "@workspace/db";
 import { biomarkerResultsTable, biomarkerReferenceTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 
 const router = Router({ mergeParams: true });
-
-async function verifyPatientOwnership(patientId: number, userId: string): Promise<boolean> {
-  const { patientsTable } = await import("@workspace/db");
-  const [patient] = await db
-    .select()
-    .from(patientsTable)
-    .where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
-  return !!patient;
-}
 
 export const biomarkerResultsRouter = Router({ mergeParams: true });
 
@@ -21,7 +13,7 @@ biomarkerResultsRouter.get("/", requireAuth, async (req, res): Promise<void> => 
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));
   
-  if (!(await verifyPatientOwnership(patientId, userId))) {
+  if (!(await verifyPatientAccess(patientId, userId))) {
     res.status(404).json({ error: "Patient not found" });
     return;
   }

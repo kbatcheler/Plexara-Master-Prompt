@@ -16,7 +16,7 @@ import { and, eq, desc, asc, isNotNull, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { runImagingInterpretation } from "./imaging-interpretation";
 import {
-  computeAgeRange,
+  buildPatientContext,
   runCrossRecordCorrelation,
   runComprehensiveReport,
   runSupplementRecommendations,
@@ -125,11 +125,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   await db.execute(sql`SELECT pg_advisory_lock(${ADVISORY_LOCK_NAMESPACE}, ${patientId})`);
   try {
 
-  const ctx: PatientContext = {
-    ageRange: computeAgeRange(patient.dateOfBirth),
-    sex: patient.sex || null,
-    ethnicity: patient.ethnicity || null,
-  };
+  const ctx: PatientContext = buildPatientContext(patient);
 
   const allowAnthropic = await isProviderAllowed(patient.accountId, "anthropic");
 

@@ -33,6 +33,57 @@ export const ListPatientsResponseItem = zod.object({
     .nullish(),
   ethnicity: zod.string().nullish(),
   isPrimary: zod.boolean(),
+  platformConsentAcceptedAt: zod.coerce.date().nullish(),
+  platformConsentVersion: zod.string().nullish(),
+  heightCm: zod.number().nullish(),
+  weightKg: zod.string().nullish(),
+  physicianName: zod.string().nullish(),
+  physicianContact: zod.string().nullish(),
+  emergencyContactName: zod.string().nullish(),
+  emergencyContactPhone: zod.string().nullish(),
+  emergencyContactRelationship: zod.string().nullish(),
+  allergies: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  medications: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  conditions: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  priorSurgeries: zod.string().nullish(),
+  priorHospitalizations: zod.string().nullish(),
+  familyHistory: zod.string().nullish(),
+  additionalHistory: zod.string().nullish(),
+  smokingStatus: zod.string().nullish(),
+  alcoholStatus: zod.string().nullish(),
+  onboardingTourCompletedAt: zod.coerce.date().nullish(),
+  relation: zod
+    .union([
+      zod.literal("owner"),
+      zod.literal("collaborator"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("How the calling account relates to this patient."),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -77,6 +128,57 @@ export const GetPatientResponse = zod.object({
     .nullish(),
   ethnicity: zod.string().nullish(),
   isPrimary: zod.boolean(),
+  platformConsentAcceptedAt: zod.coerce.date().nullish(),
+  platformConsentVersion: zod.string().nullish(),
+  heightCm: zod.number().nullish(),
+  weightKg: zod.string().nullish(),
+  physicianName: zod.string().nullish(),
+  physicianContact: zod.string().nullish(),
+  emergencyContactName: zod.string().nullish(),
+  emergencyContactPhone: zod.string().nullish(),
+  emergencyContactRelationship: zod.string().nullish(),
+  allergies: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  medications: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  conditions: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  priorSurgeries: zod.string().nullish(),
+  priorHospitalizations: zod.string().nullish(),
+  familyHistory: zod.string().nullish(),
+  additionalHistory: zod.string().nullish(),
+  smokingStatus: zod.string().nullish(),
+  alcoholStatus: zod.string().nullish(),
+  onboardingTourCompletedAt: zod.coerce.date().nullish(),
+  relation: zod
+    .union([
+      zod.literal("owner"),
+      zod.literal("collaborator"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("How the calling account relates to this patient."),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -100,6 +202,47 @@ export const UpdatePatientBody = zod.object({
     ])
     .nullish(),
   ethnicity: zod.string().nullish(),
+  heightCm: zod.number().nullish(),
+  weightKg: zod.string().nullish(),
+  physicianName: zod.string().nullish(),
+  physicianContact: zod.string().nullish(),
+  emergencyContactName: zod.string().nullish(),
+  emergencyContactPhone: zod.string().nullish(),
+  emergencyContactRelationship: zod.string().nullish(),
+  allergies: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  medications: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  conditions: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  priorSurgeries: zod.string().nullish(),
+  priorHospitalizations: zod.string().nullish(),
+  familyHistory: zod.string().nullish(),
+  additionalHistory: zod.string().nullish(),
+  smokingStatus: zod.string().nullish(),
+  alcoholStatus: zod.string().nullish(),
+  onboardingTourCompletedAt: zod.coerce.date().nullish(),
 });
 
 export const UpdatePatientResponse = zod.object({
@@ -117,6 +260,57 @@ export const UpdatePatientResponse = zod.object({
     .nullish(),
   ethnicity: zod.string().nullish(),
   isPrimary: zod.boolean(),
+  platformConsentAcceptedAt: zod.coerce.date().nullish(),
+  platformConsentVersion: zod.string().nullish(),
+  heightCm: zod.number().nullish(),
+  weightKg: zod.string().nullish(),
+  physicianName: zod.string().nullish(),
+  physicianContact: zod.string().nullish(),
+  emergencyContactName: zod.string().nullish(),
+  emergencyContactPhone: zod.string().nullish(),
+  emergencyContactRelationship: zod.string().nullish(),
+  allergies: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  medications: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  conditions: zod
+    .array(
+      zod
+        .record(zod.string(), zod.string().nullable())
+        .describe(
+          "Generic free-form item used for allergies, medications, conditions.",
+        ),
+    )
+    .nullish(),
+  priorSurgeries: zod.string().nullish(),
+  priorHospitalizations: zod.string().nullish(),
+  familyHistory: zod.string().nullish(),
+  additionalHistory: zod.string().nullish(),
+  smokingStatus: zod.string().nullish(),
+  alcoholStatus: zod.string().nullish(),
+  onboardingTourCompletedAt: zod.coerce.date().nullish(),
+  relation: zod
+    .union([
+      zod.literal("owner"),
+      zod.literal("collaborator"),
+      zod.literal(null),
+    ])
+    .nullish()
+    .describe("How the calling account relates to this patient."),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -512,6 +706,57 @@ export const GetDashboardResponse = zod.object({
       .nullish(),
     ethnicity: zod.string().nullish(),
     isPrimary: zod.boolean(),
+    platformConsentAcceptedAt: zod.coerce.date().nullish(),
+    platformConsentVersion: zod.string().nullish(),
+    heightCm: zod.number().nullish(),
+    weightKg: zod.string().nullish(),
+    physicianName: zod.string().nullish(),
+    physicianContact: zod.string().nullish(),
+    emergencyContactName: zod.string().nullish(),
+    emergencyContactPhone: zod.string().nullish(),
+    emergencyContactRelationship: zod.string().nullish(),
+    allergies: zod
+      .array(
+        zod
+          .record(zod.string(), zod.string().nullable())
+          .describe(
+            "Generic free-form item used for allergies, medications, conditions.",
+          ),
+      )
+      .nullish(),
+    medications: zod
+      .array(
+        zod
+          .record(zod.string(), zod.string().nullable())
+          .describe(
+            "Generic free-form item used for allergies, medications, conditions.",
+          ),
+      )
+      .nullish(),
+    conditions: zod
+      .array(
+        zod
+          .record(zod.string(), zod.string().nullable())
+          .describe(
+            "Generic free-form item used for allergies, medications, conditions.",
+          ),
+      )
+      .nullish(),
+    priorSurgeries: zod.string().nullish(),
+    priorHospitalizations: zod.string().nullish(),
+    familyHistory: zod.string().nullish(),
+    additionalHistory: zod.string().nullish(),
+    smokingStatus: zod.string().nullish(),
+    alcoholStatus: zod.string().nullish(),
+    onboardingTourCompletedAt: zod.coerce.date().nullish(),
+    relation: zod
+      .union([
+        zod.literal("owner"),
+        zod.literal("collaborator"),
+        zod.literal(null),
+      ])
+      .nullish()
+      .describe("How the calling account relates to this patient."),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),

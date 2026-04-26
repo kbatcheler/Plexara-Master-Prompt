@@ -17,8 +17,16 @@ import Timeline from "./pages/Timeline";
 import BiologicalAge from "./pages/BiologicalAge";
 import Supplements from "./pages/Supplements";
 import Onboarding from "./pages/Onboarding";
+import HealthProfile from "./pages/HealthProfile";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
+import Disclaimer from "./pages/Disclaimer";
+import { ConsentGate } from "./components/ConsentGate";
 import NotFound from "./pages/not-found";
 import Settings from "./pages/Settings";
+import Help from "./pages/Help";
+import Sharing from "./pages/Sharing";
+import AcceptInvite from "./pages/AcceptInvite";
 import Audit from "./pages/Audit";
 import Share from "./pages/Share";
 import SharedView from "./pages/SharedView";
@@ -90,13 +98,19 @@ function SignedOutRedirect() {
   return <RedirectToSignIn />;
 }
 
+// Wraps OnboardingGate (creates a patient if missing) with ConsentGate
+// (blocks until the user accepts the current legal/medical bundle). Order
+// matters: we need a patient row to record consent against, so onboarding
+// runs first, then the consent gate, then the actual page.
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   if (DEV_BYPASS_ENABLED && isDevSignedIn()) {
     return (
       <OnboardingGate>
-        <Layout>
-          <Component />
-        </Layout>
+        <ConsentGate>
+          <Layout>
+            <Component />
+          </Layout>
+        </ConsentGate>
       </OnboardingGate>
     );
   }
@@ -104,9 +118,11 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
     <>
       <Show when="signed-in">
         <OnboardingGate>
-          <Layout>
-            <Component />
-          </Layout>
+          <ConsentGate>
+            <Layout>
+              <Component />
+            </Layout>
+          </ConsentGate>
         </OnboardingGate>
       </Show>
       <Show when="signed-out">
@@ -167,6 +183,13 @@ function ClerkProviderWithRoutes() {
                 <Route path="/share/:token" component={SharedView} />
                 <Route path="/sign-in/*?" component={SignInPage} />
                 <Route path="/sign-up/*?" component={SignUpPage} />
+                {/* Legal pages are deliberately outside ProtectedRoute so the
+                    user can read them from inside ConsentGate (target="_blank"),
+                    from the sign-in / sign-up screens, and from the public
+                    share view. They render without the app chrome. */}
+                <Route path="/terms" component={Terms} />
+                <Route path="/privacy" component={Privacy} />
+                <Route path="/disclaimer" component={Disclaimer} />
                 {DEV_BYPASS_ENABLED && (
                   <Route path="/dev-login" component={DevSignIn} />
                 )}
@@ -186,7 +209,11 @@ function ClerkProviderWithRoutes() {
                 <Route path="/protocols"><ProtectedRoute component={Protocols} /></Route>
                 <Route path="/chat"><ProtectedRoute component={Chat} /></Route>
                 <Route path="/share-portal"><ProtectedRoute component={Share} /></Route>
+                <Route path="/profile"><ProtectedRoute component={HealthProfile} /></Route>
                 <Route path="/settings"><ProtectedRoute component={Settings} /></Route>
+                <Route path="/help"><ProtectedRoute component={Help} /></Route>
+                <Route path="/sharing"><ProtectedRoute component={Sharing} /></Route>
+                <Route path="/invitations/:token" component={AcceptInvite} />
                 <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
                 <Route path="/report"><ProtectedRoute component={Report} /></Route>
                 <Route path="/reports/:id"><ProtectedRoute component={Report} /></Route>

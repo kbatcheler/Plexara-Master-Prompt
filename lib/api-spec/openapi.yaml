@@ -535,6 +535,12 @@ components:
       required:
         - status
 
+    HealthListItem:
+      type: object
+      description: Generic free-form item used for allergies, medications, conditions.
+      additionalProperties:
+        type: ["string", "null"]
+
     Patient:
       type: object
       properties:
@@ -553,6 +559,56 @@ components:
           type: ["string", "null"]
         isPrimary:
           type: boolean
+        platformConsentAcceptedAt:
+          type: ["string", "null"]
+          format: date-time
+        platformConsentVersion:
+          type: ["string", "null"]
+        heightCm:
+          type: ["integer", "null"]
+        weightKg:
+          type: ["string", "null"]
+        physicianName:
+          type: ["string", "null"]
+        physicianContact:
+          type: ["string", "null"]
+        emergencyContactName:
+          type: ["string", "null"]
+        emergencyContactPhone:
+          type: ["string", "null"]
+        emergencyContactRelationship:
+          type: ["string", "null"]
+        allergies:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        medications:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        conditions:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        priorSurgeries:
+          type: ["string", "null"]
+        priorHospitalizations:
+          type: ["string", "null"]
+        familyHistory:
+          type: ["string", "null"]
+        additionalHistory:
+          type: ["string", "null"]
+        smokingStatus:
+          type: ["string", "null"]
+        alcoholStatus:
+          type: ["string", "null"]
+        onboardingTourCompletedAt:
+          type: ["string", "null"]
+          format: date-time
+        relation:
+          type: ["string", "null"]
+          enum: [owner, collaborator, null]
+          description: How the calling account relates to this patient.
         createdAt:
           type: string
           format: date-time
@@ -594,6 +650,47 @@ components:
           enum: [male, female, other, null]
         ethnicity:
           type: ["string", "null"]
+        heightCm:
+          type: ["integer", "null"]
+        weightKg:
+          type: ["string", "null"]
+        physicianName:
+          type: ["string", "null"]
+        physicianContact:
+          type: ["string", "null"]
+        emergencyContactName:
+          type: ["string", "null"]
+        emergencyContactPhone:
+          type: ["string", "null"]
+        emergencyContactRelationship:
+          type: ["string", "null"]
+        allergies:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        medications:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        conditions:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/HealthListItem"
+        priorSurgeries:
+          type: ["string", "null"]
+        priorHospitalizations:
+          type: ["string", "null"]
+        familyHistory:
+          type: ["string", "null"]
+        additionalHistory:
+          type: ["string", "null"]
+        smokingStatus:
+          type: ["string", "null"]
+        alcoholStatus:
+          type: ["string", "null"]
+        onboardingTourCompletedAt:
+          type: ["string", "null"]
+          format: date-time
 
     Record:
       type: object

@@ -10,11 +10,12 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, isNotNull, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 import { pickAllowed } from "../lib/pickAllowed";
 import { decryptJson } from "../lib/phi-crypto";
 import {
   runSupplementRecommendations,
-  computeAgeRange,
+  buildPatientContext,
   type ReconciledOutput,
   type PatientContext,
 } from "../lib/ai";
@@ -97,11 +98,14 @@ function desiredDirectionFor(name: string): "higher" | "lower" | "neutral" {
   return "neutral";
 }
 
+/* Owner OR active collaborator may view + manage the patient's supplement
+   stack. (Owner-only operations don't live in this file.) */
 async function getPatient(patientId: number, userId: string) {
+  if (!(await verifyPatientAccess(patientId, userId))) return undefined;
   const [patient] = await db
     .select()
     .from(patientsTable)
-    .where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
+    .where(eq(patientsTable.id, patientId));
   return patient;
 }
 
@@ -467,11 +471,7 @@ router.post("/recommendations/generate", requireAuth, async (req, res): Promise<
       .from(supplementsTable)
       .where(and(eq(supplementsTable.patientId, patientId), eq(supplementsTable.active, true)));
 
-    const ctx: PatientContext = {
-      ageRange: computeAgeRange(patient.dateOfBirth),
-      sex: patient.sex,
-      ethnicity: patient.ethnicity,
-    };
+    const ctx: PatientContext = buildPatientContext(patient);
 
     const output = await runSupplementRecommendations(
       reconciled,

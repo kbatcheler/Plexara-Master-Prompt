@@ -6,10 +6,11 @@ import { devSignOut } from "../../lib/dev-auth";
 import { cn } from "@/lib/utils";
 import {
   LogOut, Settings as SettingsIcon, ChevronDown, Menu, X,
-  LayoutDashboard, FileText, Sparkles, HeartPulse, MessageSquare,
+  LayoutDashboard, FileText, Sparkles, HeartPulse, MessageSquare, HelpCircle, Users,
 } from "lucide-react";
 import { PatientSwitcher } from "./PatientSwitcher";
 import { NarrativeRail } from "./NarrativeRail";
+import { GuidedTour } from "../GuidedTour";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel,
@@ -207,8 +208,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">Account</DropdownMenuLabel>
                 <DropdownMenuItem asChild>
+                  <Link href="/profile" className="flex items-center gap-2 cursor-pointer" data-testid="menu-profile">
+                    <SettingsIcon className="w-3.5 h-3.5" /> Health profile
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
                   <Link href="/settings" className="flex items-center gap-2 cursor-pointer">
                     <SettingsIcon className="w-3.5 h-3.5" /> Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/help" className="flex items-center gap-2 cursor-pointer" data-testid="menu-help">
+                    <HelpCircle className="w-3.5 h-3.5" /> Help &amp; FAQ
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/sharing" className="flex items-center gap-2 cursor-pointer" data-testid="menu-sharing">
+                    <Users className="w-3.5 h-3.5" /> Friend access
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild><Link href="/consents" className="cursor-pointer">Consent &amp; data control</Link></DropdownMenuItem>
@@ -296,12 +312,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <NarrativeRail />
       </div>
 
-      {/* Slim, muted disclaimer footer — present but not anxiety-inducing. */}
+      {/* Coach-mark guided tour: shows itself once on first dashboard visit
+          based on patient.onboardingTourCompletedAt, then never again. */}
+      <GuidedTour />
+
+      {/* Slim, muted disclaimer footer — present but not anxiety-inducing.
+          Legal links live here so users can review the bundle they accepted
+          at any time, not just at sign-up. */}
       <footer className="border-t border-border bg-card">
-        <div className="mx-auto max-w-[1280px] px-6 md:px-8 lg:px-12 py-4">
-          <p className="text-xs text-muted-foreground leading-relaxed">
+        <div className="mx-auto max-w-[1280px] px-6 md:px-8 lg:px-12 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <p className="text-xs text-muted-foreground leading-relaxed flex-1">
             Plexara provides AI-generated health interpretations for informational purposes only. These are not medical diagnoses — always consult a qualified healthcare professional before making health decisions.
           </p>
+          <nav className="flex items-center gap-4 text-xs">
+            <Link href="/disclaimer" className="text-muted-foreground hover:text-foreground" data-testid="footer-disclaimer">Disclaimer</Link>
+            <Link href="/terms" className="text-muted-foreground hover:text-foreground" data-testid="footer-terms">Terms</Link>
+            <Link href="/privacy" className="text-muted-foreground hover:text-foreground" data-testid="footer-privacy">Privacy</Link>
+            <Link href="/help" className="text-muted-foreground hover:text-foreground" data-testid="footer-help">Help</Link>
+          </nav>
         </div>
       </footer>
     </div>

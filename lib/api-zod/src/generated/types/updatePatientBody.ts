@@ -5,6 +5,7 @@
  * Plexara Health Intelligence Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { HealthListItem } from "./healthListItem";
 import type { UpdatePatientBodySex } from "./updatePatientBodySex";
 
 export interface UpdatePatientBody {
@@ -16,4 +17,38 @@ export interface UpdatePatientBody {
   sex?: UpdatePatientBodySex;
   /** @nullable */
   ethnicity?: string | null;
+  /** @nullable */
+  heightCm?: number | null;
+  /** @nullable */
+  weightKg?: string | null;
+  /** @nullable */
+  physicianName?: string | null;
+  /** @nullable */
+  physicianContact?: string | null;
+  /** @nullable */
+  emergencyContactName?: string | null;
+  /** @nullable */
+  emergencyContactPhone?: string | null;
+  /** @nullable */
+  emergencyContactRelationship?: string | null;
+  /** @nullable */
+  allergies?: HealthListItem[] | null;
+  /** @nullable */
+  medications?: HealthListItem[] | null;
+  /** @nullable */
+  conditions?: HealthListItem[] | null;
+  /** @nullable */
+  priorSurgeries?: string | null;
+  /** @nullable */
+  priorHospitalizations?: string | null;
+  /** @nullable */
+  familyHistory?: string | null;
+  /** @nullable */
+  additionalHistory?: string | null;
+  /** @nullable */
+  smokingStatus?: string | null;
+  /** @nullable */
+  alcoholStatus?: string | null;
+  /** @nullable */
+  onboardingTourCompletedAt?: Date | null;
 }

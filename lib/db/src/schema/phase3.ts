@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, jsonb, boolean, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, jsonb, boolean, real, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { patientsTable } from "./patients";
@@ -141,3 +141,66 @@ export type Prediction = typeof predictionsTable.$inferSelect;
 
 export type Protocol = typeof protocolsTable.$inferSelect;
 export type ProtocolAdoption = typeof protocolAdoptionsTable.$inferSelect;
+
+/* ── Friend access: invitations + collaborators ──────────────────────────
+   The owner of a patient profile (the account that created it) can invite
+   another person — typically a spouse, parent, adult child, or carer — to
+   view and contribute to that patient's profile. Invitations are issued as
+   single-use magic links: a raw 32-byte token sent in the URL, with only
+   its SHA-256 hash persisted here. Once accepted, a row in
+   patient_collaborators links the accepting account to the patient. The
+   owner can revoke either the pending invitation or the active
+   collaborator at any time. */
+
+export const patientInvitationsTable = pgTable("patient_invitations", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  // Account that sent the invite (the patient owner at time of send).
+  invitedByAccountId: text("invited_by_account_id").notNull(),
+  // Email is informational — accepting requires being signed in but does
+  // not require the email to match. We surface it so the owner can see
+  // who they invited and the recipient can confirm before accepting.
+  invitedEmail: text("invited_email").notNull(),
+  // Optional human role label ("spouse", "parent", "carer", "physician").
+  // No security significance in V1 — collaborators all get the same access
+  // as the owner, except they cannot invite or revoke other collaborators.
+  role: text("role"),
+  // SHA-256 hex of the raw token. Same hashing approach as share_links —
+  // the raw token never persists.
+  tokenHash: text("token_hash").notNull().unique(),
+  status: text("status").notNull().default("pending"), // pending | accepted | revoked | expired
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedByAccountId: text("accepted_by_account_id"),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const patientCollaboratorsTable = pgTable(
+  "patient_collaborators",
+  {
+    id: serial("id").primaryKey(),
+    patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+    accountId: text("account_id").notNull(),
+    role: text("role"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    invitedByAccountId: text("invited_by_account_id"),
+  },
+  /* The (patient_id, account_id) pair must be unique so a single account
+     can never end up as two collaborators on the same patient — this is
+     also what gives invitations.ts `.onConflictDoNothing()` a real target
+     to deduplicate against on retried accepts. */
+  (t) => ({
+    patientAccountUnique: uniqueIndex("patient_collaborators_patient_account_uniq").on(t.patientId, t.accountId),
+  }),
+);
+
+export const insertPatientInvitationSchema = createInsertSchema(patientInvitationsTable).omit({
+  id: true, createdAt: true, status: true, acceptedAt: true, acceptedByAccountId: true, revokedAt: true,
+});
+export type InsertPatientInvitation = z.infer<typeof insertPatientInvitationSchema>;
+export type PatientInvitation = typeof patientInvitationsTable.$inferSelect;
+
+export const insertPatientCollaboratorSchema = createInsertSchema(patientCollaboratorsTable).omit({ id: true, joinedAt: true });
+export type InsertPatientCollaborator = z.infer<typeof insertPatientCollaboratorSchema>;
+export type PatientCollaborator = typeof patientCollaboratorsTable.$inferSelect;

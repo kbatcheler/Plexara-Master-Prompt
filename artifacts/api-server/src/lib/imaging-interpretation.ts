@@ -6,7 +6,7 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { logger } from "./logger";
 import {
   parseJSONFromLLM,
-  computeAgeRange,
+  buildPatientContext,
   type LensOutput,
   type ReconciledOutput,
 } from "./ai";
@@ -432,11 +432,7 @@ export async function runImagingInterpretation(studyId: number): Promise<Imaging
       sliceThickness: study.sliceThickness,
       pixelSpacing: study.pixelSpacing,
     },
-    patient: {
-      ageRange: computeAgeRange(patient.dateOfBirth),
-      sex: patient.sex || null,
-      ethnicity: patient.ethnicity || null,
-    },
+    patient: buildPatientContext(patient),
     recentBiomarkers: biomarkers,
     biomarkerContextNote:
       biomarkers.length === 0
