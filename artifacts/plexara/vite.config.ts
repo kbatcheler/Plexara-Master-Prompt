@@ -58,6 +58,14 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },
+  // The Cornerstone DICOM image-loader spawns code-split web workers (lazy
+  // codec chunks for JPEG/JPEG2000/JPEG-LS/HTJ2K). Vite defaults workers to
+  // the legacy IIFE output format, which Rollup refuses to use with
+  // code-splitting. Switching workers to ES modules is the fix — every
+  // browser we target supports module workers.
+  worker: {
+    format: "es",
+  },
   server: {
     port,
     host: "0.0.0.0",
