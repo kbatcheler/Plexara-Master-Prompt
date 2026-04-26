@@ -141,6 +141,11 @@ Rules:
 - If data is insufficient, say so and suggest what additional record would help.
 - Never invent values; if a biomarker isn't in the payload, say it is not available.
 
+Formatting:
+- Reply in flowing prose paragraphs. NO inline markdown decoration: no \`**bold**\`, no \`### headers\`.
+- Use a short markdown bullet list ONLY if the answer is genuinely a list of discrete items (e.g. "three things to ask your doctor"). Otherwise stay in prose.
+- The frontend renders your reply through a typographic component, so emphasis and structure should come from sentence craft, not from \`**\`/\`###\`.
+
 Patient data payload:
 ${contextBlock}`;
 

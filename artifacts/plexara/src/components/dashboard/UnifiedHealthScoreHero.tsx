@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Anchor, ArrowUp, ArrowDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import AINarrative from "@/components/AINarrative";
 
 interface BaselineDelta {
   baselineScore: number;
@@ -190,24 +191,23 @@ export function UnifiedHealthScoreHero({
             )}
           </div>
 
-          {/* Narrative — Newsreader serif for patient mode, mono for clinician */}
-          <p
-            className={cn(
-              "mt-3 leading-relaxed text-foreground/85",
-              mode === "patient" ? "font-serif text-[17px]" : "font-mono text-sm",
+          {/* Narrative — rendered via the canonical AI narrative renderer for
+              consistent typography (no raw `**` or `###` artifacts ever). */}
+          <div className="mt-3" data-testid="hero-narrative">
+            {narrative ? (
+              <AINarrative
+                text={narrative}
+                variant={mode === "patient" ? "serif" : "clinical"}
+                dropcap={mode === "patient"}
+              />
+            ) : (
+              <p className="italic text-muted-foreground text-sm">
+                {mode === "patient"
+                  ? "Your narrative will appear here once we've analysed your first record."
+                  : "Awaiting clinical synthesis."}
+              </p>
             )}
-            data-testid="hero-narrative"
-          >
-            {narrative
-              ? narrative
-              : (
-                <span className="italic text-muted-foreground">
-                  {mode === "patient"
-                    ? "Your narrative will appear here once we've analysed your first record."
-                    : "Awaiting clinical synthesis."}
-                </span>
-              )}
-          </p>
+          </div>
 
           {/* Meta line */}
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">

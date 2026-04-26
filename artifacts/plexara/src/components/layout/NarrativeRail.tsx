@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 import { Sparkles, ChevronRight, ChevronLeft, FileText, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
+import AINarrative from "@/components/AINarrative";
 
 interface LatestInterpretation {
   id: number;
@@ -200,9 +201,10 @@ export function NarrativeRail() {
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
                 {mode === "clinician" ? "Clinical narrative" : "Plain-English summary"}
               </div>
-              <p className="text-xs leading-relaxed text-foreground whitespace-pre-wrap">
-                {narrative ?? "Narrative not available for this mode."}
-              </p>
+              <AINarrative
+                text={narrative}
+                variant={mode === "clinician" ? "clinical" : "compact"}
+              />
             </div>
 
             {data.urgentFlags?.length > 0 && (

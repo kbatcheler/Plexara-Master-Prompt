@@ -31,6 +31,31 @@ type DraftState = {
   emergencyContactName: string;
   emergencyContactPhone: string;
   emergencyContactRelationship: string;
+  // V1.5 — comprehensive demographics on par with mainstream medical apps.
+  // Address & contact
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  stateRegion: string;
+  postalCode: string;
+  country: string;
+  mobilePhone: string;
+  homePhone: string;
+  personalEmail: string;
+  preferredLanguage: string;
+  maritalStatus: string;
+  occupation: string;
+  // Insurance & pharmacy
+  insuranceProvider: string;
+  insurancePlan: string;
+  insuranceMemberId: string;
+  insuranceGroupId: string;
+  pharmacyName: string;
+  pharmacyPhone: string;
+  // Clinical fixed facts
+  bloodType: string;
+  organDonor: boolean | null;
+  medicalRecordNumber: string;
 };
 
 // Single-page profile editor exposing every health-relevant field on the
@@ -63,6 +88,27 @@ export default function HealthProfile() {
     emergencyContactName: patient?.emergencyContactName ?? "",
     emergencyContactPhone: patient?.emergencyContactPhone ?? "",
     emergencyContactRelationship: patient?.emergencyContactRelationship ?? "",
+    addressLine1: patient?.addressLine1 ?? "",
+    addressLine2: patient?.addressLine2 ?? "",
+    city: patient?.city ?? "",
+    stateRegion: patient?.stateRegion ?? "",
+    postalCode: patient?.postalCode ?? "",
+    country: patient?.country ?? "",
+    mobilePhone: patient?.mobilePhone ?? "",
+    homePhone: patient?.homePhone ?? "",
+    personalEmail: patient?.personalEmail ?? "",
+    preferredLanguage: patient?.preferredLanguage ?? "",
+    maritalStatus: patient?.maritalStatus ?? "",
+    occupation: patient?.occupation ?? "",
+    insuranceProvider: patient?.insuranceProvider ?? "",
+    insurancePlan: patient?.insurancePlan ?? "",
+    insuranceMemberId: patient?.insuranceMemberId ?? "",
+    insuranceGroupId: patient?.insuranceGroupId ?? "",
+    pharmacyName: patient?.pharmacyName ?? "",
+    pharmacyPhone: patient?.pharmacyPhone ?? "",
+    bloodType: patient?.bloodType ?? "",
+    organDonor: patient?.organDonor ?? null,
+    medicalRecordNumber: patient?.medicalRecordNumber ?? "",
   }), [patient]);
 
   const [draft, setDraft] = useState<DraftState>(initial);
@@ -110,6 +156,27 @@ export default function HealthProfile() {
           emergencyContactName: draft.emergencyContactName || null,
           emergencyContactPhone: draft.emergencyContactPhone || null,
           emergencyContactRelationship: draft.emergencyContactRelationship || null,
+          addressLine1: draft.addressLine1 || null,
+          addressLine2: draft.addressLine2 || null,
+          city: draft.city || null,
+          stateRegion: draft.stateRegion || null,
+          postalCode: draft.postalCode || null,
+          country: draft.country || null,
+          mobilePhone: draft.mobilePhone || null,
+          homePhone: draft.homePhone || null,
+          personalEmail: draft.personalEmail || null,
+          preferredLanguage: draft.preferredLanguage || null,
+          maritalStatus: draft.maritalStatus || null,
+          occupation: draft.occupation || null,
+          insuranceProvider: draft.insuranceProvider || null,
+          insurancePlan: draft.insurancePlan || null,
+          insuranceMemberId: draft.insuranceMemberId || null,
+          insuranceGroupId: draft.insuranceGroupId || null,
+          pharmacyName: draft.pharmacyName || null,
+          pharmacyPhone: draft.pharmacyPhone || null,
+          bloodType: draft.bloodType || null,
+          organDonor: draft.organDonor,
+          medicalRecordNumber: draft.medicalRecordNumber || null,
         },
       });
       setSavedAt(new Date());
@@ -253,6 +320,152 @@ export default function HealthProfile() {
             </Field>
             <Field label="Relationship">
               <Input data-testid="input-emergency-relationship" value={draft.emergencyContactRelationship} onChange={(e) => set("emergencyContactRelationship", e.target.value)} />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* V1.5 — Address & contact. Never sent to AI; needed for clinical
+          forms, prescriptions, friend-access invites, deliverables. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Address & contact
+            <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
+              <ShieldCheck className="w-3.5 h-3.5" /> Never sent to AI
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field label="Address line 1">
+            <Input data-testid="input-address-1" value={draft.addressLine1} onChange={(e) => set("addressLine1", e.target.value)} />
+          </Field>
+          <Field label="Address line 2" hint="Apt, suite, etc.">
+            <Input data-testid="input-address-2" value={draft.addressLine2} onChange={(e) => set("addressLine2", e.target.value)} />
+          </Field>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Field label="City">
+              <Input data-testid="input-city" value={draft.city} onChange={(e) => set("city", e.target.value)} />
+            </Field>
+            <Field label="State / region">
+              <Input data-testid="input-state" value={draft.stateRegion} onChange={(e) => set("stateRegion", e.target.value)} />
+            </Field>
+            <Field label="Postal code">
+              <Input data-testid="input-postal" value={draft.postalCode} onChange={(e) => set("postalCode", e.target.value)} />
+            </Field>
+            <Field label="Country">
+              <Input data-testid="input-country" value={draft.country} onChange={(e) => set("country", e.target.value)} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Mobile phone">
+              <Input data-testid="input-mobile-phone" type="tel" value={draft.mobilePhone} onChange={(e) => set("mobilePhone", e.target.value)} />
+            </Field>
+            <Field label="Home phone">
+              <Input data-testid="input-home-phone" type="tel" value={draft.homePhone} onChange={(e) => set("homePhone", e.target.value)} />
+            </Field>
+            <Field label="Personal email" hint="Different from your sign-in email if needed.">
+              <Input data-testid="input-personal-email" type="email" value={draft.personalEmail} onChange={(e) => set("personalEmail", e.target.value)} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Preferred language">
+              <Input data-testid="input-language" placeholder="e.g. English" value={draft.preferredLanguage} onChange={(e) => set("preferredLanguage", e.target.value)} />
+            </Field>
+            <Field label="Marital status">
+              <Select value={draft.maritalStatus} onValueChange={(v) => set("maritalStatus", v)}>
+                <SelectTrigger data-testid="select-marital"><SelectValue placeholder="Select..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="single">Single</SelectItem>
+                  <SelectItem value="married">Married</SelectItem>
+                  <SelectItem value="partnered">Partnered</SelectItem>
+                  <SelectItem value="divorced">Divorced</SelectItem>
+                  <SelectItem value="widowed">Widowed</SelectItem>
+                  <SelectItem value="other">Other / Prefer not to say</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Occupation">
+              <Input data-testid="input-occupation" value={draft.occupation} onChange={(e) => set("occupation", e.target.value)} />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Insurance & pharmacy — handy for export to clinicians. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Insurance & pharmacy
+            <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
+              <ShieldCheck className="w-3.5 h-3.5" /> Never sent to AI
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Insurance provider">
+              <Input data-testid="input-insurance-provider" value={draft.insuranceProvider} onChange={(e) => set("insuranceProvider", e.target.value)} />
+            </Field>
+            <Field label="Plan name">
+              <Input data-testid="input-insurance-plan" value={draft.insurancePlan} onChange={(e) => set("insurancePlan", e.target.value)} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Member ID">
+              <Input data-testid="input-insurance-member" value={draft.insuranceMemberId} onChange={(e) => set("insuranceMemberId", e.target.value)} />
+            </Field>
+            <Field label="Group ID">
+              <Input data-testid="input-insurance-group" value={draft.insuranceGroupId} onChange={(e) => set("insuranceGroupId", e.target.value)} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Pharmacy name">
+              <Input data-testid="input-pharmacy-name" value={draft.pharmacyName} onChange={(e) => set("pharmacyName", e.target.value)} />
+            </Field>
+            <Field label="Pharmacy phone">
+              <Input data-testid="input-pharmacy-phone" type="tel" value={draft.pharmacyPhone} onChange={(e) => set("pharmacyPhone", e.target.value)} />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Clinical fixed facts — bloodType + preferredLanguage are the only
+          two fields from this section that buildPatientContext sends to AI
+          (see lib/ai.ts). The rest stays purely on the user's record. */}
+      <Card>
+        <CardHeader><CardTitle>Clinical fixed facts</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Blood type" hint="Shared with the AI to help interpret labs.">
+              <Select value={draft.bloodType} onValueChange={(v) => set("bloodType", v)}>
+                <SelectTrigger data-testid="select-blood-type"><SelectValue placeholder="Unknown" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="A+">A+</SelectItem>
+                  <SelectItem value="A-">A-</SelectItem>
+                  <SelectItem value="B+">B+</SelectItem>
+                  <SelectItem value="B-">B-</SelectItem>
+                  <SelectItem value="AB+">AB+</SelectItem>
+                  <SelectItem value="AB-">AB-</SelectItem>
+                  <SelectItem value="O+">O+</SelectItem>
+                  <SelectItem value="O-">O-</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Organ donor">
+              <Select
+                value={draft.organDonor === null ? "" : draft.organDonor ? "yes" : "no"}
+                onValueChange={(v) => set("organDonor", v === "" ? null : v === "yes")}
+              >
+                <SelectTrigger data-testid="select-organ-donor"><SelectValue placeholder="Prefer not to say" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="yes">Yes</SelectItem>
+                  <SelectItem value="no">No</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Medical record number" hint="Your hospital MRN, if you know it.">
+              <Input data-testid="input-mrn" value={draft.medicalRecordNumber} onChange={(e) => set("medicalRecordNumber", e.target.value)} />
             </Field>
           </div>
         </CardContent>

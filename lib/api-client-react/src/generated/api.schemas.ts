@@ -70,6 +70,48 @@ export interface Patient {
   /** @nullable */
   emergencyContactRelationship?: string | null;
   /** @nullable */
+  addressLine1?: string | null;
+  /** @nullable */
+  addressLine2?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  stateRegion?: string | null;
+  /** @nullable */
+  postalCode?: string | null;
+  /** @nullable */
+  country?: string | null;
+  /** @nullable */
+  mobilePhone?: string | null;
+  /** @nullable */
+  homePhone?: string | null;
+  /** @nullable */
+  personalEmail?: string | null;
+  /** @nullable */
+  preferredLanguage?: string | null;
+  /** @nullable */
+  maritalStatus?: string | null;
+  /** @nullable */
+  occupation?: string | null;
+  /** @nullable */
+  insuranceProvider?: string | null;
+  /** @nullable */
+  insurancePlan?: string | null;
+  /** @nullable */
+  insuranceMemberId?: string | null;
+  /** @nullable */
+  insuranceGroupId?: string | null;
+  /** @nullable */
+  pharmacyName?: string | null;
+  /** @nullable */
+  pharmacyPhone?: string | null;
+  /** @nullable */
+  bloodType?: string | null;
+  /** @nullable */
+  organDonor?: boolean | null;
+  /** @nullable */
+  medicalRecordNumber?: string | null;
+  /** @nullable */
   allergies?: HealthListItem[] | null;
   /** @nullable */
   medications?: HealthListItem[] | null;
@@ -157,6 +199,48 @@ export interface UpdatePatientBody {
   emergencyContactPhone?: string | null;
   /** @nullable */
   emergencyContactRelationship?: string | null;
+  /** @nullable */
+  addressLine1?: string | null;
+  /** @nullable */
+  addressLine2?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  stateRegion?: string | null;
+  /** @nullable */
+  postalCode?: string | null;
+  /** @nullable */
+  country?: string | null;
+  /** @nullable */
+  mobilePhone?: string | null;
+  /** @nullable */
+  homePhone?: string | null;
+  /** @nullable */
+  personalEmail?: string | null;
+  /** @nullable */
+  preferredLanguage?: string | null;
+  /** @nullable */
+  maritalStatus?: string | null;
+  /** @nullable */
+  occupation?: string | null;
+  /** @nullable */
+  insuranceProvider?: string | null;
+  /** @nullable */
+  insurancePlan?: string | null;
+  /** @nullable */
+  insuranceMemberId?: string | null;
+  /** @nullable */
+  insuranceGroupId?: string | null;
+  /** @nullable */
+  pharmacyName?: string | null;
+  /** @nullable */
+  pharmacyPhone?: string | null;
+  /** @nullable */
+  bloodType?: string | null;
+  /** @nullable */
+  organDonor?: boolean | null;
+  /** @nullable */
+  medicalRecordNumber?: string | null;
   /** @nullable */
   allergies?: HealthListItem[] | null;
   /** @nullable */

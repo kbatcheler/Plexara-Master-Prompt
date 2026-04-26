@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Send, Sparkles, FileText } from "lucide-react";
 import { useToast } from "../hooks/use-toast";
 import { useMode } from "../context/ModeContext";
+import AINarrative from "@/components/AINarrative";
 
 interface ChatMessage {
   id?: number;
@@ -113,8 +114,11 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
                 {m.content}
               </div>
             ) : (
-              <div className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-secondary text-foreground px-4 py-3 whitespace-pre-wrap ${assistantTextClass}`}>
-                {m.content}
+              <div className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-secondary text-foreground px-4 py-3 ${assistantTextClass}`}>
+                <AINarrative
+                  text={m.content}
+                  variant={mode === "clinician" ? "clinical" : "compact"}
+                />
               </div>
             )}
           </div>

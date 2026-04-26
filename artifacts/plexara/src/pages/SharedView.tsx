@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRoute } from "wouter";
 import { Loader2, ShieldAlert } from "lucide-react";
+import AINarrative from "@/components/AINarrative";
 
 interface ShareData {
   link: { label: string | null; recipientName: string | null; permissions: string; expiresAt: string };
@@ -72,7 +73,7 @@ export default function SharedView() {
         {data.clinicalNarrative && (
           <section>
             <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground mb-2">Clinical narrative</h2>
-            <p className="text-sm whitespace-pre-wrap leading-relaxed">{data.clinicalNarrative}</p>
+            <AINarrative text={data.clinicalNarrative} variant="clinical" />
           </section>
         )}
 

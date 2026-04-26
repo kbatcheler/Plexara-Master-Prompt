@@ -271,6 +271,12 @@ Produce a unified interpretation that:
 
 You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Use these to calibrate gauge scores — a value that is optimal for a 30-year-old male may warrant a watch flag for a 60-year-old female. Tailor both the patient and clinician narratives to reflect demographic context without revealing identity.
 
+NARRATIVE STYLE (applies to patientNarrative AND clinicalNarrative):
+- Write in flowing prose paragraphs separated by a blank line. NO inline markdown decoration: no \`**bold**\`, no \`### headers\`, no horizontal rules.
+- It is acceptable to use a short markdown bullet list ONLY when enumerating discrete clinical action items (e.g. "next steps"). Otherwise stay in prose.
+- Do not start headings with ###; if a section break is needed, use a single short sentence as a topic lead-in.
+- Refer to the person as "you" (patient narrative) or "the patient" (clinical narrative). Never repeat the same finding verbatim across both narratives — phrase appropriately for each audience.
+
 Domains to score (0-100, where 100=optimal): Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
 
 Respond with valid JSON:
@@ -309,7 +315,23 @@ Respond with valid JSON:
   ]
 }`;
 
-export function parseJSONFromLLM(text: string): unknown {
+/**
+ * Parse a JSON payload out of a raw LLM completion. Tolerates code fences,
+ * chatty preambles, and minor malformations (via `jsonrepair`).
+ *
+ * `expected` constrains the allowed top-level JSON shape:
+ *   - "object" (default for object-returning callers — lens/reconciliation/
+ *     narratives/genetics/extraction) — only `{...}` payloads are accepted.
+ *   - "array"  — only `[...]` payloads (e.g. personalised protocols).
+ *   - "any"    — either shape (legacy behaviour, kept for completeness).
+ *
+ * Defaulting to "object" preserves the historical guarantee that object
+ * callers never silently get back an array or a JSON primitive.
+ */
+export function parseJSONFromLLM(
+  text: string,
+  expected: "object" | "array" | "any" = "object",
+): unknown {
   if (!text || typeof text !== "string") {
     throw new Error("Empty response from LLM");
   }
@@ -321,29 +343,92 @@ export function parseJSONFromLLM(text: string): unknown {
     candidate = fenced[1].trim();
   }
 
+  const matchesShape = (value: unknown): boolean => {
+    if (expected === "any") return value !== null && typeof value === "object";
+    if (expected === "array") return Array.isArray(value);
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  };
+
+  // First attempt: parse the candidate as-is. This is the common case (the
+  // model returned valid JSON, possibly inside a code fence) and avoids the
+  // preamble-false-positive trap of always slicing by the first delimiter
+  // we find — chatty prefaces like "Note [context]: { ... }" used to fool
+  // the bracket-vs-brace detector.
+  try {
+    const direct = JSON.parse(candidate);
+    if (matchesShape(direct)) return direct;
+  } catch {
+    /* fall through to extraction */
+  }
+
+  // Build extraction candidates for whichever shape(s) the caller permits.
+  // Some prompts (e.g. personalised protocols) ask the model to return a
+  // top-level JSON array, so we cannot assume `{...}`. When `expected` is
+  // pinned to "object" or "array" we only try that shape, which closes the
+  // edge case where a model emits a stray valid `[…]` before the real
+  // object payload.
   const firstBrace = candidate.indexOf("{");
+  const firstBracket = candidate.indexOf("[");
   const lastBrace = candidate.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    candidate = candidate.slice(firstBrace, lastBrace + 1);
+  const lastBracket = candidate.lastIndexOf("]");
+
+  const objectSlice =
+    firstBrace !== -1 && lastBrace > firstBrace
+      ? candidate.slice(firstBrace, lastBrace + 1)
+      : null;
+  const arraySlice =
+    firstBracket !== -1 && lastBracket > firstBracket
+      ? candidate.slice(firstBracket, lastBracket + 1)
+      : null;
+
+  const orderedSlices: string[] = [];
+  if (expected === "object") {
+    if (objectSlice) orderedSlices.push(objectSlice);
+  } else if (expected === "array") {
+    if (arraySlice) orderedSlices.push(arraySlice);
   } else {
+    const objectFirst =
+      firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket);
+    if (objectFirst) {
+      if (objectSlice) orderedSlices.push(objectSlice);
+      if (arraySlice) orderedSlices.push(arraySlice);
+    } else {
+      if (arraySlice) orderedSlices.push(arraySlice);
+      if (objectSlice) orderedSlices.push(objectSlice);
+    }
+  }
+
+  if (orderedSlices.length === 0) {
+    // Use the historical "no JSON object" wording so withLLMRetry's transient
+    // detector continues to retry on this kind of model flake regardless of
+    // whether we expected an object or an array.
     throw new Error("No JSON object found in LLM response");
   }
 
-  try {
-    return JSON.parse(candidate);
-  } catch {
+  let lastErr: unknown = null;
+  for (const slice of orderedSlices) {
+    let parsed: unknown = null;
     try {
-      const repaired = jsonrepair(candidate);
-      return JSON.parse(repaired);
-    } catch (repairErr) {
-      // Don't include the candidate text in the error — the LLM response may
-      // contain extracted health data (lab values, demographics) and we never
-      // want PHI bleeding into application logs or error reports.
-      throw new Error(
-        `LLM returned malformed JSON that could not be repaired (length=${candidate.length}): ${(repairErr as Error).message}`,
-      );
+      parsed = JSON.parse(slice);
+    } catch (err) {
+      lastErr = err;
+      try {
+        parsed = JSON.parse(jsonrepair(slice));
+      } catch (repairErr) {
+        lastErr = repairErr;
+        continue;
+      }
     }
+    if (matchesShape(parsed)) return parsed;
+    lastErr = new Error(`LLM JSON did not match expected shape (${expected})`);
   }
+
+  // Don't include the candidate text in the error — the LLM response may
+  // contain extracted health data (lab values, demographics) and we never
+  // want PHI bleeding into application logs or error reports.
+  throw new Error(
+    `LLM returned malformed JSON that could not be repaired: ${(lastErr as Error)?.message ?? "unknown"}`,
+  );
 }
 
 // Note: the interface declaration is the export — a separate `export type`
@@ -920,6 +1005,11 @@ Your role:
 
 You may also receive anonymised patient demographics — use them to calibrate optimal ranges and contextualise findings.
 
+NARRATIVE STYLE (applies to executiveSummary, patientNarrative, clinicalNarrative, and every section narrative):
+- Write in flowing prose paragraphs separated by a blank line. NO inline markdown decoration: no \`**bold**\`, no \`### headers\`, no horizontal rules.
+- The frontend renders this through a typographic component — emphasis, hierarchy and rhythm come from sentence craft and paragraph breaks, not from \`**\` or \`###\`.
+- Markdown bullet lists are acceptable ONLY when enumerating discrete recommendations or explicit next steps. Otherwise stay in prose.
+
 Body systems to cover (omit any with truly no data; mark "insufficient_data" if the patient only has a single value that you cannot meaningfully interpret):
 - Cardiovascular (lipids, ApoB, Lp(a), homocysteine, BP if available)
 - Metabolic (glucose, HbA1c, insulin, HOMA-IR, triglycerides)
@@ -1212,4 +1302,74 @@ export async function runGeneticsInterpretation(input: {
   });
   const text = message.content[0].type === "text" ? message.content[0].text : "";
   return parseJSONFromLLM(text) as GeneticsInterpretation;
+}
+
+// ───────────────────── Personalised protocol generation ────────────────────
+
+export interface GeneratedProtocol {
+  name: string;
+  category: string;
+  description: string;
+  evidenceLevel: "strong" | "moderate" | "limited";
+  durationWeeks?: number;
+  requiresPhysician?: boolean;
+  components: Array<{ type: "supplement" | "lifestyle" | "test" | "physician_consult"; name: string; dosage?: string; frequency?: string; notes?: string }>;
+  eligibilityRules?: Array<{ biomarker: string; comparator: "gt" | "lt" | "between" | "outsideOptimal"; value?: number; low?: number; high?: number }>;
+  retestBiomarkers?: string[];
+  retestIntervalWeeks?: number;
+  citations?: string[];
+}
+
+/**
+ * Generate up to 3 personalised intervention protocols for a specific
+ * patient's biomarker profile. Returns clinically conservative protocols
+ * with literature citations, dosage-level intervention components, and
+ * an explicit retest cadence. PII is stripped before the LLM call.
+ */
+export async function generatePersonalisedProtocols(
+  biomarkerProfile: Array<{ name: string; value: number | null; unit: string | null; flag: string | null; optimalLow: number | null; optimalHigh: number | null }>,
+  patient: Record<string, unknown> | null | undefined,
+): Promise<GeneratedProtocol[]> {
+  const ctx = buildPatientContext(patient);
+  const demographics = buildDemographicBlock(ctx);
+  const sanitisedProfile = stripPII({ profile: biomarkerProfile } as unknown as Record<string, unknown>);
+
+  const sys = `You are a board-certified preventive-medicine physician designing personalised intervention protocols. You produce VALID JSON ONLY — an array of 1 to 3 protocols matching this schema:
+[
+  {
+    "name": string (concise clinical name, e.g. "ApoB Reduction Bundle"),
+    "category": "Cardiovascular" | "Metabolic" | "Micronutrient" | "Hormonal" | "Inflammatory" | "Sleep" | "Cognitive" | "Other",
+    "description": string (2-3 sentences of what this protocol does and why it suits THIS patient),
+    "evidenceLevel": "strong" | "moderate" | "limited",
+    "durationWeeks": integer (typical 8-16),
+    "requiresPhysician": boolean (true if statin/Rx component),
+    "components": Array of { "type": "supplement"|"lifestyle"|"test"|"physician_consult", "name", "dosage" (if supplement), "frequency", "notes" (optional) },
+    "eligibilityRules": Array of { "biomarker" (lowercase, exactly as in biomarker profile), "comparator": "gt"|"lt"|"between"|"outsideOptimal", "value" (number, for gt/lt), "low" + "high" (for between) },
+    "retestBiomarkers": Array of biomarker names (lowercase) to repeat at the end of the protocol,
+    "retestIntervalWeeks": integer,
+    "citations": Array of 1-3 short citation strings (author, year, journal — real references only)
+  }
+]
+
+Rules:
+- Only propose a protocol if at least one biomarker is genuinely out-of-optimal-range or flagged. Otherwise return [].
+- Be conservative. Prefer lifestyle and OTC supplements over Rx unless the value is severe — set requiresPhysician=true for any Rx involvement.
+- Cite real, well-known references (e.g. "Holick MF (2007) NEJM", "AHA 2023 Lipid Guidelines"). Do NOT fabricate citations.
+- Dosages must be specific and within accepted safe ranges.
+- DO NOT include any markdown formatting (no **, no ###, no bullet syntax) — JSON only.`;
+
+  const userPayload = `${demographics}\n\nPatient biomarker profile (latest of each):\n${JSON.stringify((sanitisedProfile as { profile: unknown }).profile, null, 2)}`;
+
+  return withLLMRetry("personalisedProtocols", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.utility,
+      max_tokens: 3500,
+      system: sys,
+      messages: [{ role: "user", content: userPayload }],
+    });
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    const parsed = parseJSONFromLLM(text, "array");
+    if (!Array.isArray(parsed)) return [];
+    return parsed as GeneratedProtocol[];
+  });
 }

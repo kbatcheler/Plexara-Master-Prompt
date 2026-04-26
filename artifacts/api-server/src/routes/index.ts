@@ -34,6 +34,7 @@ import {
   patientCollaboratorsRouter,
   publicInvitationsRouter,
 } from "./invitations";
+import lookupRouter from "./lookup";
 
 const router: IRouter = Router();
 
@@ -77,5 +78,6 @@ router.use("/dev-auth", devAuthRouter);
 router.use("/patients/:patientId/invitations", patientInvitationsRouter);
 router.use("/patients/:patientId/collaborators", patientCollaboratorsRouter);
 router.use("/invitations", publicInvitationsRouter);
+router.use("/lookup", lookupRouter);
 
 export default router;

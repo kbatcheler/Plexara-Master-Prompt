@@ -578,6 +578,48 @@ components:
           type: ["string", "null"]
         emergencyContactRelationship:
           type: ["string", "null"]
+        addressLine1:
+          type: ["string", "null"]
+        addressLine2:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        stateRegion:
+          type: ["string", "null"]
+        postalCode:
+          type: ["string", "null"]
+        country:
+          type: ["string", "null"]
+        mobilePhone:
+          type: ["string", "null"]
+        homePhone:
+          type: ["string", "null"]
+        personalEmail:
+          type: ["string", "null"]
+        preferredLanguage:
+          type: ["string", "null"]
+        maritalStatus:
+          type: ["string", "null"]
+        occupation:
+          type: ["string", "null"]
+        insuranceProvider:
+          type: ["string", "null"]
+        insurancePlan:
+          type: ["string", "null"]
+        insuranceMemberId:
+          type: ["string", "null"]
+        insuranceGroupId:
+          type: ["string", "null"]
+        pharmacyName:
+          type: ["string", "null"]
+        pharmacyPhone:
+          type: ["string", "null"]
+        bloodType:
+          type: ["string", "null"]
+        organDonor:
+          type: ["boolean", "null"]
+        medicalRecordNumber:
+          type: ["string", "null"]
         allergies:
           type: ["array", "null"]
           items:
@@ -663,6 +705,48 @@ components:
         emergencyContactPhone:
           type: ["string", "null"]
         emergencyContactRelationship:
+          type: ["string", "null"]
+        addressLine1:
+          type: ["string", "null"]
+        addressLine2:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        stateRegion:
+          type: ["string", "null"]
+        postalCode:
+          type: ["string", "null"]
+        country:
+          type: ["string", "null"]
+        mobilePhone:
+          type: ["string", "null"]
+        homePhone:
+          type: ["string", "null"]
+        personalEmail:
+          type: ["string", "null"]
+        preferredLanguage:
+          type: ["string", "null"]
+        maritalStatus:
+          type: ["string", "null"]
+        occupation:
+          type: ["string", "null"]
+        insuranceProvider:
+          type: ["string", "null"]
+        insurancePlan:
+          type: ["string", "null"]
+        insuranceMemberId:
+          type: ["string", "null"]
+        insuranceGroupId:
+          type: ["string", "null"]
+        pharmacyName:
+          type: ["string", "null"]
+        pharmacyPhone:
+          type: ["string", "null"]
+        bloodType:
+          type: ["string", "null"]
+        organDonor:
+          type: ["boolean", "null"]
+        medicalRecordNumber:
           type: ["string", "null"]
         allergies:
           type: ["array", "null"]

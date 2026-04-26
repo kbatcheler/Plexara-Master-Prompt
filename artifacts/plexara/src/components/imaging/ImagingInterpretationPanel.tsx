@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Brain, Loader2, AlertTriangle, CheckCircle2, Activity, RefreshCw } from "lucide-react";
+import AINarrative from "@/components/AINarrative";
 
 // ─── Types — kept loose so we don't drift if the backend evolves ────────────
 interface ReconciledShape {
@@ -154,9 +155,7 @@ export function ImagingInterpretationPanel({
             <div className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-wide">
               For you
             </div>
-            <div className="text-sm whitespace-pre-wrap leading-relaxed">
-              {reconciled.patientNarrative}
-            </div>
+            <AINarrative text={reconciled.patientNarrative} variant="serif" />
           </section>
         )}
 
@@ -166,9 +165,7 @@ export function ImagingInterpretationPanel({
             <div className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-wide">
               For your clinician
             </div>
-            <div className="text-sm whitespace-pre-wrap leading-relaxed text-foreground/90">
-              {reconciled.clinicalNarrative}
-            </div>
+            <AINarrative text={reconciled.clinicalNarrative} variant="clinical" />
           </section>
         )}
 

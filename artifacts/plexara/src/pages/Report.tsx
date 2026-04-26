@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReportShareCard } from "../components/ReportShareCard";
+import AINarrative from "@/components/AINarrative";
 
 /**
  * COMPREHENSIVE REPORT page. Two routes share this component:
@@ -173,12 +174,12 @@ function ComprehensiveView({ report, onRegenerate, regenerating }: {
 
       <section>
         <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2 font-semibold">For you</h3>
-        <p className="text-base leading-relaxed font-serif whitespace-pre-wrap">{report.patientNarrative}</p>
+        <AINarrative text={report.patientNarrative} variant="serif" dropcap />
       </section>
 
       <section>
         <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Clinical narrative</h3>
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{report.clinicalNarrative}</p>
+        <AINarrative text={report.clinicalNarrative} variant="clinical" />
       </section>
 
       {report.crossPanelPatterns.length > 0 && (
@@ -338,7 +339,7 @@ function LegacyView({ report }: { report: LegacyReport }) {
       {report.interpretation.clinicalNarrative && (
         <section>
           <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Clinical narrative</h3>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{report.interpretation.clinicalNarrative}</p>
+          <AINarrative text={report.interpretation.clinicalNarrative} variant="clinical" />
         </section>
       )}
       {r?.urgentFlags && r.urgentFlags.length > 0 && (

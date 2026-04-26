@@ -80,6 +80,8 @@
     "@cornerstonejs/dicom-image-loader": "^4.21.7",
     "@cornerstonejs/tools": "^4.21.7",
     "dicom-parser": "^1.8.21",
-    "qrcode.react": "^4.2.0"
+    "qrcode.react": "^4.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }

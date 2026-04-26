@@ -36,6 +36,52 @@ export const patientsTable = pgTable("patients", {
   emergencyContactPhone: text("emergency_contact_phone"),
   emergencyContactRelationship: text("emergency_contact_relationship"),
 
+  // ─────────── Comprehensive demographics (V1.5) ───────────
+  // Postal address — never sent to AI. Used for the printable share card,
+  // physician referral letters, insurance pre-auth context. All fields
+  // optional so partial entry is fine.
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  city: text("city"),
+  stateRegion: text("state_region"),
+  postalCode: text("postal_code"),
+  country: text("country"),
+
+  // Direct contact channels — never sent to AI. The auth account already
+  // carries one email; these are explicit patient-record contacts that
+  // may differ (e.g. a parent managing a child's profile uses their own
+  // login email but enters the child's home phone here).
+  mobilePhone: text("mobile_phone"),
+  homePhone: text("home_phone"),
+  personalEmail: text("personal_email"),
+
+  // Demographic context — preferredLanguage is sent to AI so the lens
+  // narrative can be written for the patient; the rest are profile-only.
+  preferredLanguage: text("preferred_language"),
+  maritalStatus: text("marital_status"),
+  occupation: text("occupation"),
+
+  // Insurance — never sent to AI. Surfaced in the printable share card
+  // and the export bundle so a referred clinician has what they need.
+  insuranceProvider: text("insurance_provider"),
+  insurancePlan: text("insurance_plan"),
+  insuranceMemberId: text("insurance_member_id"),
+  insuranceGroupId: text("insurance_group_id"),
+
+  // Preferred pharmacy — never sent to AI. Used by protocol "ready to
+  // start" flows so the supplement list can be sent to a real pharmacy.
+  pharmacyName: text("pharmacy_name"),
+  pharmacyPhone: text("pharmacy_phone"),
+
+  // Clinical fixed facts. bloodType is sent to AI (relevant for some
+  // clinical inferences); organDonor is profile-only.
+  bloodType: text("blood_type"),
+  organDonor: boolean("organ_donor"),
+
+  // Optional patient-supplied medical record number from another system,
+  // for cross-referencing physician notes. Never sent to AI.
+  medicalRecordNumber: text("medical_record_number"),
+
   // Active medical context. Shared with the AI lenses (after PII strip)
   // so interpretations can flag drug-lab interactions and contraindicated
   // recommendations. Stored as JSON arrays of objects so the schema can

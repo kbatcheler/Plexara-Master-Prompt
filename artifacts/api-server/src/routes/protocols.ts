@@ -8,11 +8,13 @@ import {
   supplementsTable,
   stackChangesTable,
 } from "@workspace/db";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, or, desc, inArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
+import { verifyPatientAccess } from "../lib/patient-access";
 import { pickAllowed } from "../lib/pickAllowed";
 import { validate } from "../middlewares/validate";
 import { protocolAdoptBody, protocolAdoptionUpdateBody } from "../lib/validators";
+import { generatePersonalisedProtocols } from "../lib/ai";
 
 const globalRouter = Router();
 const patientRouter = Router({ mergeParams: true });
@@ -33,7 +35,18 @@ interface ProtocolComponent {
   notes?: string;
 }
 
-const SEED_PROTOCOLS = [
+/**
+ * REFERENCE_PROTOCOLS — a small curated set of well-evidenced clinical
+ * protocols, every entry carrying primary-source citations. These are
+ * loaded as the global "reference library" so the protocols page is
+ * never empty. Patients additionally receive AI-generated protocols
+ * personalised to their own biomarker profile via POST /generate.
+ *
+ * To extend: append a new entry, set isSeed:true / source:"curated",
+ * and re-deploy. To remove: delete the slug here AND clear any orphaned
+ * adoptions before bumping the row out of the table.
+ */
+const REFERENCE_PROTOCOLS = [
   {
     slug: "vit-d-repletion",
     name: "Vitamin D Repletion",
@@ -185,9 +198,17 @@ const SEED_PROTOCOLS = [
 ];
 
 async function seedProtocols(): Promise<void> {
-  for (const p of SEED_PROTOCOLS) {
+  for (const p of REFERENCE_PROTOCOLS) {
     const [existing] = await db.select().from(protocolsTable).where(eq(protocolsTable.slug, p.slug));
-    if (existing) continue;
+    if (existing) {
+      // Backfill provenance on legacy rows that pre-date the source column.
+      if (existing.source !== "curated" || existing.patientId !== null) {
+        await db.update(protocolsTable)
+          .set({ source: "curated", patientId: null })
+          .where(eq(protocolsTable.id, existing.id));
+      }
+      continue;
+    }
     await db.insert(protocolsTable).values({
       slug: p.slug,
       name: p.name,
@@ -202,6 +223,8 @@ async function seedProtocols(): Promise<void> {
       retestIntervalWeeks: p.retestIntervalWeeks,
       citations: p.citations,
       isSeed: true,
+      source: "curated",
+      patientId: null,
     });
   }
 }
@@ -213,21 +236,38 @@ async function ensureSeeded() {
   seeded = true;
 }
 
+/**
+ * Global protocols endpoint — returns the curated reference library only.
+ * Patient-personalised AI-generated protocols are scoped to the patient
+ * and only ever surface via /patients/:patientId/protocols.
+ */
 globalRouter.get("/", async (req, res): Promise<void> => {
   try {
     await ensureSeeded();
-    const list = await db.select().from(protocolsTable).orderBy(protocolsTable.category, protocolsTable.name);
-    res.json(list);
+    const list = await db.select().from(protocolsTable)
+      .where(eq(protocolsTable.source, "curated"))
+      .orderBy(protocolsTable.category, protocolsTable.name);
+    res.json(list.map((p) => ({ ...p, isCurated: true, isPersonalised: false })));
   } catch (err) {
     req.log.error({ err }, "Failed to list protocols");
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
+/** Curated reference protocols UNION this patient's AI-generated personalised protocols. */
+async function loadPatientVisibleProtocols(patientId: number) {
+  return db.select().from(protocolsTable)
+    .where(or(
+      eq(protocolsTable.source, "curated"),
+      and(eq(protocolsTable.source, "ai-generated"), eq(protocolsTable.patientId, patientId)),
+    ))
+    .orderBy(protocolsTable.source, protocolsTable.category, protocolsTable.name);
+}
+
 async function getPatient(patientId: number, userId: string) {
-  const [patient] = await db.select().from(patientsTable)
-    .where(and(eq(patientsTable.id, patientId), eq(patientsTable.accountId, userId)));
-  return patient;
+  if (!(await verifyPatientAccess(patientId, userId))) return null;
+  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
+  return patient ?? null;
 }
 
 function evaluateRule(rule: EligibilityRule, value: number, optimalLow: number | null, optimalHigh: number | null): boolean {
@@ -249,7 +289,7 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
     await ensureSeeded();
-    const protocols = await db.select().from(protocolsTable);
+    const protocols = await loadPatientVisibleProtocols(patientId);
     const biomarkers = await db.select().from(biomarkerResultsTable).where(eq(biomarkerResultsTable.patientId, patientId));
     const latestByName = new Map<string, typeof biomarkers[0]>();
     for (const b of biomarkers) {
@@ -301,7 +341,7 @@ patientRouter.get("/eligible", requireAuth, async (req, res): Promise<void> => {
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
     await ensureSeeded();
-    const protocols = await db.select().from(protocolsTable);
+    const protocols = await loadPatientVisibleProtocols(patientId);
     const biomarkers = await db.select().from(biomarkerResultsTable).where(eq(biomarkerResultsTable.patientId, patientId));
 
     const latestByName = new Map<string, typeof biomarkers[0]>();
@@ -355,6 +395,127 @@ patientRouter.get("/eligible", requireAuth, async (req, res): Promise<void> => {
   } catch (err) {
     req.log.error({ err }, "Failed to compute eligible protocols");
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Patient-scoped protocol library: curated reference + this patient's
+ * AI-generated personalised protocols, each annotated with `isCurated`
+ * and `isPersonalised` flags so the UI can render them as separate
+ * sections.
+ */
+patientRouter.get("/", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  const patient = await getPatient(patientId, userId);
+  if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
+  try {
+    await ensureSeeded();
+    const list = await loadPatientVisibleProtocols(patientId);
+    res.json(list.map((p) => ({
+      ...p,
+      isCurated: p.source === "curated",
+      isPersonalised: p.source === "ai-generated",
+    })));
+  } catch (err) {
+    req.log.error({ err }, "Failed to list patient protocols");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * AI-generate a small set of personalised protocols for this patient
+ * based on their current biomarker profile + health history. Stored
+ * with source="ai-generated" + patientId so they only ever surface to
+ * this patient. Re-running replaces the prior generated set (the
+ * patient's biomarkers may have changed).
+ */
+patientRouter.post("/generate", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  const patient = await getPatient(patientId, userId);
+  if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
+  try {
+    const biomarkers = await db.select().from(biomarkerResultsTable).where(eq(biomarkerResultsTable.patientId, patientId));
+    if (biomarkers.length === 0) {
+      res.status(400).json({ error: "No biomarker data available — upload at least one panel before generating personalised protocols." });
+      return;
+    }
+
+    const latestByName = new Map<string, typeof biomarkers[0]>();
+    for (const b of biomarkers) {
+      const key = b.biomarkerName.toLowerCase();
+      const existing = latestByName.get(key);
+      const bDate = b.testDate ? new Date(b.testDate).getTime() : new Date(b.createdAt).getTime();
+      if (!existing) {
+        latestByName.set(key, b);
+      } else {
+        const eDate = existing.testDate ? new Date(existing.testDate).getTime() : new Date(existing.createdAt).getTime();
+        if (bDate > eDate) latestByName.set(key, b);
+      }
+    }
+
+    const profileForAI = Array.from(latestByName.values()).map((b) => ({
+      name: b.biomarkerName,
+      value: b.value ? parseFloat(b.value) : null,
+      unit: b.unit,
+      flag: b.flag,
+      optimalLow: b.optimalRangeLow ? parseFloat(b.optimalRangeLow) : null,
+      optimalHigh: b.optimalRangeHigh ? parseFloat(b.optimalRangeHigh) : null,
+    }));
+
+    const generated = await generatePersonalisedProtocols(profileForAI, patient);
+    if (!Array.isArray(generated) || generated.length === 0) {
+      res.status(200).json({ created: 0, protocols: [] });
+      return;
+    }
+
+    // Replace prior AI-generated set for this patient that have no active adoptions.
+    const priorAI = await db.select().from(protocolsTable)
+      .where(and(eq(protocolsTable.source, "ai-generated"), eq(protocolsTable.patientId, patientId)));
+    if (priorAI.length > 0) {
+      const priorIds = priorAI.map((p) => p.id);
+      const adopted = await db.select().from(protocolAdoptionsTable)
+        .where(and(inArray(protocolAdoptionsTable.protocolId, priorIds), eq(protocolAdoptionsTable.status, "active")));
+      const adoptedIds = new Set(adopted.map((a) => a.protocolId));
+      const deletable = priorIds.filter((id) => !adoptedIds.has(id));
+      if (deletable.length > 0) {
+        await db.delete(protocolsTable).where(inArray(protocolsTable.id, deletable));
+      }
+    }
+
+    const now = Date.now();
+    const inserted: Array<typeof protocolsTable.$inferSelect> = [];
+    for (let i = 0; i < generated.length; i++) {
+      const g = generated[i];
+      const slug = `ai-${patientId}-${now}-${i}`;
+      const [row] = await db.insert(protocolsTable).values({
+        slug,
+        name: g.name,
+        category: g.category,
+        description: g.description,
+        evidenceLevel: g.evidenceLevel,
+        durationWeeks: g.durationWeeks ?? null,
+        requiresPhysician: g.requiresPhysician ?? false,
+        eligibilityRules: g.eligibilityRules ?? [],
+        componentsJson: g.components ?? [],
+        retestBiomarkers: g.retestBiomarkers ?? [],
+        retestIntervalWeeks: g.retestIntervalWeeks ?? null,
+        citations: g.citations ?? [],
+        isSeed: false,
+        source: "ai-generated",
+        patientId,
+      }).returning();
+      if (row) inserted.push(row);
+    }
+
+    res.status(201).json({
+      created: inserted.length,
+      protocols: inserted.map((p) => ({ ...p, isCurated: false, isPersonalised: true })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to generate personalised protocols");
+    res.status(500).json({ error: "Failed to generate personalised protocols" });
   }
 });
 

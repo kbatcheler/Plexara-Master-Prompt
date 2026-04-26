@@ -154,6 +154,29 @@ router.patch("/:patientId", requireAuth, async (req, res): Promise<void> => {
     if (d.emergencyContactName !== undefined) updateData.emergencyContactName = d.emergencyContactName;
     if (d.emergencyContactPhone !== undefined) updateData.emergencyContactPhone = d.emergencyContactPhone;
     if (d.emergencyContactRelationship !== undefined) updateData.emergencyContactRelationship = d.emergencyContactRelationship;
+    // Comprehensive demographics (V1.5) — address, contacts, insurance, pharmacy, clinical fixed facts.
+    // None of these are sent to the AI lenses except preferredLanguage and bloodType (see lib/ai.ts buildPatientContext).
+    if (d.addressLine1 !== undefined) updateData.addressLine1 = d.addressLine1;
+    if (d.addressLine2 !== undefined) updateData.addressLine2 = d.addressLine2;
+    if (d.city !== undefined) updateData.city = d.city;
+    if (d.stateRegion !== undefined) updateData.stateRegion = d.stateRegion;
+    if (d.postalCode !== undefined) updateData.postalCode = d.postalCode;
+    if (d.country !== undefined) updateData.country = d.country;
+    if (d.mobilePhone !== undefined) updateData.mobilePhone = d.mobilePhone;
+    if (d.homePhone !== undefined) updateData.homePhone = d.homePhone;
+    if (d.personalEmail !== undefined) updateData.personalEmail = d.personalEmail;
+    if (d.preferredLanguage !== undefined) updateData.preferredLanguage = d.preferredLanguage;
+    if (d.maritalStatus !== undefined) updateData.maritalStatus = d.maritalStatus;
+    if (d.occupation !== undefined) updateData.occupation = d.occupation;
+    if (d.insuranceProvider !== undefined) updateData.insuranceProvider = d.insuranceProvider;
+    if (d.insurancePlan !== undefined) updateData.insurancePlan = d.insurancePlan;
+    if (d.insuranceMemberId !== undefined) updateData.insuranceMemberId = d.insuranceMemberId;
+    if (d.insuranceGroupId !== undefined) updateData.insuranceGroupId = d.insuranceGroupId;
+    if (d.pharmacyName !== undefined) updateData.pharmacyName = d.pharmacyName;
+    if (d.pharmacyPhone !== undefined) updateData.pharmacyPhone = d.pharmacyPhone;
+    if (d.bloodType !== undefined) updateData.bloodType = d.bloodType;
+    if (d.organDonor !== undefined) updateData.organDonor = d.organDonor;
+    if (d.medicalRecordNumber !== undefined) updateData.medicalRecordNumber = d.medicalRecordNumber;
     // Active medical context (sent to AI after PII strip)
     if (d.allergies !== undefined) updateData.allergies = d.allergies;
     if (d.medications !== undefined) updateData.medications = d.medications;
