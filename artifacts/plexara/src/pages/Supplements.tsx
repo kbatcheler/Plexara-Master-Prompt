@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity } from "lucide-react";
+import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
 
 interface Supplement {
   id: number;
@@ -194,7 +195,19 @@ export default function Supplements() {
                   if (newSupp.name.trim()) addMutation.mutate(newSupp);
                 }}
               >
-                <Input placeholder="Name (e.g. Vitamin D3)" value={newSupp.name} onChange={(e) => setNewSupp({ ...newSupp, name: e.target.value })} data-testid="input-supp-name" />
+                <SupplementNameInput
+                  value={newSupp.name}
+                  onChange={(name) => setNewSupp((curr) => ({ ...curr, name }))}
+                  onSelect={(item) =>
+                    setNewSupp((curr) => ({
+                      name: item.name,
+                      dosage: curr.dosage || item.defaultDosage || "",
+                      frequency: curr.frequency || item.defaultFrequency || "",
+                    }))
+                  }
+                  recentNames={stack.map((s) => s.name)}
+                  data-testid="input-supp-name"
+                />
                 <Input placeholder="Dosage (2000 IU)" value={newSupp.dosage} onChange={(e) => setNewSupp({ ...newSupp, dosage: e.target.value })} data-testid="input-supp-dosage" />
                 <Input placeholder="Frequency (daily)" value={newSupp.frequency} onChange={(e) => setNewSupp({ ...newSupp, frequency: e.target.value })} data-testid="input-supp-frequency" />
                 <Button type="submit" disabled={!newSupp.name.trim() || addMutation.isPending} data-testid="button-add-supp">
