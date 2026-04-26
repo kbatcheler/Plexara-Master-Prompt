@@ -93,6 +93,11 @@ function inferMimeFromFileName(fileName: string): string {
     case ".png": return "image/png";
     case ".webp": return "image/webp";
     case ".gif": return "image/gif";
+    case ".tif":
+    case ".tiff": return "image/tiff";
+    case ".csv": return "text/csv";
+    case ".txt": return "text/plain";
+    case ".json": return "application/json";
     default: return "application/octet-stream";
   }
 }
@@ -813,6 +818,109 @@ router.post(
  * batch — common case is "I dropped my last 6 lab panels". A future
  * iteration can let each file declare its own type via parallel arrays.
  */
+/**
+ * Startup-time orphan recovery.
+ *
+ * The per-patient batch limiter is in-memory (a Map of FIFO queues), so any
+ * record that was sitting in `pending` or mid-`processing` when the API
+ * server stopped/crashed is invisible to the limiter on the next boot —
+ * the user just sees rows stuck in "Queued" forever.
+ *
+ * On boot we sweep for those orphans and re-enqueue them through the same
+ * limiter the live batch route uses. We don't re-extract from scratch:
+ * `processUploadedDocument` already short-circuits to the cached extraction
+ * envelope when one exists (T107), so re-running an already-extracted
+ * record costs only the lens calls.
+ *
+ * We deliberately scan ALL patients, not just one — if a partial restart
+ * happened during a multi-patient batch the recovery still completes.
+ */
+export async function requeueOrphanedBatchRecords(): Promise<number> {
+  // We treat anything older than 60s as "definitely orphaned" so we don't
+  // race with a restart that's just-now starting to pick records up. (In
+  // practice this is the moment we boot, so every pending row qualifies.)
+  //
+  // Race-safety: the inner SELECT uses `FOR UPDATE SKIP LOCKED` so two
+  // concurrent boots (e.g. rolling restart, or two timers within the same
+  // process) cannot both claim the same rows. The wrapping UPDATE sets
+  // status='processing' as a no-op semantic claim — the SKIP LOCKED guarantee
+  // is what actually makes this idempotent across instances.
+  const cutoffSec = 60;
+  const claimed = await db.execute<{
+    id: number;
+    patient_id: number;
+    file_path: string | null;
+    file_name: string;
+    record_type: string;
+    test_date: string | null;
+    status: string;
+  }>(sql`
+    UPDATE ${recordsTable}
+    SET status = 'processing'
+    WHERE id IN (
+      SELECT id FROM ${recordsTable}
+      WHERE status IN ('pending','processing')
+        AND ${recordsTable.createdAt} < NOW() - INTERVAL '${sql.raw(String(cutoffSec))} seconds'
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, patient_id, file_path, file_name, record_type, test_date, status
+  `);
+
+  const orphans = (claimed.rows as Array<{
+    id: number;
+    patient_id: number;
+    file_path: string | null;
+    file_name: string;
+    record_type: string;
+    test_date: string | null;
+    status: string;
+  }>).map((row) => ({
+    id: row.id,
+    patientId: row.patient_id,
+    filePath: row.file_path,
+    fileName: row.file_name,
+    recordType: row.record_type,
+    testDate: row.test_date,
+    status: row.status,
+  }));
+
+  if (orphans.length === 0) return 0;
+
+  for (const r of orphans) {
+    // Validate the file still exists. If not (uploads dir wiped between
+    // restarts), mark error so the user sees a clear failure rather than
+    // an indefinite spinner.
+    if (!r.filePath || !fs.existsSync(r.filePath)) {
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, r.id));
+      logger.warn({ recordId: r.id, filePath: r.filePath }, "orphan recovery: file missing, marked error");
+      continue;
+    }
+
+    const limiter = getPatientLimiter(r.patientId);
+    const filePath = r.filePath as string;
+    setImmediate(() => {
+      void limiter(async () => {
+        try {
+          await processUploadedDocument({
+            patientId: r.patientId,
+            recordId: r.id,
+            filePath,
+            mimeType: inferMimeFromFileName(r.fileName ?? ""),
+            recordType: r.recordType,
+            testDate: r.testDate ?? null,
+          });
+        } catch (err) {
+          logger.error({ err, recordId: r.id }, "orphan recovery: processing task failed");
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, r.id));
+        }
+      });
+    });
+  }
+
+  logger.info({ count: orphans.length }, "Re-queued orphaned batch records on startup");
+  return orphans.length;
+}
+
 router.post(
   "/batch",
   requireAuth,

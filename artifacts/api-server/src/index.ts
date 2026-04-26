@@ -72,6 +72,18 @@ const server = app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Re-queue any batch records left in pending/processing from a prior boot.
+  // Fire-and-forget: a failure here is logged but never blocks request serving.
+  void (async () => {
+    try {
+      const { requeueOrphanedBatchRecords } = await import("./routes/records.js");
+      const n = await requeueOrphanedBatchRecords();
+      if (n > 0) logger.info({ requeued: n }, "Orphan batch recovery complete");
+    } catch (recErr) {
+      logger.error({ err: recErr }, "Orphan batch recovery failed");
+    }
+  })();
 });
 
 // Graceful shutdown on container stop signals so in-flight requests

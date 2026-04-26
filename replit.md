@@ -9,8 +9,9 @@ Recent additions (Phases 1-4):
 - **Comprehensive cross-panel report**: New `comprehensive_reports` table (PHI-encrypted body + narrative + sourceRecordIds), `runComprehensiveReport` AI fn, routes `POST /api/patients/:id/comprehensive-report` and `GET /latest`, and a redesigned `/report` page showing executive summary, patient & clinical narratives, cross-panel patterns and per-body-system cards. Sidebar nav exposes "Comprehensive report" under Insights.
 - **History-aware prompts**: each lens and reconciliation receive a bounded biomarker-history block from prior records (current record excluded).
 - **Extraction caching**: re-analyzing an existing record skips OCR/extraction and reuses the cached `extracted_data` envelope.
-
-Known limitation: the per-patient batch limiter is in-memory only; on process restart, records left in `pending`/`processing` are not re-queued (no startup recovery worker yet).
+- **Orphan recovery on boot**: `requeueOrphanedBatchRecords()` runs post-listen — it does an atomic `UPDATE ... RETURNING` whose inner `SELECT` uses `FOR UPDATE SKIP LOCKED` so concurrent boots cannot double-claim the same records. Re-enqueues each via the per-patient limiter; missing files are flipped to `error` rather than spinning forever.
+- **Bounded LLM retry**: `withLLMRetry()` in `lib/ai.ts` wraps Lens A/B/C, reconciliation, and the comprehensive-report Anthropic call with up to 3 attempts and jittered exponential backoff (250→500→1000ms). Retries on 429/5xx, network/timeout errors, the known Replit-AI-proxy Anthropic 400 `Unexpected anthropic-beta header` flake, and `parseJSONFromLLM` "no JSON object found" failures.
+- **MIME inference parity**: `inferMimeFromFileName` in `routes/records.ts` covers all formats accepted by the multer allowlist (pdf, jpg/jpeg, png, webp, gif, tif/tiff, csv, txt, json) so orphan recovery and re-analyze never degrade to `application/octet-stream`.
 
 ## User Preferences
 I want iterative development. I want to be asked before you make any major changes to the codebase.

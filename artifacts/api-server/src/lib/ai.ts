@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { jsonrepair } from "jsonrepair";
 import { logger } from "./logger";
 import { stripPII } from "./pii";
@@ -15,8 +15,22 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-const genAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
-const GEMINI_BASE_URL = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL;
+// New SDK (`@google/genai`) — supersedes the legacy `@google/generative-ai`.
+// The legacy SDK hits `/v1beta/models/...:generateContent`, which Replit's
+// AI integrations proxy does not expose; the new SDK uses the modern path
+// the proxy actually serves. `httpOptions.baseUrl` redirects requests at
+// the AI Integrations proxy.
+const genAI = new GoogleGenAI({
+  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "",
+  httpOptions: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+    ? {
+        // The Replit AI Integrations proxy URL already encodes the
+        // API version segment, so the SDK must NOT prepend `/v1beta`.
+        apiVersion: "",
+        baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+      }
+    : undefined,
+});
 
 /**
  * Per-lens model selection. Reading from env at runtime means the entire
@@ -29,6 +43,73 @@ const GEMINI_BASE_URL = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL;
  * via env. The model identifiers below are the only ones referenced in
  * this file.
  */
+/**
+ * Bounded exponential backoff wrapper for transient LLM provider failures.
+ *
+ * Retries on:
+ *  - HTTP 429 (rate limit), 408 (timeout), 5xx (server error)
+ *  - Network/timeout errors (ECONNRESET, ETIMEDOUT, fetch failed, AbortError)
+ *  - The known Replit AI-Integrations Anthropic-proxy 400 with the
+ *    `Unexpected ... 'anthropic-beta'` signature (Vertex routing flake)
+ *  - Empty/non-JSON LLM responses (treat as transient — caught by name)
+ *
+ * Up to `maxAttempts` total tries, with jittered exponential backoff
+ * (250ms, 500ms, 1000ms +/- 30% jitter).
+ */
+async function withLLMRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const transient = isTransientLLMError(err);
+      if (!transient || attempt === maxAttempts) {
+        throw err;
+      }
+      const baseMs = 250 * Math.pow(2, attempt - 1);
+      const jitterMs = baseMs * (0.7 + Math.random() * 0.6);
+      logger.warn(
+        { err: errSummary(err), label, attempt, nextDelayMs: Math.round(jitterMs) },
+        "LLM call transient failure, retrying with backoff",
+      );
+      await new Promise((r) => setTimeout(r, jitterMs));
+    }
+  }
+  throw lastErr;
+}
+
+function isTransientLLMError(err: unknown): boolean {
+  const e = err as { status?: number; statusCode?: number; code?: string; name?: string; message?: string };
+  const status = e?.status ?? e?.statusCode;
+  if (typeof status === "number") {
+    if (status === 408 || status === 429 || (status >= 500 && status < 600)) return true;
+    if (status === 400) {
+      const msg = String(e?.message ?? "");
+      if (/anthropic-beta/i.test(msg)) return true;
+    }
+  }
+  const code = String(e?.code ?? "").toUpperCase();
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "EAI_AGAIN") return true;
+  const name = String(e?.name ?? "");
+  if (name === "AbortError" || name === "FetchError") return true;
+  const msg = String(e?.message ?? "").toLowerCase();
+  if (msg.includes("fetch failed") || msg.includes("socket hang up") || msg.includes("network")) return true;
+  // parseJSONFromLLM throws this on empty / malformed model output — usually
+  // a one-off proxy hiccup, retrying with a fresh sample helps.
+  if (msg.includes("no json object found")) return true;
+  return false;
+}
+
+function errSummary(err: unknown): { name?: string; message?: string; status?: number } {
+  const e = err as { name?: string; message?: string; status?: number; statusCode?: number };
+  return { name: e?.name, message: e?.message?.slice(0, 200), status: e?.status ?? e?.statusCode };
+}
+
 export const LLM_MODELS = {
   lensA: process.env.LLM_LENS_A_MODEL || "claude-sonnet-4-6",
   lensB: process.env.LLM_LENS_B_MODEL || "gpt-5.2",
@@ -339,20 +420,22 @@ export async function runLensA(
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
   const historyBlock = history ? buildHistoryBlock(history) : "";
 
-  const message = await anthropic.messages.create({
-    model: LLM_MODELS.lensA,
-    max_tokens: 2000,
-    system: LENS_A_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Analyse this anonymised health data:\n\n${dataString}${demographics}${historyBlock}`,
-      },
-    ],
-  });
+  return withLLMRetry("lensA", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.lensA,
+      max_tokens: 2000,
+      system: LENS_A_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Analyse this anonymised health data:\n\n${dataString}${demographics}${historyBlock}`,
+        },
+      ],
+    });
 
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
-  return parseJSONFromLLM(text) as LensOutput;
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    return parseJSONFromLLM(text) as LensOutput;
+  });
 }
 
 export async function runLensB(
@@ -364,17 +447,22 @@ export async function runLensB(
   const historyBlock = history ? buildHistoryBlock(history) : "";
   const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}${historyBlock}`;
 
-  const completion = await openai.chat.completions.create({
-    model: LLM_MODELS.lensB,
-    messages: [
-      { role: "system", content: LENS_B_PROMPT },
-      { role: "user", content: prompt },
-    ],
-    max_tokens: 2000,
-  });
+  // gpt-5.x and the o-series rejected the legacy `max_tokens` parameter —
+  // they require `max_completion_tokens`. We honour both by sending the
+  // new field (legacy gpt-4o etc still accept it as an alias).
+  return withLLMRetry("lensB", async () => {
+    const completion = await openai.chat.completions.create({
+      model: LLM_MODELS.lensB,
+      messages: [
+        { role: "system", content: LENS_B_PROMPT },
+        { role: "user", content: prompt },
+      ],
+      max_completion_tokens: 2000,
+    });
 
-  const text = completion.choices[0].message.content || "";
-  return parseJSONFromLLM(text) as LensOutput;
+    const text = completion.choices[0].message.content || "";
+    return parseJSONFromLLM(text) as LensOutput;
+  });
 }
 
 export async function runLensC(
@@ -386,31 +474,44 @@ export async function runLensC(
   const historyBlock = history ? buildHistoryBlock(history) : "";
   const prompt = `${LENS_C_PROMPT}\n\nAnonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}${historyBlock}`;
 
-  const customGenAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
+  // New SDK call — `genAI.models.generateContent`. Pass the prompt as a
+  // single user-turn `parts` array. `response.text` is a getter that joins
+  // all candidate text parts; defensive fallback to "" if no text came back.
+  return withLLMRetry("lensC", async () => {
+    const response = await genAI.models.generateContent({
+      model: LLM_MODELS.lensC,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        maxOutputTokens: 8192,
+        // Force structured JSON output. Without this, Gemini frequently
+        // returns prose with the JSON embedded in markdown fences, which
+        // `parseJSONFromLLM` rejects.
+        responseMimeType: "application/json",
+      },
+    });
 
-  const model = customGenAI.getGenerativeModel(
-    { model: LLM_MODELS.lensC },
-    GEMINI_BASE_URL ? { baseUrl: GEMINI_BASE_URL } : undefined,
-  );
-
-  const result = await model.generateContent([{ text: prompt }]);
-  const text = result.response.text();
-  return parseJSONFromLLM(text) as LensOutput;
+    const text = response.text ?? "";
+    return parseJSONFromLLM(text) as LensOutput;
+  });
 }
 
 export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: LensOutput, lensCOutput: LensOutput, patientCtx?: PatientContext): Promise<ReconciledOutput> {
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
   const prompt = `Three independent analyses of the same anonymised patient data:${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}\n\nLens C (Contrarian Analyst):\n${JSON.stringify(lensCOutput, null, 2)}`;
   
-  const message = await anthropic.messages.create({
-    model: LLM_MODELS.reconciliation,
-    max_tokens: 3000,
-    system: RECONCILIATION_PROMPT,
-    messages: [{ role: "user", content: prompt }],
-  });
+  return withLLMRetry("reconciliation", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.reconciliation,
+      // Reconciliation must emit two long narratives plus structured arrays;
+      // 3000 tokens routinely truncated mid-JSON, leaving narratives empty.
+      max_tokens: 8000,
+      system: RECONCILIATION_PROMPT,
+      messages: [{ role: "user", content: prompt }],
+    });
 
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
-  return parseJSONFromLLM(text) as ReconciledOutput;
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    return parseJSONFromLLM(text) as ReconciledOutput;
+  });
 }
 
 export function buildExtractionPrompt(recordType: string): string {
@@ -819,15 +920,21 @@ export async function runComprehensiveReport(
 
   const userPayload = `${demographics}${historyBlock}${supplementsBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
 
-  const message = await anthropic.messages.create({
-    model: LLM_MODELS.reconciliation,
-    max_tokens: 8000,
-    system: COMPREHENSIVE_REPORT_PROMPT,
-    messages: [{ role: "user", content: userPayload }],
-  });
+  const parsed = await withLLMRetry("comprehensiveReport", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.reconciliation,
+      // Cross-panel comprehensive report regularly produces 7+ body-system
+      // sections × multiple key biomarkers × narrative + multiple trailing
+      // arrays. 8000 tokens routinely truncated mid-JSON, dropping the
+      // crossPanelPatterns/topConcerns/etc. arrays at the tail.
+      max_tokens: 16000,
+      system: COMPREHENSIVE_REPORT_PROMPT,
+      messages: [{ role: "user", content: userPayload }],
+    });
 
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
-  const parsed = parseJSONFromLLM(text) as ComprehensiveReportOutput;
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    return parseJSONFromLLM(text) as ComprehensiveReportOutput;
+  });
 
   // Defensive defaults so consumers can render without optional-chaining
   // every nested array.
