@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { AskAboutThis } from "../AskAboutThis";
 
 // Human-friendly label + colour for each backend status string. Kept here
 // (not in the badge component) so the rest of the app can stay agnostic to
@@ -87,10 +88,21 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                   {record?.fileName || "Loading..."} • {record?.testDate ? new Date(record.testDate).toLocaleDateString() : "No date"}
                 </DrawerDescription>
               </div>
-              {record?.status && (() => {
-                const { label, tone } = statusLabel(record.status);
-                return <Badge variant={tone}>{label}</Badge>;
-              })()}
+              <div className="flex items-center gap-2">
+                {record && (
+                  <AskAboutThis
+                    subjectType="record"
+                    subjectRef={record.id}
+                    label="Ask about this"
+                    prompt={`What stands out in my ${record.fileName ?? "record"}${record.testDate ? ` from ${new Date(record.testDate).toLocaleDateString()}` : ""}? Anything I should follow up on?`}
+                    testId={`record-${record.id}-ask`}
+                  />
+                )}
+                {record?.status && (() => {
+                  const { label, tone } = statusLabel(record.status);
+                  return <Badge variant={tone}>{label}</Badge>;
+                })()}
+              </div>
             </div>
           </DrawerHeader>
 

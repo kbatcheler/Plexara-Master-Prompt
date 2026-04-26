@@ -4,6 +4,7 @@ import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
 import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReportShareCard } from "../components/ReportShareCard";
 
 /**
  * COMPREHENSIVE REPORT page. Two routes share this component:
@@ -143,6 +144,8 @@ function ComprehensiveView({ report, onRegenerate, regenerating }: {
           Generated {new Date(report.generatedAt).toLocaleString()}
         </p>
       </header>
+
+      <ReportShareCard />
 
       {report.unifiedHealthScore !== null && (
         <section className="flex items-end gap-6">

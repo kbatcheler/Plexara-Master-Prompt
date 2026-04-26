@@ -3,6 +3,7 @@ import { useMode } from "../../context/ModeContext";
 import { Gauge as GaugeType } from "@workspace/api-client-react";
 import { ArrowUp, ArrowDown, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AskAboutThis } from "../AskAboutThis";
 
 interface GaugeProps {
   gauge: GaugeType;
@@ -206,6 +207,15 @@ export function ArcGauge({ gauge, delay = 0, size = 180 }: GaugeProps) {
             Lens agreement: {lensAgreement}
           </div>
         )}
+        <div className="mt-2 -ml-2">
+          <AskAboutThis
+            subjectType="gauge"
+            subjectRef={gauge.id}
+            label="Ask about this"
+            prompt={`What does my ${gauge.domain} score of ${score === null ? "(pending)" : Math.round(score)} mean, and what would move it?`}
+            testId={`ask-gauge-${gauge.id}`}
+          />
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import {
   LayoutDashboard, FileText, Sparkles, HeartPulse, MessageSquare,
 } from "lucide-react";
 import { PatientSwitcher } from "./PatientSwitcher";
+import { NarrativeRail } from "./NarrativeRail";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel,
@@ -288,9 +289,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
         )}
       </header>
 
-      <main className="flex-1 mx-auto w-full max-w-[1280px] px-6 md:px-8 lg:px-12 py-8 md:py-10">
-        {children}
-      </main>
+      <div className="flex-1 mx-auto w-full max-w-[1600px] px-6 md:px-8 lg:px-12 py-8 md:py-10 flex gap-0">
+        <main className="flex-1 min-w-0 max-w-[1280px] mx-auto lg:mx-0">
+          {children}
+        </main>
+        <NarrativeRail />
+      </div>
 
       {/* Slim, muted disclaimer footer — present but not anxiety-inducing. */}
       <footer className="border-t border-border bg-card">

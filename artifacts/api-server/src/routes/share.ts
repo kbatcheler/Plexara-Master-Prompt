@@ -42,6 +42,14 @@ authedRouter.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
+// Hash a raw share-link bearer token to its at-rest form. SHA-256 is fine
+// here because the token already has 24 bytes (192 bits) of entropy from
+// `crypto.randomBytes`; a slow KDF would only add latency without strengthening
+// the random secret.
+function hashToken(raw: string): string {
+  return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
+}
+
 authedRouter.post("/", requireAuth, validate({ body: shareLinkCreateBody }), async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));
@@ -50,18 +58,26 @@ authedRouter.post("/", requireAuth, validate({ body: shareLinkCreateBody }), asy
   const { label, recipientName, expiresInDays } = req.body as z.infer<typeof shareLinkCreateBody>;
   const days = expiresInDays ?? 14;
   try {
-    const token = crypto.randomBytes(24).toString("base64url");
+    // Generate a high-entropy random token, store ONLY its SHA-256 hash, and
+    // return the raw token to the caller exactly once. After the response
+    // ends the server has no way to reproduce the bearer credential — this is
+    // the same model used for API keys, GitHub PATs, etc.
+    const rawToken = crypto.randomBytes(24).toString("base64url");
+    const tokenHash = hashToken(rawToken);
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
     const [link] = await db.insert(shareLinksTable).values({
       patientId,
       createdBy: userId,
-      token,
+      tokenHash,
       label: label ?? null,
       recipientName: recipientName ?? null,
       permissions: "read",
       expiresAt,
     }).returning();
-    res.status(201).json(link);
+    // Return the raw token alongside the persisted record so the client can
+    // build the share URL. `link.tokenHash` is fine to expose — it cannot be
+    // reversed into the bearer credential.
+    res.status(201).json({ ...link, token: rawToken });
   } catch (err) {
     req.log.error({ err }, "Failed to create share link");
     res.status(500).json({ error: "Internal server error" });
@@ -108,7 +124,11 @@ authedRouter.get("/:linkId/access", requireAuth, async (req, res): Promise<void>
 publicRouter.get("/:token", async (req, res): Promise<void> => {
   const token = (req.params.token as string);
   try {
-    const [link] = await db.select().from(shareLinksTable).where(eq(shareLinksTable.token, token));
+    // Hash the presented bearer token and look it up by hash. This is the
+    // only way the server resolves a share — raw tokens are never stored, so
+    // a DB read leak cannot be replayed against this endpoint.
+    const tokenHash = hashToken(token);
+    const [link] = await db.select().from(shareLinksTable).where(eq(shareLinksTable.tokenHash, tokenHash));
     if (!link) { res.status(404).json({ error: "Link not found" }); return; }
     if (link.revokedAt) { res.status(410).json({ error: "Link revoked" }); return; }
     if (link.expiresAt < new Date()) { res.status(410).json({ error: "Link expired" }); return; }

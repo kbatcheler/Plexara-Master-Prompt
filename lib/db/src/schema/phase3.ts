@@ -31,7 +31,11 @@ export const shareLinksTable = pgTable("share_links", {
   id: serial("id").primaryKey(),
   patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
   createdBy: text("created_by").notNull(),
-  token: text("token").notNull().unique(),
+  // SHA-256 hex of the raw token. The raw token is returned to the creator
+  // exactly once at /share-links POST and never persisted in plaintext.
+  // Lookups (/api/share/:token public read) hash the incoming token and
+  // compare against this column. Keeps PHI bearer credentials safe at rest.
+  tokenHash: text("token_hash").notNull().unique(),
   label: text("label"),
   recipientName: text("recipient_name"),
   permissions: text("permissions").notNull().default("read"),

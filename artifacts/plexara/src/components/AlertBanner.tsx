@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { AskAboutThis } from "./AskAboutThis";
 
 export type AlertSeverity = "urgent" | "watch" | "info" | "resolved";
 
@@ -94,6 +95,13 @@ export function AlertBanner({
         )}
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        <AskAboutThis
+          subjectType="alert"
+          subjectRef={title.slice(0, 80)}
+          label="Ask"
+          prompt={`Help me understand this alert: "${title}"${description ? ` — ${description}` : ""}. What does it mean for me, and what should I consider doing?`}
+          testId={`${testId}-ask`}
+        />
         {viewHref && (
           <Button
             variant="ghost"
