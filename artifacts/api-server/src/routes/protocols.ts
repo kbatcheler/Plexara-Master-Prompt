@@ -288,6 +288,76 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
   }
 });
 
+/**
+ * Lightweight read-only endpoint surfaced on the dashboard "Intelligence
+ * Summary": returns ONLY the protocols whose eligibility rules the
+ * patient's latest biomarker values currently match. Sister to /eligibility,
+ * which returns every protocol with per-rule diagnostics. No LLM call.
+ */
+patientRouter.get("/eligible", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  const patient = await getPatient(patientId, userId);
+  if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
+  try {
+    await ensureSeeded();
+    const protocols = await db.select().from(protocolsTable);
+    const biomarkers = await db.select().from(biomarkerResultsTable).where(eq(biomarkerResultsTable.patientId, patientId));
+
+    const latestByName = new Map<string, typeof biomarkers[0]>();
+    for (const b of biomarkers) {
+      const key = b.biomarkerName.toLowerCase();
+      const existing = latestByName.get(key);
+      const bDate = b.testDate ? new Date(b.testDate).getTime() : new Date(b.createdAt).getTime();
+      if (!existing) {
+        latestByName.set(key, b);
+      } else {
+        const eDate = existing.testDate ? new Date(existing.testDate).getTime() : new Date(existing.createdAt).getTime();
+        if (bDate > eDate) latestByName.set(key, b);
+      }
+    }
+
+    const adoptions = await db.select().from(protocolAdoptionsTable)
+      .where(and(eq(protocolAdoptionsTable.patientId, patientId), eq(protocolAdoptionsTable.status, "active")));
+    const activeIds = new Set(adoptions.map((a) => a.protocolId));
+
+    const matched = protocols
+      .map((p) => {
+        const rules = (p.eligibilityRules as EligibilityRule[]) ?? [];
+        if (rules.length === 0) return null;
+        const eligible = rules.some((r) => {
+          const b = latestByName.get(r.biomarker.toLowerCase());
+          if (!b) return false;
+          const v = b.value ? parseFloat(b.value) : NaN;
+          if (!isFinite(v)) return false;
+          return evaluateRule(
+            r,
+            v,
+            b.optimalRangeLow ? parseFloat(b.optimalRangeLow) : null,
+            b.optimalRangeHigh ? parseFloat(b.optimalRangeHigh) : null,
+          );
+        });
+        if (!eligible) return null;
+        return {
+          id: p.id,
+          slug: p.slug,
+          name: p.name,
+          category: p.category,
+          description: p.description,
+          evidenceLevel: p.evidenceLevel,
+          requiresPhysician: p.requiresPhysician,
+          alreadyAdopted: activeIds.has(p.id),
+        };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    res.json(matched);
+  } catch (err) {
+    req.log.error({ err }, "Failed to compute eligible protocols");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 patientRouter.get("/adoptions", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));

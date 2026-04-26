@@ -1,0 +1,430 @@
+import { db } from "@workspace/db";
+import {
+  recordsTable,
+  biomarkerResultsTable,
+  patientsTable,
+  correlationsTable,
+  comprehensiveReportsTable,
+  interpretationsTable,
+  supplementsTable,
+  supplementRecommendationsTable,
+  protocolsTable,
+  protocolAdoptionsTable,
+} from "@workspace/db";
+import { and, eq, desc, asc, isNotNull, sql } from "drizzle-orm";
+import { logger } from "./logger";
+import {
+  computeAgeRange,
+  runCrossRecordCorrelation,
+  runComprehensiveReport,
+  runSupplementRecommendations,
+  type PatientContext,
+  type ReconciledOutput,
+  type ComprehensiveReportOutput,
+} from "./ai";
+import { decryptJson, encryptText, encryptJson } from "./phi-crypto";
+import { isProviderAllowed } from "./consent";
+import { recomputeTrendsForPatient, detectChangeAlerts, detectTrajectoryAlerts } from "./trends";
+import { buildReportInputs } from "../routes/comprehensive-report";
+
+interface EligibilityRule {
+  biomarker: string;
+  comparator: "gt" | "lt" | "between" | "outsideOptimal";
+  value?: number;
+  low?: number;
+  high?: number;
+}
+
+function evaluateRule(
+  rule: EligibilityRule,
+  value: number,
+  optimalLow: number | null,
+  optimalHigh: number | null,
+): boolean {
+  switch (rule.comparator) {
+    case "gt": return rule.value !== undefined && value > rule.value;
+    case "lt": return rule.value !== undefined && value < rule.value;
+    case "between":
+      return rule.low !== undefined && rule.high !== undefined && value >= rule.low && value <= rule.high;
+    case "outsideOptimal":
+      if (optimalLow !== null && value < optimalLow) return true;
+      if (optimalHigh !== null && value > optimalHigh) return true;
+      return false;
+  }
+}
+
+interface OrchestratorReport {
+  trendsComputed: number;
+  changeAlertsFired: number;
+  trajectoryAlertsFired: number;
+  correlationGenerated: boolean;
+  reportGenerated: boolean;
+  supplementsGenerated: number;
+  protocolsMatched: number;
+  protocolsSuggested: number;
+  errors: Record<string, string>;
+}
+
+/**
+ * Auto-fired after every successful blood-panel interpretation. Wires
+ * together every downstream intelligence engine so the user gets the full
+ * synthesis (trends, cross-record correlation, comprehensive report,
+ * supplement recommendations, matched protocols) without needing to
+ * manually trigger each one.
+ *
+ * Steps run SEQUENTIALLY because each later step benefits from the data
+ * produced by earlier steps (trends inform the report; the report's
+ * cross-panel patterns inform supplement recommendations).
+ *
+ * Every step is independently try/catched so a failure in one (e.g. an
+ * LLM provider hiccup) does NOT prevent subsequent steps from running.
+ *
+ * Idempotent: repeated runs upsert/replace prior outputs rather than
+ * appending duplicates (the only exception is comprehensive_reports,
+ * which intentionally retains history — /report reads `latest`).
+ */
+export async function runPostInterpretationPipeline(patientId: number): Promise<OrchestratorReport> {
+  const report: OrchestratorReport = {
+    trendsComputed: 0,
+    changeAlertsFired: 0,
+    trajectoryAlertsFired: 0,
+    correlationGenerated: false,
+    reportGenerated: false,
+    supplementsGenerated: 0,
+    protocolsMatched: 0,
+    protocolsSuggested: 0,
+    errors: {},
+  };
+
+  logger.info({ patientId }, "Post-interpretation orchestrator started");
+
+  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
+  if (!patient) {
+    logger.warn({ patientId }, "Post-interpretation orchestrator: patient not found, aborting");
+    return report;
+  }
+
+  // ── Concurrency guard ─────────────────────────────────────────────────
+  // Two interpretations completing back-to-back (e.g. user uploads two
+  // panels in quick succession) would otherwise schedule overlapping
+  // orchestrator runs that race on the read-then-write patterns below
+  // (correlations, supplement recommendations, protocol suggestions),
+  // producing duplicate rows. A Postgres session-level advisory lock
+  // keyed by (NAMESPACE, patientId) serialises orchestrator runs per
+  // patient. Using two-int form so the namespace can't collide with
+  // application advisory locks elsewhere.
+  //
+  // We hold this lock for the lifetime of the orchestrator and
+  // ALWAYS release it in finally — even on partial failure — so a
+  // crashed run cannot wedge subsequent runs for the same patient.
+  const ADVISORY_LOCK_NAMESPACE = 0x504c5841; // "PLXA"
+  await db.execute(sql`SELECT pg_advisory_lock(${ADVISORY_LOCK_NAMESPACE}, ${patientId})`);
+  try {
+
+  const ctx: PatientContext = {
+    ageRange: computeAgeRange(patient.dateOfBirth),
+    sex: patient.sex || null,
+    ethnicity: patient.ethnicity || null,
+  };
+
+  const allowAnthropic = await isProviderAllowed(patient.accountId, "anthropic");
+
+  // ── Step 1: Trends + change-alerts + trajectory-alerts ────────────────
+  // Must run FIRST because the comprehensive report and supplement engine
+  // both want history-aware context.
+  try {
+    report.trendsComputed = await recomputeTrendsForPatient(patientId);
+  } catch (err) {
+    logger.error({ err, patientId, step: "trends" }, "Orchestrator step failed");
+    report.errors.trends = (err as Error)?.message ?? "unknown";
+  }
+  try {
+    report.changeAlertsFired = await detectChangeAlerts(patientId);
+  } catch (err) {
+    logger.error({ err, patientId, step: "changeAlerts" }, "Orchestrator step failed");
+    report.errors.changeAlerts = (err as Error)?.message ?? "unknown";
+  }
+  try {
+    report.trajectoryAlertsFired = await detectTrajectoryAlerts(patientId);
+  } catch (err) {
+    logger.error({ err, patientId, step: "trajectoryAlerts" }, "Orchestrator step failed");
+    report.errors.trajectoryAlerts = (err as Error)?.message ?? "unknown";
+  }
+
+  // ── Step 2: Cross-record correlation (≥2 complete records) ────────────
+  try {
+    const completeRecords = await db
+      .select({ id: recordsTable.id })
+      .from(recordsTable)
+      .where(and(eq(recordsTable.patientId, patientId), eq(recordsTable.status, "complete")));
+
+    if (completeRecords.length >= 2 && allowAnthropic) {
+      const allBiomarkers = await db
+        .select()
+        .from(biomarkerResultsTable)
+        .where(eq(biomarkerResultsTable.patientId, patientId))
+        .orderBy(asc(biomarkerResultsTable.testDate));
+
+      const panelMap: Record<number, {
+        testDate: string | null;
+        biomarkers: Array<{ name: string; value: number | null; unit: string | null; category: string | null }>;
+      }> = {};
+      for (const b of allBiomarkers) {
+        if (!panelMap[b.recordId]) {
+          panelMap[b.recordId] = { testDate: b.testDate, biomarkers: [] };
+        }
+        panelMap[b.recordId].biomarkers.push({
+          name: b.biomarkerName,
+          value: b.value !== null ? Number(b.value) : null,
+          unit: b.unit,
+          category: b.category,
+        });
+      }
+      const panelHistory = Object.values(panelMap)
+        .filter((p) => p.testDate)
+        .sort((a, b) => (a.testDate ?? "").localeCompare(b.testDate ?? ""));
+
+      if (panelHistory.length >= 2) {
+        const output = await runCrossRecordCorrelation(panelHistory, ctx);
+        const dates = panelHistory.map((p) => p.testDate).filter((d): d is string => !!d);
+        await db.insert(correlationsTable).values({
+          patientId,
+          recordCount: panelHistory.length,
+          earliestRecordDate: dates[0] ?? null,
+          latestRecordDate: dates[dates.length - 1] ?? null,
+          trendsJson: JSON.stringify(output.trends),
+          patternsJson: JSON.stringify({
+            patterns: output.patterns,
+            recommendedActions: output.recommendedActions,
+          }),
+          narrativeSummary: output.narrativeSummary,
+          modelUsed: "claude-sonnet-4-6",
+        });
+        report.correlationGenerated = true;
+      }
+    }
+  } catch (err) {
+    logger.error({ err, patientId, step: "correlation" }, "Orchestrator step failed");
+    report.errors.correlation = (err as Error)?.message ?? "unknown";
+  }
+
+  // ── Step 3: Comprehensive report ──────────────────────────────────────
+  // Reuses buildReportInputs() from the comprehensive-report route module
+  // so we don't duplicate the per-record reconciliation join logic.
+  let latestReportSections: ComprehensiveReportOutput | null = null;
+  try {
+    if (allowAnthropic) {
+      const inputs = await buildReportInputs(patientId);
+      const haveAtLeastOne = inputs.panelReconciled.filter((p) => p.reconciledOutput).length > 0;
+      if (haveAtLeastOne) {
+        const reportOutput = await runComprehensiveReport({
+          patientCtx: ctx,
+          panelReconciled: inputs.panelReconciled,
+          biomarkerHistory: inputs.biomarkerHistory,
+          currentSupplements: inputs.currentSupplements,
+        });
+        const sectionsPayload = {
+          sections: reportOutput.sections,
+          crossPanelPatterns: reportOutput.crossPanelPatterns,
+          topConcerns: reportOutput.topConcerns,
+          topPositives: reportOutput.topPositives,
+          urgentFlags: reportOutput.urgentFlags,
+          recommendedNextSteps: reportOutput.recommendedNextSteps,
+          followUpTesting: reportOutput.followUpTesting,
+        };
+        await db.insert(comprehensiveReportsTable).values({
+          patientId,
+          executiveSummary: encryptText(reportOutput.executiveSummary),
+          patientNarrative: encryptText(reportOutput.patientNarrative),
+          clinicalNarrative: encryptText(reportOutput.clinicalNarrative),
+          unifiedHealthScore: reportOutput.unifiedHealthScore.toString(),
+          sectionsJson: encryptJson(sectionsPayload) as object,
+          sourceRecordIds: inputs.sourceRecordIds,
+          panelCount: inputs.sourceRecordIds.length,
+          generationModel: "claude-sonnet-4-6",
+        });
+        report.reportGenerated = true;
+        latestReportSections = reportOutput;
+      }
+    }
+  } catch (err) {
+    logger.error({ err, patientId, step: "comprehensiveReport" }, "Orchestrator step failed");
+    report.errors.comprehensiveReport = (err as Error)?.message ?? "unknown";
+  }
+
+  // ── Step 4: Supplement recommendations ────────────────────────────────
+  // Latest reconciled interpretation + active stack + history block +
+  // cross-panel context from the freshly-generated comprehensive report.
+  try {
+    if (allowAnthropic) {
+      const [latest] = await db
+        .select()
+        .from(interpretationsTable)
+        .where(
+          and(
+            eq(interpretationsTable.patientId, patientId),
+            isNotNull(interpretationsTable.reconciledOutput),
+          ),
+        )
+        .orderBy(desc(interpretationsTable.createdAt))
+        .limit(1);
+
+      if (latest && latest.reconciledOutput) {
+        const reconciled = decryptJson<ReconciledOutput>(latest.reconciledOutput) as ReconciledOutput;
+        const stack = await db
+          .select()
+          .from(supplementsTable)
+          .where(and(eq(supplementsTable.patientId, patientId), eq(supplementsTable.active, true)));
+
+        // Reuse the same biomarker-history shape buildReportInputs uses so the
+        // supplement model sees the same time-series the comprehensive engine did.
+        let history: Awaited<ReturnType<typeof buildReportInputs>>["biomarkerHistory"] = [];
+        try {
+          const inputs = await buildReportInputs(patientId);
+          history = inputs.biomarkerHistory;
+        } catch {
+          history = [];
+        }
+
+        const comprehensiveContext = latestReportSections
+          ? {
+              crossPanelPatterns: latestReportSections.crossPanelPatterns?.map((p) =>
+                typeof p === "string" ? p : (p as { description?: string }).description ?? JSON.stringify(p),
+              ),
+              recommendedNextSteps: latestReportSections.recommendedNextSteps,
+            }
+          : undefined;
+
+        const output = await runSupplementRecommendations(
+          reconciled,
+          stack.map((s) => ({ name: s.name, dosage: s.dosage })),
+          ctx,
+          history,
+          comprehensiveContext,
+        );
+
+        // Idempotent replace — wipe prior recommendations for this patient,
+        // then insert fresh ones in a single transaction so concurrent
+        // pollers never observe an empty intermediate state.
+        await db.transaction(async (tx) => {
+          await tx
+            .delete(supplementRecommendationsTable)
+            .where(eq(supplementRecommendationsTable.patientId, patientId));
+          if (output.recommendations.length > 0) {
+            await tx.insert(supplementRecommendationsTable).values(
+              output.recommendations.map((r) => ({
+                patientId,
+                recordId: latest.triggerRecordId ?? null,
+                name: r.name,
+                dosage: r.dosage,
+                rationale: r.rationale,
+                targetBiomarkers: JSON.stringify(r.targetBiomarkers ?? []),
+                evidenceLevel: r.evidenceLevel,
+                priority: r.priority,
+                citation: r.citation,
+                status: "suggested",
+              })),
+            );
+          }
+        });
+        report.supplementsGenerated = output.recommendations.length;
+      }
+    }
+  } catch (err) {
+    logger.error({ err, patientId, step: "supplements" }, "Orchestrator step failed");
+    report.errors.supplements = (err as Error)?.message ?? "unknown";
+  }
+
+  // ── Step 5: Protocol eligibility scan ─────────────────────────────────
+  // DB-only, no LLM. For each protocol whose rules the patient now matches,
+  // ensure a `suggested` adoption row exists. Never auto-promote to
+  // `active` — that requires explicit user adoption.
+  try {
+    const protocols = await db.select().from(protocolsTable);
+    const biomarkers = await db
+      .select()
+      .from(biomarkerResultsTable)
+      .where(eq(biomarkerResultsTable.patientId, patientId));
+
+    const latestByName = new Map<string, typeof biomarkers[0]>();
+    for (const b of biomarkers) {
+      const key = b.biomarkerName.toLowerCase();
+      const existing = latestByName.get(key);
+      const bDate = b.testDate ? new Date(b.testDate).getTime() : new Date(b.createdAt).getTime();
+      if (!existing) {
+        latestByName.set(key, b);
+      } else {
+        const eDate = existing.testDate
+          ? new Date(existing.testDate).getTime()
+          : new Date(existing.createdAt).getTime();
+        if (bDate > eDate) latestByName.set(key, b);
+      }
+    }
+
+    const adoptions = await db
+      .select()
+      .from(protocolAdoptionsTable)
+      .where(eq(protocolAdoptionsTable.patientId, patientId));
+    // Both `active` and `suggested` adoptions count as "already there" so
+    // we don't keep re-inserting the same suggestion every time the
+    // pipeline runs.
+    const existingByProtocol = new Map(adoptions.map((a) => [a.protocolId, a]));
+
+    for (const p of protocols) {
+      const rules = (p.eligibilityRules as EligibilityRule[]) ?? [];
+      if (rules.length === 0) continue;
+      const eligible = rules.some((r) => {
+        const b = latestByName.get(r.biomarker.toLowerCase());
+        if (!b) return false;
+        const v = b.value ? parseFloat(b.value) : NaN;
+        if (!isFinite(v)) return false;
+        return evaluateRule(
+          r,
+          v,
+          b.optimalRangeLow ? parseFloat(b.optimalRangeLow) : null,
+          b.optimalRangeHigh ? parseFloat(b.optimalRangeHigh) : null,
+        );
+      });
+      if (!eligible) continue;
+      report.protocolsMatched++;
+
+      if (existingByProtocol.has(p.id)) continue;
+      await db.insert(protocolAdoptionsTable).values({
+        patientId,
+        protocolId: p.id,
+        status: "suggested",
+      });
+      report.protocolsSuggested++;
+    }
+  } catch (err) {
+    logger.error({ err, patientId, step: "protocols" }, "Orchestrator step failed");
+    report.errors.protocols = (err as Error)?.message ?? "unknown";
+  }
+
+  logger.info(
+    {
+      patientId,
+      trendsComputed: report.trendsComputed,
+      changeAlertsFired: report.changeAlertsFired,
+      trajectoryAlertsFired: report.trajectoryAlertsFired,
+      correlationGenerated: report.correlationGenerated,
+      reportGenerated: report.reportGenerated,
+      supplementsGenerated: report.supplementsGenerated,
+      protocolsMatched: report.protocolsMatched,
+      protocolsSuggested: report.protocolsSuggested,
+      errors: Object.keys(report.errors),
+    },
+    "Post-interpretation orchestrator completed",
+  );
+
+  return report;
+  } finally {
+    // Always release the per-patient advisory lock so a crash in any
+    // earlier step cannot wedge subsequent orchestrator runs.
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${ADVISORY_LOCK_NAMESPACE}, ${patientId})`);
+    } catch (unlockErr) {
+      logger.error({ unlockErr, patientId }, "Failed to release orchestrator advisory lock");
+    }
+  }
+}

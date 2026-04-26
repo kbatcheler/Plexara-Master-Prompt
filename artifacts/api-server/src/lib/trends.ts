@@ -1,4 +1,4 @@
-import { db, biomarkerResultsTable, biomarkerTrendsTable, changeAlertsTable, patientsTable } from "@workspace/db";
+import { db, biomarkerResultsTable, biomarkerTrendsTable, changeAlertsTable, patientsTable, alertsTable } from "@workspace/db";
 import { eq, and, gte, desc, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -182,5 +182,120 @@ export async function detectChangeAlerts(patientId: number): Promise<number> {
     }
   }
   logger.info({ patientId, fired }, "Change-alerts evaluated");
+  return fired;
+}
+
+// ─── Trajectory-aware alerts ─────────────────────────────────────────────
+//
+// For every biomarker whose linear trend has r² > 0.5 (statistically
+// meaningful direction), check whether the 90-day projection breaches the
+// optimal range while the current value is still inside it. If so, fire
+// a "trajectory_warning" alert into alertsTable.
+//
+// Optimal ranges come from the most recent biomarker_results row per name,
+// since that is where extraction wrote the per-result optimal interval.
+//
+// Dedup: skip if an active trajectory alert for the same biomarker exists
+// in the last 30 days.
+const TRAJECTORY_R2_THRESHOLD = 0.5;
+const TRAJECTORY_DEDUP_DAYS = 30;
+
+export async function detectTrajectoryAlerts(patientId: number): Promise<number> {
+  const trends = await db
+    .select()
+    .from(biomarkerTrendsTable)
+    .where(eq(biomarkerTrendsTable.patientId, patientId));
+
+  if (trends.length === 0) {
+    logger.info({ patientId, fired: 0 }, "Trajectory alerts evaluated (no trends)");
+    return 0;
+  }
+
+  // Pull the latest biomarker result per name (within this patient) to read
+  // the optimal range that extraction recorded.
+  const allResults = await db
+    .select()
+    .from(biomarkerResultsTable)
+    .where(eq(biomarkerResultsTable.patientId, patientId));
+
+  const latestByName = new Map<string, { optimalLow: number | null; optimalHigh: number | null; unit: string | null }>();
+  for (const r of allResults) {
+    const key = r.biomarkerName.toLowerCase();
+    const t = r.testDate ? new Date(r.testDate).getTime() : r.createdAt.getTime();
+    const existing = latestByName.get(key) as ({ optimalLow: number | null; optimalHigh: number | null; unit: string | null; t: number } | undefined);
+    if (!existing || t > existing.t) {
+      latestByName.set(key, {
+        optimalLow: r.optimalRangeLow ? parseFloat(r.optimalRangeLow) : null,
+        optimalHigh: r.optimalRangeHigh ? parseFloat(r.optimalRangeHigh) : null,
+        unit: r.unit,
+        t,
+      } as unknown as { optimalLow: number | null; optimalHigh: number | null; unit: string | null });
+    }
+  }
+
+  let fired = 0;
+  const dedupCutoff = new Date(Date.now() - TRAJECTORY_DEDUP_DAYS * DAY_MS);
+
+  for (const t of trends) {
+    if ((t.r2 ?? 0) <= TRAJECTORY_R2_THRESHOLD) continue;
+    if (t.lastValue == null || t.projection90 == null) continue;
+    const opt = latestByName.get(t.biomarkerName.toLowerCase());
+    if (!opt) continue;
+    const { optimalLow, optimalHigh } = opt;
+    if (optimalLow == null && optimalHigh == null) continue;
+
+    const current = t.lastValue;
+    const projected = t.projection90;
+    const inRangeNow =
+      (optimalLow == null || current >= optimalLow) &&
+      (optimalHigh == null || current <= optimalHigh);
+    const projectedBreach =
+      (optimalLow != null && projected < optimalLow) ||
+      (optimalHigh != null && projected > optimalHigh);
+
+    if (!inRangeNow || !projectedBreach) continue;
+
+    // Dedup: skip if an active trajectory alert for this biomarker fired in
+    // the last 30 days. Match on relatedBiomarkers JSON containing the name.
+    const recent = await db
+      .select({ id: alertsTable.id })
+      .from(alertsTable)
+      .where(
+        and(
+          eq(alertsTable.patientId, patientId),
+          eq(alertsTable.triggerType, "trajectory"),
+          gte(alertsTable.createdAt, dedupCutoff),
+          sql`${alertsTable.relatedBiomarkers}::jsonb @> ${JSON.stringify([t.biomarkerName])}::jsonb`,
+        ),
+      )
+      .limit(1);
+    if (recent.length > 0) continue;
+
+    const direction: "up" | "down" = (t.slopePerDay ?? 0) >= 0 ? "up" : "down";
+    const unit = t.unit ?? opt.unit ?? "";
+    const rangeStr =
+      optimalLow != null && optimalHigh != null
+        ? `${optimalLow}-${optimalHigh}`
+        : optimalLow != null
+          ? `≥ ${optimalLow}`
+          : `≤ ${optimalHigh}`;
+
+    const fmt = (x: number) => (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1));
+    const title = `${t.biomarkerName} trending ${direction === "up" ? "upward" : "downward"} toward suboptimal range`;
+    const description = `${t.biomarkerName} is currently ${fmt(current)}${unit ? " " + unit : ""} (within optimal range ${rangeStr}${unit ? " " + unit : ""}) but trending ${direction === "up" ? "up" : "down"} — projected to reach ${fmt(projected)}${unit ? " " + unit : ""} within ~90 days based on ${t.sampleCount} readings (r²=${(t.r2 ?? 0).toFixed(2)}).`;
+
+    await db.insert(alertsTable).values({
+      patientId,
+      severity: "watch",
+      title,
+      description,
+      triggerType: "trajectory",
+      relatedBiomarkers: [t.biomarkerName] as unknown as object,
+      status: "active",
+    });
+    fired++;
+  }
+
+  logger.info({ patientId, fired }, "Trajectory alerts evaluated");
   return fired;
 }

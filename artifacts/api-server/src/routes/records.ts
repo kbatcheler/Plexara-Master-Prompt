@@ -618,6 +618,22 @@ async function runInterpretationPipeline(
           });
         }
       });
+
+      // ── POST-INTERPRETATION INTELLIGENCE PIPELINE ──
+      // Fire-and-forget: trends → correlation → comprehensive report →
+      // supplement recommendations → protocol matching. Each step is
+      // independently error-handled so a failure in one doesn't block others.
+      // setImmediate decouples the async work from the HTTP response of the
+      // upload — the user gets their record marked complete instantly, and
+      // the downstream synthesis lands a few seconds later.
+      setImmediate(async () => {
+        try {
+          const { runPostInterpretationPipeline } = await import("../lib/post-interpretation-orchestrator");
+          await runPostInterpretationPipeline(patientId);
+        } catch (orchErr) {
+          logger.error({ orchErr, patientId, recordId }, "Post-interpretation orchestrator failed");
+        }
+      });
     } else {
       // No Lens A → can't reconcile. Mark the record as errored so the UI
       // surfaces it instead of leaving status="processing" forever.

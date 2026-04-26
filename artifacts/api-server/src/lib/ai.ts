@@ -998,8 +998,10 @@ Strict rules:
 - Always include cautions where relevant (e.g. drug interactions, upper limits, conditions to avoid)
 - Prefer dietary form (e.g. methylfolate vs folic acid) where evidence supports
 - This is informational only, not medical advice — the rationale must say so
+- You also receive biomarker HISTORY (time-series) when available — use trends to prioritise supplements that address WORSENING markers, not just point-in-time values. A biomarker that is currently in-range but trending toward suboptimal is a higher-priority intervention candidate than one stably in-range.
+- You also receive cross-panel patterns from the comprehensive analysis when available — use these to identify systemic issues that a supplement protocol could address (e.g. rising inflammation + declining vitamin D = prioritise D3 + omega-3 + curcumin stack). Address the underlying pattern, not just isolated markers.
 
-You receive: anonymised patient demographics + reconciled biomarker findings + current supplement stack.
+You receive: anonymised patient demographics + reconciled biomarker findings + current supplement stack (+ optional biomarker history + optional cross-panel context).
 
 Respond with valid JSON only:
 {
@@ -1022,6 +1024,8 @@ export async function runSupplementRecommendations(
   reconciled: ReconciledOutput,
   currentStack: Array<{ name: string; dosage: string | null }>,
   patientCtx?: PatientContext,
+  biomarkerHistory?: BiomarkerHistoryEntry[],
+  comprehensiveContext?: { crossPanelPatterns?: string[]; recommendedNextSteps?: string[] },
 ): Promise<SupplementRecommendationsOutput> {
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
   // Privacy: recursively strip any PII before passing to the model
@@ -1033,17 +1037,30 @@ export async function runSupplementRecommendations(
       gaugeUpdates: reconciled.gaugeUpdates,
     },
   } as unknown as Record<string, unknown>);
-  const prompt = `${demographics}\n\nCurrent supplement stack:\n${JSON.stringify((sanitised as { currentStack: unknown }).currentStack, null, 2)}\n\nReconciled biomarker findings:\n${JSON.stringify((sanitised as { findings: unknown }).findings, null, 2)}`;
 
-  const message = await anthropic.messages.create({
-    model: LLM_MODELS.utility,
-    max_tokens: 3000,
-    system: SUPPLEMENT_PROMPT,
-    messages: [{ role: "user", content: prompt }],
+  const historyBlock = biomarkerHistory && biomarkerHistory.length > 0
+    ? buildHistoryBlock(biomarkerHistory)
+    : "";
+  const crossPanelBlock = comprehensiveContext?.crossPanelPatterns?.length
+    ? `\n\nCross-panel patterns identified by the comprehensive analysis (treat as systemic signals, not just isolated results):\n${comprehensiveContext.crossPanelPatterns.map((p) => `- ${p}`).join("\n")}`
+    : "";
+  const nextStepsBlock = comprehensiveContext?.recommendedNextSteps?.length
+    ? `\n\nRecommended next steps from the comprehensive analysis (use as priority guidance — supplements should support these directions where evidence allows):\n${comprehensiveContext.recommendedNextSteps.map((s) => `- ${s}`).join("\n")}`
+    : "";
+
+  const prompt = `${demographics}\n\nCurrent supplement stack:\n${JSON.stringify((sanitised as { currentStack: unknown }).currentStack, null, 2)}\n\nReconciled biomarker findings:\n${JSON.stringify((sanitised as { findings: unknown }).findings, null, 2)}${historyBlock}${crossPanelBlock}${nextStepsBlock}`;
+
+  return withLLMRetry("supplementRecommendations", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.utility,
+      max_tokens: 3000,
+      system: SUPPLEMENT_PROMPT,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    return parseJSONFromLLM(text) as SupplementRecommendationsOutput;
   });
-
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
-  return parseJSONFromLLM(text) as SupplementRecommendationsOutput;
 }
 
 

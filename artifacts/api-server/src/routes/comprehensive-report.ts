@@ -44,7 +44,7 @@ async function getOwnedPatient(patientId: number, userId: string) {
  *   - biomarkerHistory: every biomarker the patient has on file, grouped + sorted
  *   - supplements: their current stack
  */
-async function buildReportInputs(patientId: number) {
+export async function buildReportInputs(patientId: number) {
   const records = await db
     .select()
     .from(recordsTable)
