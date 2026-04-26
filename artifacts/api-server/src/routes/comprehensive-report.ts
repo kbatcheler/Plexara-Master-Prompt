@@ -7,8 +7,9 @@ import {
   interpretationsTable,
   biomarkerResultsTable,
   supplementsTable,
+  imagingStudiesTable,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
@@ -27,6 +28,7 @@ import {
   type ComprehensiveReportOutput,
 } from "../lib/ai";
 import { decryptInterpretationFields } from "../lib/phi-crypto";
+import { sanitizeFreeText } from "../lib/imaging-interpretation";
 
 const router = Router({ mergeParams: true });
 
@@ -111,7 +113,56 @@ export async function buildReportInputs(patientId: number) {
     .where(eq(supplementsTable.patientId, patientId));
   const currentSupplements = stack.map((s) => ({ name: s.name, dosage: s.dosage }));
 
-  return { panelReconciled, biomarkerHistory, currentSupplements, sourceRecordIds: records.map((r) => r.id) };
+  // Imaging studies with a completed three-lens interpretation. We pass a
+  // compact summary (narratives + concerns) rather than the full lens
+  // outputs so the comprehensive synthesist can integrate without bloat.
+  type ImagingInterpretationLite = NonNullable<
+    Parameters<typeof runComprehensiveReport>[0]["imagingInterpretations"]
+  >[number];
+  type StoredImaging = {
+    reconciled?: { patientNarrative?: string; clinicalNarrative?: string; topConcerns?: string[]; urgentFlags?: string[] };
+    contextNote?: string;
+  };
+  const interpretedStudies = await db
+    .select()
+    .from(imagingStudiesTable)
+    .where(
+      and(
+        eq(imagingStudiesTable.patientId, patientId),
+        isNotNull(imagingStudiesTable.interpretation),
+      ),
+    )
+    .orderBy(desc(imagingStudiesTable.uploadedAt));
+  const imagingInterpretations: ImagingInterpretationLite[] = interpretedStudies
+    .map((s) => {
+      const interp = (s.interpretation as StoredImaging | null) ?? null;
+      const reconciled = interp?.reconciled;
+      if (!reconciled) return null;
+      return {
+        studyId: s.id,
+        modality: s.modality,
+        bodyPart: s.bodyPart,
+        // DICOM description can leak MRN/accession/names — strip identifier
+        // tokens before this object is forwarded to the comprehensive-report
+        // LLM call (which fans out to multiple third-party providers).
+        description: sanitizeFreeText(s.description),
+        studyDate: s.studyDate,
+        patientNarrative: reconciled.patientNarrative ?? "",
+        clinicalNarrative: reconciled.clinicalNarrative ?? "",
+        topConcerns: reconciled.topConcerns ?? [],
+        urgentFlags: reconciled.urgentFlags ?? [],
+        contextNote: interp?.contextNote ?? "",
+      };
+    })
+    .filter((x): x is ImagingInterpretationLite => x !== null);
+
+  return {
+    panelReconciled,
+    biomarkerHistory,
+    currentSupplements,
+    imagingInterpretations,
+    sourceRecordIds: records.map((r) => r.id),
+  };
 }
 
 /**
@@ -154,6 +205,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       panelReconciled: inputs.panelReconciled,
       biomarkerHistory: inputs.biomarkerHistory,
       currentSupplements: inputs.currentSupplements,
+      imagingInterpretations: inputs.imagingInterpretations,
     });
 
     // Persist (PHI-encrypted): narratives in *_narrative text columns,

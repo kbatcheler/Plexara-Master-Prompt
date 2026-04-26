@@ -886,6 +886,18 @@ export interface ComprehensiveReportInput {
   }>;
   biomarkerHistory: BiomarkerHistoryEntry[];
   currentSupplements?: Array<{ name: string; dosage: string | null }>;
+  imagingInterpretations?: Array<{
+    studyId: number;
+    modality: string | null;
+    bodyPart: string | null;
+    description: string | null;
+    studyDate: string | null;
+    patientNarrative: string;
+    clinicalNarrative: string;
+    topConcerns: string[];
+    urgentFlags: string[];
+    contextNote: string;
+  }>;
 }
 
 export async function runComprehensiveReport(
@@ -918,7 +930,12 @@ export async function runComprehensiveReport(
       ? `\n\nCurrent supplement stack (consider for context, do not re-recommend duplicates):\n${JSON.stringify(input.currentSupplements, null, 2)}`
       : "";
 
-  const userPayload = `${demographics}${historyBlock}${supplementsBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+  const imagingBlock =
+    input.imagingInterpretations && input.imagingInterpretations.length > 0
+      ? `\n\nImaging studies on file (DICOM-header-derived interpretations — DO NOT treat as radiology pixel findings; use only as imaging context to integrate with the bloodwork):\n${JSON.stringify(input.imagingInterpretations, null, 2)}`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
 
   const parsed = await withLLMRetry("comprehensiveReport", async () => {
     const message = await anthropic.messages.create({

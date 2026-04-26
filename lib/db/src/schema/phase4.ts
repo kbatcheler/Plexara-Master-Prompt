@@ -79,18 +79,52 @@ export const imagingStudiesTable = pgTable("imaging_studies", {
   description: text("description"),
   studyDate: text("study_date"),
   sopInstanceUid: text("sop_instance_uid"),
+  seriesUid: text("series_uid"),
   rows: integer("rows"),
   columns: integer("columns"),
+  numberOfFrames: integer("number_of_frames"),
+  numberOfSlices: integer("number_of_slices"),
+  sliceThickness: real("slice_thickness"),
+  pixelSpacing: text("pixel_spacing"),
   fileName: text("file_name").notNull(),
   dicomObjectKey: text("dicom_object_key").notNull(),
   fileSize: integer("file_size"),
+  interpretation: jsonb("interpretation"),
+  interpretationModel: text("interpretation_model"),
+  interpretationAt: timestamp("interpretation_at", { withTimezone: true }),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({
+  // Hot path: dashboards/timeline/list endpoints filter by patient and order
+  // by uploaded_at desc.
+  patientUploadedIdx: index("imaging_studies_patient_uploaded_idx").on(t.patientId, t.uploadedAt),
+}));
+
+// Multi-slice support: each imaging study can hold many .dcm files (e.g. a CT
+// series can have 200+ slices). The "cover slice" is mirrored into
+// imagingStudiesTable for backward compatibility, and every slice (including
+// the cover) is also recorded here so the viewer can scroll through them.
+export const imagingFilesTable = pgTable("imaging_files", {
+  id: serial("id").primaryKey(),
+  studyId: integer("study_id").notNull().references(() => imagingStudiesTable.id, { onDelete: "cascade" }),
+  fileIndex: integer("file_index").notNull(),
+  sopInstanceUid: text("sop_instance_uid"),
+  instanceNumber: integer("instance_number"),
+  sliceLocation: real("slice_location"),
+  dicomObjectKey: text("dicom_object_key").notNull(),
+  fileName: text("file_name").notNull(),
+  fileSize: integer("file_size"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // Unique to make /imaging/dicom/:studyId/file/:fileIndex deterministic and to
+  // prevent duplicate slice rows from a retried upload.
+  studyOrderUq: uniqueIndex("imaging_files_study_order_uq").on(t.studyId, t.fileIndex),
+}));
 
 export const imagingAnnotationsTable = pgTable("imaging_annotations", {
   id: serial("id").primaryKey(),
   studyId: integer("study_id").notNull().references(() => imagingStudiesTable.id, { onDelete: "cascade" }),
-  type: text("type").notNull(), // length, angle, rectangle, ellipse, freehand, point
+  fileIndex: integer("file_index").notNull().default(0),
+  type: text("type").notNull(), // length, angle, rectangle, ellipse, freehand, arrow, probe
   geometryJson: jsonb("geometry_json").notNull(),
   label: text("label"),
   measurementValue: real("measurement_value"),

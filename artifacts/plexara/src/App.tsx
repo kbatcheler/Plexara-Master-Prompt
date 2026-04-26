@@ -28,6 +28,7 @@ import Chat from "./pages/Chat";
 import Genetics from "./pages/Genetics";
 import Imaging from "./pages/Imaging";
 import ImagingViewer from "./pages/ImagingViewer";
+import ImagingCompare from "./pages/ImagingCompare";
 import Consents from "./pages/Consents";
 import Admin from "./pages/Admin";
 import Wearables from "./pages/Wearables";
@@ -191,6 +192,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/reports/:id"><ProtectedRoute component={Report} /></Route>
                 <Route path="/genetics"><ProtectedRoute component={Genetics} /></Route>
                 <Route path="/imaging"><ProtectedRoute component={Imaging} /></Route>
+                <Route path="/imaging/compare"><ProtectedRoute component={ImagingCompare} /></Route>
                 <Route path="/imaging/:id"><ProtectedRoute component={ImagingViewer} /></Route>
                 <Route path="/consents"><ProtectedRoute component={Consents} /></Route>
                 <Route path="/admin"><ProtectedRoute component={Admin} /></Route>

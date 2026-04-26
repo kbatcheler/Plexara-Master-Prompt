@@ -10,9 +10,11 @@ import {
   supplementRecommendationsTable,
   protocolsTable,
   protocolAdoptionsTable,
+  imagingStudiesTable,
 } from "@workspace/db";
-import { and, eq, desc, asc, isNotNull, sql } from "drizzle-orm";
+import { and, eq, desc, asc, isNotNull, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { runImagingInterpretation } from "./imaging-interpretation";
 import {
   computeAgeRange,
   runCrossRecordCorrelation,
@@ -57,6 +59,7 @@ interface OrchestratorReport {
   trendsComputed: number;
   changeAlertsFired: number;
   trajectoryAlertsFired: number;
+  imagingStudiesInterpreted: number;
   correlationGenerated: boolean;
   reportGenerated: boolean;
   supplementsGenerated: number;
@@ -88,6 +91,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     trendsComputed: 0,
     changeAlertsFired: 0,
     trajectoryAlertsFired: 0,
+    imagingStudiesInterpreted: 0,
     correlationGenerated: false,
     reportGenerated: false,
     supplementsGenerated: 0,
@@ -149,6 +153,33 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   } catch (err) {
     logger.error({ err, patientId, step: "trajectoryAlerts" }, "Orchestrator step failed");
     report.errors.trajectoryAlerts = (err as Error)?.message ?? "unknown";
+  }
+
+  // ── Step 1b: Imaging interpretation back-fill ─────────────────────────
+  // Any imaging studies still missing an interpretation get one now, so the
+  // comprehensive report (Step 3) can cross-reference imaging context with
+  // bloodwork. Each study is independently try/catched so a single failure
+  // doesn't abort the rest of the orchestrator.
+  try {
+    const pending = await db
+      .select({ id: imagingStudiesTable.id })
+      .from(imagingStudiesTable)
+      .where(
+        and(eq(imagingStudiesTable.patientId, patientId), isNull(imagingStudiesTable.interpretation)),
+      );
+    let interpreted = 0;
+    for (const s of pending) {
+      try {
+        await runImagingInterpretation(s.id);
+        interpreted++;
+      } catch (err) {
+        logger.warn({ err, studyId: s.id, patientId }, "Imaging interpretation failed for study");
+      }
+    }
+    report.imagingStudiesInterpreted = interpreted;
+  } catch (err) {
+    logger.error({ err, patientId, step: "imagingInterpretation" }, "Orchestrator step failed");
+    report.errors.imagingInterpretation = (err as Error)?.message ?? "unknown";
   }
 
   // ── Step 2: Cross-record correlation (≥2 complete records) ────────────
@@ -222,6 +253,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
           panelReconciled: inputs.panelReconciled,
           biomarkerHistory: inputs.biomarkerHistory,
           currentSupplements: inputs.currentSupplements,
+          imagingInterpretations: inputs.imagingInterpretations,
         });
         const sectionsPayload = {
           sections: reportOutput.sections,
@@ -407,6 +439,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       trendsComputed: report.trendsComputed,
       changeAlertsFired: report.changeAlertsFired,
       trajectoryAlertsFired: report.trajectoryAlertsFired,
+      imagingStudiesInterpreted: report.imagingStudiesInterpreted,
       correlationGenerated: report.correlationGenerated,
       reportGenerated: report.reportGenerated,
       supplementsGenerated: report.supplementsGenerated,

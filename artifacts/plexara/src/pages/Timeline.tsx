@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, Sparkles, TrendingDown, TrendingUp, Minus, Activity } from "lucide-react";
+import { Loader2, Sparkles, TrendingDown, TrendingUp, Minus, Activity, ScanLine } from "lucide-react";
+import { Link } from "wouter";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, ReferenceArea } from "recharts";
 
 interface TimelinePoint { recordId: number; date: string | null; value: string | null }
@@ -171,6 +172,23 @@ export default function Timeline() {
     queryFn: () => api<{ trajectories: Trajectory[] }>(`/patients/${patientId}/predictions`),
     enabled: !!patientId,
   });
+
+  const imagingQuery = useQuery<
+    Array<{
+      id: number;
+      modality: string | null;
+      bodyPart: string | null;
+      description: string | null;
+      studyDate: string | null;
+      uploadedAt: string;
+      sliceCount?: number;
+      interpretation: { reconciled?: { urgentFlags?: string[] } } | null;
+    }>
+  >({
+    queryKey: ["timeline-imaging", patientId],
+    queryFn: () => api(`/patients/${patientId}/imaging`),
+    enabled: !!patientId,
+  });
   const trajectoryByName = new Map<string, Trajectory>();
   predictionsQuery.data?.trajectories.forEach((t) => trajectoryByName.set(t.biomarker.toLowerCase(), t));
 
@@ -269,6 +287,71 @@ export default function Timeline() {
           </CardContent>
         )}
       </Card>
+
+      {/* Imaging studies timeline */}
+      {imagingQuery.data && imagingQuery.data.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ScanLine className="w-4 h-4 text-primary" /> Imaging studies
+            </CardTitle>
+            <CardDescription>
+              Each marker links to the DICOM viewer and AI interpretation.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {imagingQuery.data
+                .slice()
+                .sort((a, b) => {
+                  const da = a.studyDate ?? a.uploadedAt;
+                  const db = b.studyDate ?? b.uploadedAt;
+                  return da.localeCompare(db);
+                })
+                .map((s) => {
+                  const interpreted = !!s.interpretation?.reconciled;
+                  const urgent =
+                    (s.interpretation?.reconciled?.urgentFlags?.length ?? 0) > 0;
+                  return (
+                    <Link key={s.id} href={`/imaging/${s.id}`}>
+                      <div
+                        className={`flex items-center gap-2 rounded-md border px-3 py-2 hover:bg-muted/50 transition-colors cursor-pointer ${
+                          urgent
+                            ? "border-rose-500/40 bg-rose-500/5"
+                            : "border-border/40"
+                        }`}
+                        data-testid={`imaging-event-${s.id}`}
+                      >
+                        <div
+                          className={`w-7 h-7 rounded-full flex items-center justify-center ${
+                            urgent ? "bg-rose-500/20" : "bg-primary/10"
+                          }`}
+                        >
+                          <ScanLine
+                            className={`w-4 h-4 ${urgent ? "text-rose-300" : "text-primary"}`}
+                          />
+                        </div>
+                        <div className="text-xs">
+                          <div className="font-medium">
+                            {s.modality ?? "DICOM"}
+                            {s.bodyPart ? ` · ${s.bodyPart}` : ""}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {s.studyDate ?? new Date(s.uploadedAt).toLocaleDateString()}
+                            {s.sliceCount && s.sliceCount > 1 && (
+                              <span> · {s.sliceCount} slices</span>
+                            )}
+                            {interpreted ? " · interpreted" : " · pending"}
+                          </div>
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Category filters */}
       {categories.length > 2 && (

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronRight, Pill, FileBarChart2, Layers, Activity } from "lucide-react";
+import { ChevronRight, Pill, FileBarChart2, Layers, Activity, ScanLine } from "lucide-react";
 import { Link } from "wouter";
 import { api } from "../../lib/api";
 
@@ -28,6 +28,13 @@ interface ActiveAlert {
   id: number;
   severity: string;
   triggerType?: string | null;
+}
+
+interface ImagingStudyLite {
+  id: number;
+  modality: string | null;
+  bodyPart: string | null;
+  interpretation: { reconciled?: { urgentFlags?: string[] } } | null;
 }
 
 export function IntelligenceSummary({ patientId }: { patientId: number }) {
@@ -63,14 +70,30 @@ export function IntelligenceSummary({ patientId }: { patientId: number }) {
     enabled: !!patientId,
   });
 
+  const imagingQuery = useQuery({
+    queryKey: ["intelligence", "imaging", patientId],
+    queryFn: () => api<ImagingStudyLite[]>(`/patients/${patientId}/imaging`),
+    enabled: !!patientId,
+  });
+
   const loading =
-    recsQuery.isLoading || reportQuery.isLoading || protocolsQuery.isLoading || alertsQuery.isLoading;
+    recsQuery.isLoading ||
+    reportQuery.isLoading ||
+    protocolsQuery.isLoading ||
+    alertsQuery.isLoading ||
+    imagingQuery.isLoading;
 
   const recCount = recsQuery.data?.length ?? 0;
   const report = reportQuery.data ?? null;
   const matchedProtocols = (protocolsQuery.data ?? []).filter((p) => !p.alreadyAdopted);
   const trajectoryAlerts = (alertsQuery.data ?? []).filter(
     (a) => a.triggerType === "trajectory" || a.triggerType === "change",
+  );
+  const imagingStudies = imagingQuery.data ?? [];
+  const interpretedImaging = imagingStudies.filter((s) => !!s.interpretation?.reconciled);
+  const imagingUrgentFlags = interpretedImaging.reduce(
+    (acc, s) => acc + (s.interpretation?.reconciled?.urgentFlags?.length ?? 0),
+    0,
   );
 
   const cards = [
@@ -111,6 +134,22 @@ export function IntelligenceSummary({ patientId }: { patientId: number }) {
           title: `${trajectoryAlerts.length} trend alert${trajectoryAlerts.length === 1 ? "" : "s"}`,
           subtitle: "Biomarkers trending toward suboptimal range",
           href: "/trends",
+        }
+      : null,
+    interpretedImaging.length > 0
+      ? {
+          key: "imaging",
+          icon: ScanLine,
+          title: `${interpretedImaging.length} imaging stud${interpretedImaging.length === 1 ? "y" : "ies"} interpreted`,
+          subtitle:
+            imagingUrgentFlags > 0
+              ? `${imagingUrgentFlags} urgent flag${imagingUrgentFlags === 1 ? "" : "s"} — review with your clinician`
+              : interpretedImaging
+                  .slice(0, 2)
+                  .map((s) => [s.modality, s.bodyPart].filter(Boolean).join(" "))
+                  .filter(Boolean)
+                  .join(" · ") || "Three-lens AI interpretation available",
+          href: "/imaging",
         }
       : null,
   ].filter((c): c is NonNullable<typeof c> => c !== null);

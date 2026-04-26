@@ -61,6 +61,7 @@ export const annotationBody = z.object({
   label: z.string().max(500).optional().nullable(),
   measurementValue: z.coerce.number().finite().optional().nullable(),
   measurementUnit: z.string().max(32).optional().nullable(),
+  fileIndex: z.coerce.number().int().min(0).max(10_000).optional(),
 });
 
 export const safetyDismissBody = z.object({
