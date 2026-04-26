@@ -34,6 +34,7 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Insights", icon: Sparkles, items: [
+      { label: "Comprehensive report", href: "/report", hint: "Cross-panel synthesis" },
       { label: "Biological age", href: "/biological-age", hint: "Phenotypic & epigenetic" },
       { label: "Trends",         href: "/trends",         hint: "Regression & change alerts" },
       { label: "Safety",         href: "/safety",         hint: "Interactions & AI disagreements" },

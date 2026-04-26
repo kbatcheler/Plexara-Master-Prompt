@@ -1,184 +1,228 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { UploadCloud, Loader2, CheckCircle2, XCircle } from "lucide-react";
-import { useGetRecord, getGetDashboardQueryKey, getListRecordsQueryKey } from "@workspace/api-client-react";
+import { UploadCloud, Loader2, CheckCircle2, XCircle, FileText, X } from "lucide-react";
+import { getGetDashboardQueryKey, getListRecordsQueryKey } from "@workspace/api-client-react";
 import { useCurrentPatient } from "../../hooks/use-current-patient";
+import { api } from "../../lib/api";
+import { Link } from "wouter";
 
-type Status = "idle" | "uploading" | "processing" | "complete" | "error";
+type FileStatus = "uploading" | "pending" | "processing" | "complete" | "error" | "consent_blocked";
 
-const PROGRESS_STEPS: { atSeconds: number; label: string }[] = [
-  { atSeconds: 0, label: "Reading document…" },
-  { atSeconds: 5, label: "Extracting biomarkers…" },
-  { atSeconds: 20, label: "Running 3-lens analysis (Claude · GPT · Gemini)…" },
-  { atSeconds: 50, label: "Reconciling perspectives…" },
-  { atSeconds: 90, label: "Finalising — almost there…" },
-];
-
-function progressLabelFor(elapsed: number): string {
-  let label = PROGRESS_STEPS[0].label;
-  for (const step of PROGRESS_STEPS) {
-    if (elapsed >= step.atSeconds) label = step.label;
-  }
-  return label;
+interface FileEntry {
+  /** Local id used for React keys before the server returns its row id. */
+  localId: string;
+  fileName: string;
+  /** Server-side records.id, set after upload returns. */
+  recordId: number | null;
+  status: FileStatus;
+  errorMessage?: string;
 }
+
+const PROGRESS_LABELS: Record<FileStatus, string> = {
+  uploading: "Uploading…",
+  pending: "Queued",
+  processing: "Analysing (3 lenses + reconciliation)…",
+  complete: "Analysis complete",
+  error: "Failed",
+  consent_blocked: "AI consent missing",
+};
 
 export function UploadZone() {
   const { patientId: currentPatientId } = useCurrentPatient();
   const queryClient = useQueryClient();
 
   const [isDragging, setIsDragging] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [uploadStatus, setUploadStatus] = useState<Status>("idle");
-  const [errorMessage, setErrorMessage] = useState<string>("");
-  const [recordId, setRecordId] = useState<number | null>(null);
   const [recordType, setRecordType] = useState<string>("blood_panel");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [batchError, setBatchError] = useState<string>("");
+  const [showCompleteCTA, setShowCompleteCTA] = useState(false);
+  const completionAnnouncedRef = useRef(false);
 
-  // Lock the patientId we started the upload with — if the user's session
-  // briefly returns nothing for /api/patients (transient 401 etc.), we don't
-  // want polling to disable and freeze the UI.
-  const uploadPatientIdRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number | null>(null);
-
-  // Tick a 1Hz timer while uploading/processing so we can show real elapsed
-  // time and a step label that actually changes.
+  /**
+   * Single polling effect — every 2.5s, while there's at least one entry that
+   * isn't terminal, fetch each non-terminal record's status from the API and
+   * update its entry. We poll directly via `api()` instead of one
+   * `useGetRecord` per file because hook count would change with file count
+   * (illegal). Polling is cheap (1 GET per pending record).
+   */
   useEffect(() => {
-    if (uploadStatus !== "uploading" && uploadStatus !== "processing") {
-      setElapsedSeconds(0);
-      return;
-    }
-    if (startTimeRef.current === null) {
-      startTimeRef.current = Date.now();
-    }
-    const id = window.setInterval(() => {
-      const start = startTimeRef.current ?? Date.now();
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [uploadStatus]);
-
-  const pollPatientId = uploadPatientIdRef.current;
-  const { data: recordData } = useGetRecord(pollPatientId!, recordId!, {
-    query: {
-      enabled: !!pollPatientId && !!recordId && (uploadStatus === "processing" || uploadStatus === "uploading"),
-      refetchInterval: (query) => {
-        const status = query.state.data?.status;
-        if (status === "complete" || status === "error" || status === "consent_blocked") return false;
-        return 2000;
-      },
-      retry: 1,
-    },
-  });
-
-  // React to status changes from polling — kept in an effect so we don't
-  // call setState during render (which would trigger re-render loops).
-  useEffect(() => {
-    if (!recordData) return;
-    if (uploadStatus !== "processing" && uploadStatus !== "uploading") return;
-
-    if (recordData.status === "complete") {
-      setUploadStatus("complete");
-      const pid = uploadPatientIdRef.current;
-      if (pid) {
-        queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey(pid) });
-        queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(pid) });
-      }
-      // The reset-to-idle timeout lives in its own effect (below) keyed on
-      // uploadStatus === "complete". Returning a cleanup here would clear
-      // the timeout on the very next render (when uploadStatus changes to
-      // "complete"), leaving the widget permanently stuck on the success
-      // banner.
-      return;
-    }
-
-    if (recordData.status === "error") {
-      setUploadStatus("error");
-      setErrorMessage("We couldn't read this document — usually a low-quality scan or unsupported layout. You can retry from the Records page.");
-      const pid = uploadPatientIdRef.current;
-      if (pid) {
-        queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey(pid) });
-        queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(pid) });
-      }
-    } else if (recordData.status === "consent_blocked") {
-      setUploadStatus("error");
-      setErrorMessage("Analysis is paused — AI consent isn't granted. Update your consents to continue.");
-    }
-  }, [recordData, uploadStatus, queryClient]);
-
-  // Auto-reset to idle 3s after a successful upload so the user can drop
-  // another file. Isolated effect so the timeout isn't clobbered when the
-  // status-reaction effect above re-runs.
-  useEffect(() => {
-    if (uploadStatus !== "complete") return;
-    const t = window.setTimeout(() => {
-      setUploadStatus("idle");
-      setFile(null);
-      setRecordId(null);
-      startTimeRef.current = null;
-    }, 3000);
-    return () => window.clearTimeout(t);
-  }, [uploadStatus]);
-
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
     if (!currentPatientId) return;
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setUploadStatus("error");
-      setErrorMessage("File is larger than 10 MB.");
+    const nonTerminal = entries.filter(
+      (e) => e.recordId !== null && (e.status === "pending" || e.status === "processing"),
+    );
+    if (nonTerminal.length === 0) return;
+
+    let cancelled = false;
+    const id = window.setInterval(async () => {
+      const updates: Array<{ recordId: number; status: FileStatus }> = [];
+      await Promise.all(
+        nonTerminal.map(async (e) => {
+          try {
+            const rec = await api<{ id: number; status: string }>(
+              `/patients/${currentPatientId}/records/${e.recordId}`,
+            );
+            updates.push({ recordId: e.recordId!, status: (rec.status as FileStatus) ?? "processing" });
+          } catch {
+            // transient — ignore for this tick
+          }
+        }),
+      );
+      if (cancelled || updates.length === 0) return;
+      setEntries((prev) =>
+        prev.map((e) => {
+          if (e.recordId === null) return e;
+          const upd = updates.find((u) => u.recordId === e.recordId);
+          if (!upd) return e;
+          if (e.status === upd.status) return e;
+          // Side-effect: when a record completes/errors, refresh dashboard +
+          // records list so other panels reflect it.
+          if (upd.status === "complete" || upd.status === "error" || upd.status === "consent_blocked") {
+            queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey(currentPatientId) });
+            queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(currentPatientId) });
+          }
+          return {
+            ...e,
+            status: upd.status,
+            errorMessage:
+              upd.status === "error"
+                ? "We couldn't read this document — usually a low-quality scan or unsupported layout."
+                : upd.status === "consent_blocked"
+                  ? "Analysis is paused — AI consent isn't granted."
+                  : e.errorMessage,
+          };
+        }),
+      );
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [entries, currentPatientId, queryClient]);
+
+  /**
+   * When all entries reach a terminal state AND at least one is `complete`,
+   * announce and surface the "Generate comprehensive report" CTA. We only
+   * announce once per batch via `completionAnnouncedRef`.
+   */
+  useEffect(() => {
+    if (entries.length === 0) {
+      completionAnnouncedRef.current = false;
+      setShowCompleteCTA(false);
       return;
     }
+    const allTerminal = entries.every(
+      (e) => e.status === "complete" || e.status === "error" || e.status === "consent_blocked",
+    );
+    const anyComplete = entries.some((e) => e.status === "complete");
+    if (allTerminal && anyComplete && !completionAnnouncedRef.current) {
+      completionAnnouncedRef.current = true;
+      setShowCompleteCTA(true);
+    }
+  }, [entries]);
 
-    uploadPatientIdRef.current = currentPatientId;
-    startTimeRef.current = Date.now();
-    setFile(selectedFile);
-    setUploadStatus("uploading");
-    setErrorMessage("");
+  const handleFiles = useCallback(
+    async (files: FileList | File[]) => {
+      if (!currentPatientId) return;
+      const arr = Array.from(files).slice(0, 10);
+      if (arr.length === 0) return;
 
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("recordType", recordType);
-
-      const response = await fetch(`/api/patients/${currentPatientId}/records`, {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) throw new Error("Session expired — please refresh the page and try again.");
-        if (response.status === 413) throw new Error("File too large.");
-        throw new Error("Upload failed. Please try again.");
+      const oversized = arr.find((f) => f.size > 10 * 1024 * 1024);
+      if (oversized) {
+        setBatchError(`"${oversized.name}" is larger than 10 MB.`);
+        return;
       }
 
-      const data = await response.json();
-      setRecordId(data.id);
-      setUploadStatus("processing");
-    } catch (err) {
-      setUploadStatus("error");
-      setErrorMessage(err instanceof Error ? err.message : "Upload failed.");
-    }
-  }, [currentPatientId, recordType]);
+      setBatchError("");
+      setShowCompleteCTA(false);
+      completionAnnouncedRef.current = false;
 
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileSelect(e.dataTransfer.files[0]);
-    }
-  }, [handleFileSelect]);
+      const initial: FileEntry[] = arr.map((f) => ({
+        localId: `${Date.now()}-${f.name}-${Math.random().toString(36).slice(2, 8)}`,
+        fileName: f.name,
+        recordId: null,
+        status: "uploading",
+      }));
+      setEntries((prev) => [...prev, ...initial]);
 
-  const reset = useCallback(() => {
-    setUploadStatus("idle");
-    setFile(null);
-    setRecordId(null);
-    setErrorMessage("");
-    startTimeRef.current = null;
-    uploadPatientIdRef.current = null;
+      // Single-file path keeps existing endpoint contract; multi-file uses
+      // /batch which spreads files across the per-patient concurrency limiter.
+      try {
+        if (arr.length === 1) {
+          const fd = new FormData();
+          fd.append("file", arr[0]);
+          fd.append("recordType", recordType);
+          const resp = await fetch(`/api/patients/${currentPatientId}/records`, {
+            method: "POST",
+            body: fd,
+            credentials: "include",
+          });
+          if (!resp.ok) throw new Error(resp.status === 413 ? "File too large." : "Upload failed.");
+          const row = await resp.json();
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.localId === initial[0].localId ? { ...e, recordId: row.id, status: "pending" } : e,
+            ),
+          );
+        } else {
+          const fd = new FormData();
+          arr.forEach((f) => fd.append("files", f));
+          fd.append("recordType", recordType);
+          const resp = await fetch(`/api/patients/${currentPatientId}/records/batch`, {
+            method: "POST",
+            body: fd,
+            credentials: "include",
+          });
+          if (!resp.ok) throw new Error(resp.status === 413 ? "Files too large." : "Batch upload failed.");
+          const data = (await resp.json()) as { records: Array<{ id: number; fileName: string }> };
+          // Map server records back to our entries by file name & order.
+          setEntries((prev) => {
+            const next = [...prev];
+            initial.forEach((entry, idx) => {
+              const match = data.records[idx];
+              const i = next.findIndex((e) => e.localId === entry.localId);
+              if (i !== -1 && match) next[i] = { ...next[i], recordId: match.id, status: "pending" };
+            });
+            return next;
+          });
+        }
+        queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(currentPatientId) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed.";
+        setEntries((prev) =>
+          prev.map((e) =>
+            initial.some((i) => i.localId === e.localId) ? { ...e, status: "error", errorMessage: msg } : e,
+          ),
+        );
+      }
+    },
+    [currentPatientId, recordType, queryClient],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        void handleFiles(e.dataTransfer.files);
+      }
+    },
+    [handleFiles],
+  );
+
+  const removeEntry = useCallback((localId: string) => {
+    setEntries((prev) => prev.filter((e) => e.localId !== localId));
   }, []);
 
-  const progressLabel = uploadStatus === "uploading"
-    ? "Uploading file…"
-    : progressLabelFor(elapsedSeconds);
+  const clearCompleted = useCallback(() => {
+    setEntries((prev) =>
+      prev.filter((e) => e.status === "uploading" || e.status === "pending" || e.status === "processing"),
+    );
+    setShowCompleteCTA(false);
+  }, []);
+
+  const completeCount = entries.filter((e) => e.status === "complete").length;
+  const totalCount = entries.length;
 
   return (
     <div className="w-full space-y-3">
@@ -187,7 +231,6 @@ export function UploadZone() {
         <select
           value={recordType}
           onChange={(e) => setRecordType(e.target.value)}
-          disabled={uploadStatus !== "idle"}
           className="text-xs bg-card border border-border rounded px-2 py-1"
           data-testid="select-upload-record-type"
         >
@@ -201,74 +244,125 @@ export function UploadZone() {
           <option value="pathology_report">Pathology Report</option>
           <option value="other">Other</option>
         </select>
+        <span className="text-[11px] text-muted-foreground ml-auto">
+          Drop up to 10 files at once — they'll be analysed in parallel.
+        </span>
       </div>
+
       <div
-        className={`relative flex flex-col items-center justify-center w-full h-48 border-2 border-dashed rounded-xl transition-colors ${
-          isDragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-card/50"
-        } ${uploadStatus !== "idle" ? "pointer-events-none opacity-80" : "cursor-pointer"}`}
-        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        className={`relative flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl transition-colors ${
+          isDragging
+            ? "border-primary bg-primary/5"
+            : "border-border hover:border-primary/50 hover:bg-card/50"
+        } cursor-pointer`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        onClick={() => {
-          if (uploadStatus === "idle") {
-            document.getElementById("file-upload")?.click();
-          }
-        }}
+        onClick={() => document.getElementById("file-upload")?.click()}
+        data-testid="upload-dropzone"
       >
         <input
           id="file-upload"
           type="file"
+          multiple
           className="hidden"
           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-          onChange={(e) => e.target.files && handleFileSelect(e.target.files[0])}
+          onChange={(e) => e.target.files && handleFiles(e.target.files)}
         />
+        <div className="flex flex-col items-center justify-center pt-5 pb-6">
+          <UploadCloud className="w-9 h-9 mb-2 text-muted-foreground" />
+          <p className="mb-1 text-sm text-muted-foreground">
+            <span className="font-semibold text-foreground">Click to upload</span> or drag & drop
+          </p>
+          <p className="text-xs text-muted-foreground">
+            PDF, JPG, PNG · MAX 10MB each · up to 10 files
+          </p>
+        </div>
+      </div>
 
-        {uploadStatus === "idle" && (
-          <div className="flex flex-col items-center justify-center pt-5 pb-6">
-            <UploadCloud className="w-10 h-10 mb-3 text-muted-foreground" />
-            <p className="mb-2 text-sm text-muted-foreground"><span className="font-semibold text-foreground">Click to upload</span> or drag and drop</p>
-            <p className="text-xs text-muted-foreground">PDF, JPG, PNG (MAX. 10MB)</p>
-          </div>
-        )}
+      {batchError && (
+        <p className="text-xs text-destructive" data-testid="upload-batch-error">
+          {batchError}
+        </p>
+      )}
 
-        {(uploadStatus === "uploading" || uploadStatus === "processing") && (
-          <div className="flex flex-col items-center justify-center px-4 text-center">
-            <Loader2 className="w-8 h-8 mb-3 text-primary animate-spin" />
-            <p className="text-sm font-medium text-foreground">{progressLabel}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {file?.name}{uploadStatus === "processing" ? ` · ${elapsedSeconds}s elapsed` : ""}
+      {entries.length > 0 && (
+        <div className="space-y-2" data-testid="upload-queue">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">
+              {completeCount}/{totalCount} complete
             </p>
-            {uploadStatus === "processing" && elapsedSeconds > 120 && (
-              <p className="text-[11px] text-muted-foreground mt-2 max-w-[260px]">
-                Taking longer than usual. You can leave this page — analysis continues in the background and you'll see it on the Records page when it's done.
-              </p>
+            {entries.some((e) => e.status === "complete" || e.status === "error" || e.status === "consent_blocked") && (
+              <button
+                type="button"
+                onClick={clearCompleted}
+                className="text-[11px] text-muted-foreground hover:text-foreground underline"
+              >
+                Clear finished
+              </button>
             )}
           </div>
-        )}
+          <ul className="space-y-1.5">
+            {entries.map((e) => (
+              <li
+                key={e.localId}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-card/50 text-sm"
+                data-testid={`upload-entry-${e.localId}`}
+              >
+                <div className="shrink-0">
+                  {e.status === "complete" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                  {(e.status === "uploading" || e.status === "pending" || e.status === "processing") && (
+                    <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                  )}
+                  {(e.status === "error" || e.status === "consent_blocked") && (
+                    <XCircle className="w-4 h-4 text-red-500" />
+                  )}
+                </div>
+                <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-foreground">{e.fileName}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {e.errorMessage ?? PROGRESS_LABELS[e.status]}
+                  </p>
+                </div>
+                {(e.status === "complete" || e.status === "error" || e.status === "consent_blocked") && (
+                  <button
+                    type="button"
+                    onClick={() => removeEntry(e.localId)}
+                    className="text-muted-foreground hover:text-foreground shrink-0"
+                    aria-label="Remove from list"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
-        {uploadStatus === "complete" && (
-          <div className="flex flex-col items-center justify-center">
-            <CheckCircle2 className="w-10 h-10 mb-3 text-green-500" />
-            <p className="text-sm font-medium text-green-500">Analysis Complete</p>
+      {showCompleteCTA && (
+        <div
+          className="rounded-lg border border-primary/40 bg-primary/5 px-4 py-3 flex items-center justify-between gap-3"
+          data-testid="comprehensive-cta"
+        >
+          <div className="text-sm">
+            <p className="font-medium text-foreground">All done. Want the full picture?</p>
+            <p className="text-xs text-muted-foreground">
+              Generate a comprehensive cross-panel report from your uploads.
+            </p>
           </div>
-        )}
-
-        {uploadStatus === "error" && (
-          <div className="flex flex-col items-center justify-center px-4 text-center">
-            <XCircle className="w-10 h-10 mb-3 text-red-500" />
-            <p className="text-sm font-medium text-red-500 max-w-[300px]">{errorMessage || "Something went wrong."}</p>
-            <button
-              className="mt-2 text-xs border border-border px-2 py-1 rounded hover:bg-secondary pointer-events-auto"
-              onClick={(e) => {
-                e.stopPropagation();
-                reset();
-              }}
-            >
-              Try Again
-            </button>
-          </div>
-        )}
-      </div>
+          <Link
+            href="/report"
+            className="shrink-0 inline-flex items-center text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90"
+          >
+            Open report
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

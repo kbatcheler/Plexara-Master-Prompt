@@ -8,10 +8,11 @@ import path from "path";
 import crypto from "crypto";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { stripPII, hashData } from "../lib/pii";
-import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext, type ReconciledOutput } from "../lib/ai";
+import { runLensA, runLensB, runLensC, runReconciliation, extractFromDocument, computeAgeRange, type AnonymisedData, type PatientContext, type ReconciledOutput, type BiomarkerHistoryEntry } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
+import { createLimiter } from "../lib/concurrency";
 import {
   encryptJson,
   encryptInterpretationFields,
@@ -21,6 +22,24 @@ import {
 import { validate } from "../middlewares/validate";
 import { HttpError } from "../middlewares/errorHandler";
 import { recordCreateBody } from "../lib/validators";
+
+/**
+ * Per-patient batch processing limiter — caps concurrent 3-lens runs to 2
+ * for any single patient. Without this, dropping 6 PDFs at once would fan
+ * out into 6 simultaneous lens-pipeline runs (18 LLM calls in flight) and
+ * blow our LLM provider rate limits. Map keys are patientId, lazily-created
+ * so we don't carry empty limiters around forever.
+ */
+const PATIENT_BATCH_CONCURRENCY = 2;
+const patientLimiters = new Map<number, ReturnType<typeof createLimiter>>();
+function getPatientLimiter(patientId: number) {
+  let l = patientLimiters.get(patientId);
+  if (!l) {
+    l = createLimiter(PATIENT_BATCH_CONCURRENCY);
+    patientLimiters.set(patientId, l);
+  }
+  return l;
+}
 
 const router = Router({ mergeParams: true });
 
@@ -130,7 +149,24 @@ export async function processUploadedDocument(opts: {
     let extractionFailed = false;
     let extractionFailureReason: string | null = null;
 
-    try {
+    // ── EXTRACTION CACHE (Phase 3b)
+    // If this record already has an extraction row (e.g. re-analyse path,
+    // batch retry, or pipeline retry after a transient lens failure), reuse
+    // it instead of re-running the OCR LLM. Saves ~30s and one full LLM call
+    // per cached record.
+    const [cachedExtraction] = await db
+      .select()
+      .from(extractedDataTable)
+      .where(eq(extractedDataTable.recordId, recordId));
+    if (cachedExtraction) {
+      const decoded = decryptStructuredJson<Record<string, unknown>>(cachedExtraction.structuredJson);
+      if (decoded && typeof decoded === "object") {
+        logger.info({ recordId, recordType }, "Skipping extraction — reusing cached extracted_data");
+        structuredData = decoded;
+      }
+    }
+
+    if (!cachedExtraction) try {
       structuredData = await extractFromDocument(base64, mimeType, recordType);
 
       await db.insert(extractedDataTable).values({
@@ -178,6 +214,13 @@ export async function processUploadedDocument(opts: {
       logger.error({ recordId, recordType, message: extractionFailureReason }, "Extraction failed");
     }
 
+    // Cache hit but the JSON was somehow null/undefined — guard so we don't
+    // run the lens pipeline on `{}`.
+    if (cachedExtraction && (!structuredData || Object.keys(structuredData).length === 0)) {
+      extractionFailed = true;
+      extractionFailureReason = "Cached extraction was empty or unreadable";
+    }
+
     if (extractionFailed) {
       await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
       logger.warn(
@@ -203,6 +246,48 @@ function makeIdempotencyKey(recordId: number, anonymised: AnonymisedData, versio
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
+/**
+ * Build the anonymised biomarker history block fed to lens prompts (Phase 3a).
+ *
+ * - EXCLUDES the current record so the model isn't shown the values it's
+ *   meant to interpret as "history".
+ * - Caps to ~30 distinct biomarkers and the latest 6 readings per marker
+ *   (same caps as `buildHistoryBlock` in ai.ts) to keep prompt tokens bounded.
+ * - Returns `[]` when the patient has no prior values — caller passes that
+ *   straight through and the prompt just doesn't include a history block.
+ */
+async function loadBiomarkerHistory(patientId: number, excludeRecordId: number): Promise<BiomarkerHistoryEntry[]> {
+  const rows = await db
+    .select({
+      biomarkerName: biomarkerResultsTable.biomarkerName,
+      value: biomarkerResultsTable.value,
+      unit: biomarkerResultsTable.unit,
+      testDate: biomarkerResultsTable.testDate,
+      recordId: biomarkerResultsTable.recordId,
+      createdAt: biomarkerResultsTable.createdAt,
+    })
+    .from(biomarkerResultsTable)
+    .where(eq(biomarkerResultsTable.patientId, patientId));
+
+  const grouped = new Map<string, BiomarkerHistoryEntry>();
+  for (const r of rows) {
+    if (r.recordId === excludeRecordId) continue;
+    const key = r.biomarkerName.toLowerCase();
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = { name: r.biomarkerName, unit: r.unit, series: [] };
+      grouped.set(key, entry);
+    }
+    entry.series.push({ date: r.testDate ?? r.createdAt?.toISOString().slice(0, 10) ?? null, value: r.value });
+  }
+  // Sort series oldest-to-newest using whatever date string we have; null
+  // dates sort first.
+  for (const e of grouped.values()) {
+    e.series.sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+  }
+  return Array.from(grouped.values());
+}
+
 async function runInterpretationPipeline(
   patientId: number,
   recordId: number,
@@ -220,6 +305,13 @@ async function runInterpretationPipeline(
     sex: patient?.sex || null,
     ethnicity: patient?.ethnicity || null,
   };
+
+  // Phase 3a: load anonymised history before running the lenses so each
+  // analyst can interpret trajectories instead of point-in-time only.
+  const history = await loadBiomarkerHistory(patientId, recordId);
+  if (history.length > 0) {
+    logger.info({ patientId, recordId, biomarkers: history.length }, "Loaded biomarker history for lens prompts");
+  }
 
   const accountId = patient?.accountId || "";
   const allowAnthropic = await isProviderAllowed(accountId, "anthropic");
@@ -269,63 +361,92 @@ async function runInterpretationPipeline(
       .set({ status: "processing" })
       .where(eq(recordsTable.id, recordId));
 
-    let lensAOutput = null;
-    let lensBOutput = null;
-    let lensCOutput = null;
-
-    // ── LLM calls happen OUTSIDE any transaction (long-running, network I/O).
-    // Per-lens streaming writes give the UI live progress; final atomic write
-    // below is the consistency boundary.
-    try {
-      if (!allowAnthropic) throw new Error("consent_revoked:anthropic");
-      lensAOutput = await runLensA(anonymised, patientCtx);
-      await db.update(interpretationsTable)
-        .set(encryptInterpretationFields({ lensAOutput, lensesCompleted: 1 }))
+    // ── PARALLEL LENS EXECUTION (Phase 1a)
+    // The three lenses are TRULY INDEPENDENT — each receives only the
+    // anonymised data + history + demographics. Running them in parallel
+    // cuts wall-clock from ~60-90s down to ~20-30s (pipeline is now bounded
+    // by the slowest of the three rather than their sum). Reconciliation
+    // still runs after, sees all three, and is the cross-comparison point.
+    //
+    // Per-lens DB writes happen as soon as each lens settles so the UI sees
+    // streaming progress (lensesCompleted ticks 0 → 1 → 2 → 3).
+    //
+    // Each lens has its own consent gate and audit row; a failure in one
+    // lens never blocks the others.
+    // Race-safe per-lens persister. Out-of-order completion under
+    // Promise.allSettled would let an in-memory counter regress
+    // (lens C finishes first → counter=1; lens A finishes second → still
+    // counter=2; if writes interleave the column can briefly hold a stale
+    // value). We use the SQL `coalesce(lenses_completed, 0) + 1` so each
+    // lens write atomically increments the row value at COMMIT time —
+    // monotonic regardless of arrival order.
+    const bumpCompletedAndPersist = async (
+      key: "lensAOutput" | "lensBOutput" | "lensCOutput",
+      output: unknown,
+    ): Promise<void> => {
+      const encrypted = encryptInterpretationFields({ [key]: output } as Parameters<typeof encryptInterpretationFields>[0]);
+      const { sql } = await import("drizzle-orm");
+      await db
+        .update(interpretationsTable)
+        .set({
+          ...encrypted,
+          lensesCompleted: sql`COALESCE(${interpretationsTable.lensesCompleted}, 0) + 1`,
+        })
         .where(eq(interpretationsTable.id, interpretationId));
+    };
+
+    const lensAPromise = (async () => {
+      if (!allowAnthropic) throw new Error("consent_revoked:anthropic");
+      const out = await runLensA(anonymised, patientCtx, history);
+      await bumpCompletedAndPersist("lensAOutput", out);
       await db.insert(auditLogTable).values({
         patientId,
         actionType: "llm_interpretation",
         llmProvider: "anthropic",
         dataSentHash: hashData(anonymised),
       });
-    } catch (err) {
-      logger.error({ err }, "Lens A (Claude) failed");
-    }
+      return out;
+    })();
 
-    try {
-      if (lensAOutput && allowOpenAi) {
-        lensBOutput = await runLensB(anonymised, lensAOutput, patientCtx);
-        await db.update(interpretationsTable)
-          .set(encryptInterpretationFields({ lensBOutput, lensesCompleted: lensAOutput ? 2 : 1 }))
-          .where(eq(interpretationsTable.id, interpretationId));
-        await db.insert(auditLogTable).values({
-          patientId,
-          actionType: "llm_interpretation",
-          llmProvider: "openai",
-          dataSentHash: hashData(anonymised),
-        });
-      }
-    } catch (err) {
-      logger.error({ err }, "Lens B (GPT) failed");
-    }
+    const lensBPromise = (async () => {
+      if (!allowOpenAi) throw new Error("consent_revoked:openai");
+      const out = await runLensB(anonymised, patientCtx, history);
+      await bumpCompletedAndPersist("lensBOutput", out);
+      await db.insert(auditLogTable).values({
+        patientId,
+        actionType: "llm_interpretation",
+        llmProvider: "openai",
+        dataSentHash: hashData(anonymised),
+      });
+      return out;
+    })();
 
-    try {
-      if (lensAOutput && allowGemini) {
-        lensCOutput = await runLensC(anonymised, lensAOutput, lensBOutput || lensAOutput, patientCtx);
-        const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
-        await db.update(interpretationsTable)
-          .set(encryptInterpretationFields({ lensCOutput, lensesCompleted: completedCount }))
-          .where(eq(interpretationsTable.id, interpretationId));
-        await db.insert(auditLogTable).values({
-          patientId,
-          actionType: "llm_interpretation",
-          llmProvider: "gemini",
-          dataSentHash: hashData(anonymised),
-        });
-      }
-    } catch (err) {
-      logger.error({ err }, "Lens C (Gemini) failed");
-    }
+    const lensCPromise = (async () => {
+      if (!allowGemini) throw new Error("consent_revoked:gemini");
+      const out = await runLensC(anonymised, patientCtx, history);
+      await bumpCompletedAndPersist("lensCOutput", out);
+      await db.insert(auditLogTable).values({
+        patientId,
+        actionType: "llm_interpretation",
+        llmProvider: "gemini",
+        dataSentHash: hashData(anonymised),
+      });
+      return out;
+    })();
+
+    const [aResult, bResult, cResult] = await Promise.allSettled([
+      lensAPromise,
+      lensBPromise,
+      lensCPromise,
+    ]);
+
+    if (aResult.status === "rejected") logger.error({ err: aResult.reason }, "Lens A (Claude) failed");
+    if (bResult.status === "rejected") logger.error({ err: bResult.reason }, "Lens B (GPT) failed");
+    if (cResult.status === "rejected") logger.error({ err: cResult.reason }, "Lens C (Gemini) failed");
+
+    const lensAOutput = aResult.status === "fulfilled" ? aResult.value : null;
+    const lensBOutput = bResult.status === "fulfilled" ? bResult.value : null;
+    const lensCOutput = cResult.status === "fulfilled" ? cResult.value : null;
 
     if (lensAOutput) {
       const effectiveLensB = lensBOutput || lensAOutput;
@@ -671,6 +792,105 @@ router.post(
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/**
+ * BATCH UPLOAD (Phase 1b)
+ *
+ * Accept up to 10 files in a single multipart POST. Strategy:
+ *   1. Validate ownership + body once.
+ *   2. INSERT one `records` row per file in a single transaction. If any
+ *      insert fails the whole batch rolls back — caller gets a clean 500
+ *      and no half-uploaded ghosts.
+ *   3. Respond 201 with the array of created records so the UI can render
+ *      progress cards immediately.
+ *   4. Background: enqueue each record through the patient's concurrency
+ *      limiter (max 2 in flight) so dropping 6 PDFs doesn't fan out into
+ *      18 simultaneous LLM calls. Each task uses the shared
+ *      `processUploadedDocument` (extraction cache + parallel lenses +
+ *      reconciliation), so batch and single uploads behave identically.
+ *
+ * NOTE: We deliberately use the same `recordType` for every file in the
+ * batch — common case is "I dropped my last 6 lab panels". A future
+ * iteration can let each file declare its own type via parallel arrays.
+ */
+router.post(
+  "/batch",
+  requireAuth,
+  upload.array("files", 10),
+  validate({ body: recordCreateBody }),
+  async (req, res): Promise<void> => {
+    const { userId } = req as AuthenticatedRequest;
+    const patientId = parseInt(req.params.patientId as string);
+
+    if (!(await verifyPatientOwnership(patientId, userId))) {
+      res.status(404).json({ error: "Patient not found" });
+      return;
+    }
+
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (files.length === 0) {
+      res.status(400).json({ error: "No files uploaded" });
+      return;
+    }
+
+    const { recordType, testDate } = req.body as { recordType: string; testDate?: string | null };
+
+    let createdRecords: Awaited<ReturnType<typeof db.insert>>[] = [] as never;
+    try {
+      const inserted = await db
+        .insert(recordsTable)
+        .values(
+          files.map((f) => ({
+            patientId,
+            recordType,
+            filePath: f.path,
+            fileName: f.originalname,
+            testDate: testDate || null,
+            status: "pending" as const,
+          })),
+        )
+        .returning();
+      createdRecords = inserted as unknown as typeof createdRecords;
+
+      res.status(201).json({ records: inserted, count: inserted.length });
+
+      // Schedule each through the per-patient limiter. Limiter caps to 2
+      // concurrent runs per patient regardless of how many files; the rest
+      // queue up FIFO. We do NOT await — the response has already been
+      // sent. setImmediate yields to the event loop so we don't block the
+      // response cycle.
+      const limiter = getPatientLimiter(patientId);
+      for (let i = 0; i < inserted.length; i++) {
+        const record = inserted[i];
+        const file = files[i];
+        setImmediate(() => {
+          void limiter(async () => {
+            try {
+              await processUploadedDocument({
+                patientId,
+                recordId: record.id,
+                filePath: file.path,
+                mimeType: file.mimetype,
+                recordType,
+                testDate: testDate ?? null,
+              });
+            } catch (err) {
+              logger.error({ err, recordId: record.id }, "Batch processing task failed");
+              await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
+            }
+          });
+        });
+      }
+    } catch (err) {
+      req.log.error({ err, patientId, fileCount: files.length }, "Failed to create batch records");
+      // We may have responded already if insert succeeded but enqueue threw —
+      // headers-already-sent guard.
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    }
+  },
+);
 
 router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;

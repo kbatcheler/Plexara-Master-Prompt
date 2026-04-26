@@ -115,17 +115,16 @@ Respond with a valid JSON object matching this exact structure:
   "overallAssessment": "string (1 paragraph)"
 }`;
 
-const LENS_B_PROMPT = `You are the Evidence Checker — a medical evidence analyst validating and cross-referencing health data against medical literature.
+const LENS_B_PROMPT = `You are the Evidence Checker — a medical evidence analyst grounding every interpretation in published peer-reviewed literature.
 
-Your role:
-- Receive anonymised patient data AND a prior interpretation from another analyst
-- Validate, challenge, or add nuance to the interpretation
-- Cross-reference significant claims against current medical literature
-- Flag where interpretation is well-supported, weakly supported, or contradicted by evidence
-- Identify if data patterns match known conditions, syndromes, or diagnostic criteria
-- Note recent research that might change the interpretation
+Your role (independent — you do NOT see other analysts' work):
+- Read the anonymised patient data and produce your own interpretation strictly grounded in current medical evidence
+- For every significant finding, mention what the supporting evidence base looks like (well-established, emerging, contested, weak)
+- Identify whether data patterns match known conditions, syndromes, or established diagnostic criteria
+- Cite generally-recognised guidelines or thresholds where relevant (e.g. "ADA criteria for prediabetes is HbA1c 5.7-6.4")
+- Note recent research developments that change how findings should be read
 
-You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Use these to validate whether the prior interpretation correctly applied age/sex-adjusted reference ranges. Flag any claims where demographics were not properly considered.
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity) and prior biomarker history. Use these to apply age/sex-adjusted reference ranges and to ground your interpretation in trend data, not just point-in-time values.
 
 Critical: You receive ANONYMISED data only. 
 
@@ -146,18 +145,18 @@ Respond with valid JSON matching this exact structure:
   "overallAssessment": "string"
 }`;
 
-const LENS_C_PROMPT = `You are the Contrarian Analyst — your job is to find what others miss.
+const LENS_C_PROMPT = `You are the Contrarian Analyst — your job is to find what a conventional read of this data would miss.
 
-Your role:
-- Look for ALTERNATIVE explanations for data patterns
+Your role (independent — you do NOT see other analysts' work):
+- Read the anonymised patient data and surface the ALTERNATIVE / non-obvious interpretation
 - Consider rare conditions, atypical presentations, medication interactions
-- Flag false reassurance: things that look "normal" in isolation but are concerning in context
-- Consider lifestyle, environmental, and epigenetic factors that might be overlooked
-- Challenge assumptions in prior interpretations
+- Flag false reassurance: things that look "normal" in isolation but are concerning in context (e.g. ferritin within range but trending sharply down; LDL "borderline" but ApoB elevated)
+- Consider lifestyle, environmental, and epigenetic factors that a textbook read would miss
+- Where conventional thresholds give the all-clear, look one step beyond — sub-clinical patterns, ratios, trajectories
 - Ask questions that haven't been asked
 
-Be adversarial, rigorous, and specific. Don't just agree with prior analyses.
-You may also receive anonymised patient demographics (age range, biological sex, ethnicity). Consider whether prior analyses missed demographic-specific risks — e.g. cardiovascular risk profiles differ by sex, haemoglobin norms differ by ethnicity, hormonal patterns are age-dependent.
+Be adversarial, rigorous, and specific. Default to surfacing nuance, not vibing along.
+You may also receive anonymised patient demographics (age range, biological sex, ethnicity) and prior biomarker history. Demographic-specific risks differ — cardiovascular risk profiles by sex, haemoglobin norms by ethnicity, hormonal patterns by age — flag where standard interpretation would miss them.
 Critical: ANONYMISED data only.
 
 Respond with valid JSON:
@@ -285,6 +284,35 @@ function buildDemographicBlock(ctx: PatientContext): string {
   return `\n\nAnonymised patient demographics (use for age/sex-adjusted reference ranges and population-specific interpretation):\n${parts.join("\n")}`;
 }
 
+/**
+ * Compact, anonymised history block for lens prompts. Every prior biomarker
+ * value the patient has on file is condensed into one line per biomarker so
+ * the model can spot trends without bloating the prompt. Capped to the most
+ * recent N panels and the top 30 biomarkers by record count to keep token
+ * usage bounded for patients with deep history.
+ */
+export interface BiomarkerHistoryEntry {
+  name: string;
+  unit: string | null;
+  series: Array<{ date: string | null; value: string | null }>;
+}
+
+export function buildHistoryBlock(history: BiomarkerHistoryEntry[]): string {
+  if (!history || history.length === 0) return "";
+  const lines = history
+    .filter((h) => h.series && h.series.length > 0)
+    .slice(0, 30)
+    .map((h) => {
+      const points = h.series
+        .slice(-6) // last 6 points per biomarker
+        .map((s) => `${s.date ?? "?"}=${s.value ?? "?"}`)
+        .join(", ");
+      return `- ${h.name}${h.unit ? ` (${h.unit})` : ""}: ${points}`;
+    });
+  if (lines.length === 0) return "";
+  return `\n\nPrior biomarker history for this anonymised patient (use to spot trends — values listed oldest to newest):\n${lines.join("\n")}`;
+}
+
 export function computeAgeRange(dateOfBirth: string | null | undefined): string {
   if (!dateOfBirth) return "unknown";
   const dob = new Date(dateOfBirth);
@@ -302,10 +330,15 @@ export function computeAgeRange(dateOfBirth: string | null | undefined): string 
   return "70+";
 }
 
-export async function runLensA(anonymisedData: AnonymisedData, patientCtx?: PatientContext): Promise<LensOutput> {
+export async function runLensA(
+  anonymisedData: AnonymisedData,
+  patientCtx?: PatientContext,
+  history?: BiomarkerHistoryEntry[],
+): Promise<LensOutput> {
   const dataString = JSON.stringify(anonymisedData, null, 2);
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
-  
+  const historyBlock = history ? buildHistoryBlock(history) : "";
+
   const message = await anthropic.messages.create({
     model: LLM_MODELS.lensA,
     max_tokens: 2000,
@@ -313,7 +346,7 @@ export async function runLensA(anonymisedData: AnonymisedData, patientCtx?: Pati
     messages: [
       {
         role: "user",
-        content: `Analyse this anonymised health data:\n\n${dataString}${demographics}`,
+        content: `Analyse this anonymised health data:\n\n${dataString}${demographics}${historyBlock}`,
       },
     ],
   });
@@ -322,10 +355,15 @@ export async function runLensA(anonymisedData: AnonymisedData, patientCtx?: Pati
   return parseJSONFromLLM(text) as LensOutput;
 }
 
-export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: LensOutput, patientCtx?: PatientContext): Promise<LensOutput> {
+export async function runLensB(
+  anonymisedData: AnonymisedData,
+  patientCtx?: PatientContext,
+  history?: BiomarkerHistoryEntry[],
+): Promise<LensOutput> {
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
-  const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}\n\nPrior analysis (Lens A - Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}`;
-  
+  const historyBlock = history ? buildHistoryBlock(history) : "";
+  const prompt = `Anonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}${historyBlock}`;
+
   const completion = await openai.chat.completions.create({
     model: LLM_MODELS.lensB,
     messages: [
@@ -339,17 +377,22 @@ export async function runLensB(anonymisedData: AnonymisedData, lensAOutput: Lens
   return parseJSONFromLLM(text) as LensOutput;
 }
 
-export async function runLensC(anonymisedData: AnonymisedData, lensAOutput: LensOutput, lensBOutput: LensOutput, patientCtx?: PatientContext): Promise<LensOutput> {
+export async function runLensC(
+  anonymisedData: AnonymisedData,
+  patientCtx?: PatientContext,
+  history?: BiomarkerHistoryEntry[],
+): Promise<LensOutput> {
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
-  const prompt = `${LENS_C_PROMPT}\n\nAnonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}`;
-  
+  const historyBlock = history ? buildHistoryBlock(history) : "";
+  const prompt = `${LENS_C_PROMPT}\n\nAnonymised patient data:\n${JSON.stringify(anonymisedData, null, 2)}${demographics}${historyBlock}`;
+
   const customGenAI = new GoogleGenerativeAI(process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "");
-  
+
   const model = customGenAI.getGenerativeModel(
     { model: LLM_MODELS.lensC },
-    GEMINI_BASE_URL ? { baseUrl: GEMINI_BASE_URL } : undefined
+    GEMINI_BASE_URL ? { baseUrl: GEMINI_BASE_URL } : undefined,
   );
-  
+
   const result = await model.generateContent([{ text: prompt }]);
   const text = result.response.text();
   return parseJSONFromLLM(text) as LensOutput;
@@ -624,6 +667,202 @@ export async function runCrossRecordCorrelation(
 
   const text = message.content[0].type === "text" ? message.content[0].text : "";
   return parseJSONFromLLM(text) as CorrelationOutput;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 6: Comprehensive cross-panel report
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ComprehensiveReportSection {
+  system: string;
+  status: "urgent" | "watch" | "normal" | "optimal" | "insufficient_data";
+  headline: string;
+  interpretation: string;
+  keyBiomarkers: Array<{
+    name: string;
+    latestValue: string;
+    unit: string | null;
+    trend: "improving" | "declining" | "stable" | "fluctuating" | "single_point";
+    optimalRange: string | null;
+    flag: "urgent" | "watch" | "normal" | "optimal" | null;
+    note: string;
+  }>;
+  recommendations: string[];
+}
+
+export interface ComprehensiveReportOutput {
+  executiveSummary: string;
+  patientNarrative: string; // long-form, plain English, 4-6 paragraphs
+  clinicalNarrative: string; // analytical, denser, for clinicians
+  unifiedHealthScore: number;
+  sections: ComprehensiveReportSection[];
+  crossPanelPatterns: Array<{
+    title: string;
+    description: string;
+    biomarkersInvolved: string[];
+    significance: "urgent" | "watch" | "interesting" | "positive";
+  }>;
+  topConcerns: string[];
+  topPositives: string[];
+  urgentFlags: string[];
+  recommendedNextSteps: string[];
+  followUpTesting: string[];
+}
+
+const COMPREHENSIVE_REPORT_PROMPT = `You are the Chief Medical Synthesist — producing the patient's complete medical-grade health report by integrating EVERY blood panel, imaging report, genetics result, and wearable summary they have on file.
+
+Your role:
+- Read across ALL panels (you receive a time-ordered set of per-record reconciled interpretations + a flat biomarker history)
+- Produce ONE unified, narrative-led report that reads like the world's best preventive-medicine clinician wrote it after reviewing the full chart
+- Integrate trends, not just point-in-time values — a single in-range result means little; the trajectory is the story
+- Group findings by body system; within each system, surface the SPECIFIC biomarkers that matter and what their pattern means for THIS patient
+- Identify cross-system patterns the per-panel analyses individually missed (e.g. metabolic syndrome forming, subclinical inflammation rising in lockstep with declining vitamin D)
+- Be specific. Cite the actual numbers. Avoid generic wellness language.
+
+You may also receive anonymised patient demographics — use them to calibrate optimal ranges and contextualise findings.
+
+Body systems to cover (omit any with truly no data; mark "insufficient_data" if the patient only has a single value that you cannot meaningfully interpret):
+- Cardiovascular (lipids, ApoB, Lp(a), homocysteine, BP if available)
+- Metabolic (glucose, HbA1c, insulin, HOMA-IR, triglycerides)
+- Hormonal (thyroid panel, sex hormones, cortisol)
+- Vitamins & Nutritional (D, B12, folate, ferritin, magnesium, zinc)
+- Hematology (CBC — RBC, WBC, platelets, RDW, MCV)
+- Kidney & Liver (creatinine, eGFR, BUN, ALT, AST, ALP, bilirubin, GGT)
+- Inflammatory (CRP, hs-CRP, ESR, ferritin in inflammatory context)
+- Other (anything that doesn't fit but is clinically meaningful)
+
+Critical: ANONYMISED data only. NEVER include patient names or identifiers.
+
+Respond with valid JSON only:
+{
+  "executiveSummary": "string (3-4 sentence overview — the headline take)",
+  "patientNarrative": "string (4-6 paragraphs, plain English, second-person, warm but precise — what's working, what needs attention, what to do next)",
+  "clinicalNarrative": "string (3-5 paragraphs, clinical language, denser — for sharing with their physician)",
+  "unifiedHealthScore": number (0-100),
+  "sections": [
+    {
+      "system": "Cardiovascular|Metabolic|Hormonal|Vitamins & Nutritional|Hematology|Kidney & Liver|Inflammatory|Other",
+      "status": "urgent|watch|normal|optimal|insufficient_data",
+      "headline": "string (1 sentence — the takeaway for this system)",
+      "interpretation": "string (2-4 sentences — what this looks like for this patient, citing specific values and trends)",
+      "keyBiomarkers": [
+        {
+          "name": "string",
+          "latestValue": "string (number with unit, e.g. '5.4')",
+          "unit": "string|null",
+          "trend": "improving|declining|stable|fluctuating|single_point",
+          "optimalRange": "string|null (e.g. '<5.0')",
+          "flag": "urgent|watch|normal|optimal|null",
+          "note": "string (≤1 sentence — what this specific marker means here)"
+        }
+      ],
+      "recommendations": ["string (specific to THIS patient)"]
+    }
+  ],
+  "crossPanelPatterns": [
+    {
+      "title": "string",
+      "description": "string (2-3 sentences)",
+      "biomarkersInvolved": ["string"],
+      "significance": "urgent|watch|interesting|positive"
+    }
+  ],
+  "topConcerns": ["string"],
+  "topPositives": ["string"],
+  "urgentFlags": ["string"],
+  "recommendedNextSteps": ["string"],
+  "followUpTesting": ["string"]
+}`;
+
+export interface ComprehensiveReportInput {
+  patientCtx?: PatientContext;
+  panelReconciled: Array<{
+    recordId: number;
+    recordType: string;
+    testDate: string | null;
+    uploadedAt: string;
+    reconciledOutput: ReconciledOutput | null;
+  }>;
+  biomarkerHistory: BiomarkerHistoryEntry[];
+  currentSupplements?: Array<{ name: string; dosage: string | null }>;
+}
+
+export async function runComprehensiveReport(
+  input: ComprehensiveReportInput,
+): Promise<ComprehensiveReportOutput> {
+  const demographics = input.patientCtx ? buildDemographicBlock(input.patientCtx) : "";
+  const historyBlock = buildHistoryBlock(input.biomarkerHistory);
+
+  // Compact panel summaries — drop heavy lens fields, keep the reconciled
+  // interpretation per record so the synthesist can integrate.
+  const compactPanels = input.panelReconciled
+    .filter((p) => p.reconciledOutput)
+    .map((p) => ({
+      recordId: p.recordId,
+      recordType: p.recordType,
+      testDate: p.testDate,
+      uploadedAt: p.uploadedAt,
+      // Only the cross-panel-relevant fields — narratives are already
+      // covered downstream and would just bloat the prompt.
+      summary: p.reconciledOutput?.clinicalNarrative ?? "",
+      topConcerns: p.reconciledOutput?.topConcerns ?? [],
+      topPositives: p.reconciledOutput?.topPositives ?? [],
+      urgentFlags: p.reconciledOutput?.urgentFlags ?? [],
+      gauges: p.reconciledOutput?.gaugeUpdates ?? [],
+      score: p.reconciledOutput?.unifiedHealthScore ?? null,
+    }));
+
+  const supplementsBlock =
+    input.currentSupplements && input.currentSupplements.length > 0
+      ? `\n\nCurrent supplement stack (consider for context, do not re-recommend duplicates):\n${JSON.stringify(input.currentSupplements, null, 2)}`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+
+  const message = await anthropic.messages.create({
+    model: LLM_MODELS.reconciliation,
+    max_tokens: 8000,
+    system: COMPREHENSIVE_REPORT_PROMPT,
+    messages: [{ role: "user", content: userPayload }],
+  });
+
+  const text = message.content[0].type === "text" ? message.content[0].text : "";
+  const parsed = parseJSONFromLLM(text) as ComprehensiveReportOutput;
+
+  // Defensive defaults so consumers can render without optional-chaining
+  // every nested array.
+  const toFiniteNumber = (v: unknown, fallback: number): number => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  return {
+    executiveSummary: parsed.executiveSummary ?? "",
+    patientNarrative: parsed.patientNarrative ?? "",
+    clinicalNarrative: parsed.clinicalNarrative ?? "",
+    unifiedHealthScore: toFiniteNumber(parsed.unifiedHealthScore, 50),
+    sections: (parsed.sections ?? []).map((s) => ({
+      system: s.system ?? "Other",
+      status: s.status ?? "normal",
+      headline: s.headline ?? "",
+      interpretation: s.interpretation ?? "",
+      keyBiomarkers: (s.keyBiomarkers ?? []).map((b) => ({
+        name: b.name ?? "",
+        latestValue: b.latestValue ?? "",
+        unit: b.unit ?? null,
+        trend: b.trend ?? "single_point",
+        optimalRange: b.optimalRange ?? null,
+        flag: b.flag ?? null,
+        note: b.note ?? "",
+      })),
+      recommendations: s.recommendations ?? [],
+    })),
+    crossPanelPatterns: parsed.crossPanelPatterns ?? [],
+    topConcerns: parsed.topConcerns ?? [],
+    topPositives: parsed.topPositives ?? [],
+    urgentFlags: parsed.urgentFlags ?? [],
+    recommendedNextSteps: parsed.recommendedNextSteps ?? [],
+    followUpTesting: parsed.followUpTesting ?? [],
+  };
 }
 
 export interface SupplementRecommendation {

@@ -196,6 +196,7 @@ const LLM_SEGMENTS: ReadonlySet<string> = new Set([
   "interpretations",
   "predictions",
   "reports",
+  "comprehensive-report",
   "protocols",
   "genetics",
   "correlations",

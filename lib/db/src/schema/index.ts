@@ -12,3 +12,4 @@ export * from "./phase3";
 export * from "./phase4";
 export * from "./phase5";
 export * from "./phase5b";
+export * from "./phase6";

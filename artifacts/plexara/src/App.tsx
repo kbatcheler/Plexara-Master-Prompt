@@ -187,6 +187,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/share-portal"><ProtectedRoute component={Share} /></Route>
                 <Route path="/settings"><ProtectedRoute component={Settings} /></Route>
                 <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
+                <Route path="/report"><ProtectedRoute component={Report} /></Route>
                 <Route path="/reports/:id"><ProtectedRoute component={Report} /></Route>
                 <Route path="/genetics"><ProtectedRoute component={Genetics} /></Route>
                 <Route path="/imaging"><ProtectedRoute component={Imaging} /></Route>

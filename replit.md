@@ -1,7 +1,16 @@
 # Plexara Project
 
 ## Overview
-Plexara is a premium health intelligence platform designed to transform raw blood panel data into actionable health insights. Users upload blood panel PDFs or images, which are then processed by AI to extract structured biomarker data. A unique three-lens adversarial interpretation pipeline (using Claude, GPT, and Gemini) analyzes this data, presenting results as intuitive health domain gauges and narrative summaries. The platform prioritizes user privacy through recursive PII stripping and offers dual display modes for patients and clinicians. The project aims to provide comprehensive, privacy-conscious health analytics, with a recent focus on a significant UI/UX redesign to enhance the user experience.
+Plexara is a premium health intelligence platform designed to transform raw blood panel data into actionable health insights. Users upload blood panel PDFs or images, which are then processed by AI to extract structured biomarker data. A unique three-lens adversarial interpretation pipeline (using Claude, GPT, and Gemini) analyzes this data, presenting results as intuitive health domain gauges and narrative summaries. The platform prioritizes user privacy through recursive PII stripping and offers dual display modes for patients and clinicians.
+
+Recent additions (Phases 1-4):
+- **Batch upload**: `POST /api/patients/:id/records/batch` accepts up to 10 panels in one request, queued through a per-patient in-memory limiter (max 2 in flight) so we don't bombard the LLM providers. The frontend `UploadZone` shows per-file progress cards with a single global polling effect.
+- **Parallel lenses**: Lens A/B/C now run via `Promise.allSettled` (independent prompts, no chaining). Per-lens progress is persisted to `lensesCompleted` via an atomic SQL `COALESCE(...) + 1` increment, monotonic regardless of completion order.
+- **Comprehensive cross-panel report**: New `comprehensive_reports` table (PHI-encrypted body + narrative + sourceRecordIds), `runComprehensiveReport` AI fn, routes `POST /api/patients/:id/comprehensive-report` and `GET /latest`, and a redesigned `/report` page showing executive summary, patient & clinical narratives, cross-panel patterns and per-body-system cards. Sidebar nav exposes "Comprehensive report" under Insights.
+- **History-aware prompts**: each lens and reconciliation receive a bounded biomarker-history block from prior records (current record excluded).
+- **Extraction caching**: re-analyzing an existing record skips OCR/extraction and reuses the cached `extracted_data` envelope.
+
+Known limitation: the per-patient batch limiter is in-memory only; on process restart, records left in `pending`/`processing` are not re-queued (no startup recovery worker yet).
 
 ## User Preferences
 I want iterative development. I want to be asked before you make any major changes to the codebase.
