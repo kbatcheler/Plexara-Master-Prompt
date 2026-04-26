@@ -47,18 +47,50 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
     .from(biomarkerResultsTable)
     .where(and(eq(biomarkerResultsTable.patientId, patientId), gte(biomarkerResultsTable.createdAt, cutoff)));
 
-  const grouped = new Map<string, { unit: string | null; pts: SeriesPoint[] }>();
+  // ── Per-biomarker bucketing with same-day dedup ──
+  // The extraction layer can produce multiple biomarker_results rows for the
+  // SAME (biomarker, test_date) pair when a single lab visit yields several
+  // overlapping PDFs (e.g. category-specific exports of one blood draw) or
+  // when a single record contains the same biomarker line twice. Counting
+  // those as independent samples inflates sample_count, drives r² to a
+  // bogus 1.0, and turns trend projections into noise. So we collapse all
+  // values for a given (name, date) into a single point using the MEDIAN —
+  // robust to one outlier among duplicates that should otherwise agree.
+  const buckets = new Map<string, { unit: string | null; byDay: Map<number, number[]> }>();
   for (const r of rows) {
     if (!r.value) continue;
     const v = parseFloat(r.value);
     if (Number.isNaN(v)) continue;
     const dateStr = r.testDate ?? null;
-    const t = dateStr ? new Date(dateStr).getTime() : r.createdAt.getTime();
-    if (!Number.isFinite(t)) continue;
-    const g = grouped.get(r.name) ?? { unit: r.unit, pts: [] };
-    g.pts.push({ t, v });
-    if (!g.unit) g.unit = r.unit;
-    grouped.set(r.name, g);
+    const tRaw = dateStr ? new Date(dateStr).getTime() : r.createdAt.getTime();
+    if (!Number.isFinite(tRaw)) continue;
+    // Snap to UTC midnight so two readings 6h apart on the same calendar
+    // day collapse into one point.
+    const t = Math.floor(tRaw / DAY_MS) * DAY_MS;
+    let b = buckets.get(r.name);
+    if (!b) {
+      b = { unit: r.unit, byDay: new Map() };
+      buckets.set(r.name, b);
+    }
+    if (!b.unit) b.unit = r.unit;
+    const arr = b.byDay.get(t) ?? [];
+    arr.push(v);
+    b.byDay.set(t, arr);
+  }
+
+  const median = (xs: number[]): number => {
+    if (xs.length === 0) return NaN;
+    if (xs.length === 1) return xs[0];
+    const sorted = [...xs].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  const grouped = new Map<string, { unit: string | null; pts: SeriesPoint[] }>();
+  for (const [name, b] of buckets) {
+    const pts: SeriesPoint[] = [];
+    for (const [t, vs] of b.byDay) pts.push({ t, v: median(vs) });
+    grouped.set(name, { unit: b.unit, pts });
   }
 
   let computed = 0;

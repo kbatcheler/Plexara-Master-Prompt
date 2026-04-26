@@ -1,11 +1,13 @@
+import { Fragment, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, Bell } from "lucide-react";
+import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { TrendChart } from "../components/trends/TrendChart";
 
 interface Trend {
   id: number; biomarkerName: string; slopePerDay: number | null; intercept: number | null;
@@ -56,6 +58,8 @@ export default function Trends() {
   });
 
   const unacked = alertsQ.data?.filter((a) => !a.acknowledgedAt) ?? [];
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const toggle = (name: string) => setExpanded((curr) => (curr === name ? null : name));
 
   return (
     <div className="container max-w-6xl py-8 space-y-6">
@@ -140,23 +144,40 @@ export default function Trends() {
                   <tbody>
                     {trendsQ.data!.map((t) => {
                       const slopeYear = t.slopePerDay !== null ? t.slopePerDay * 365 : null;
+                      const isOpen = expanded === t.biomarkerName;
                       return (
-                        <tr key={t.id} className="border-b border-border/20" data-testid={`trend-row-${t.biomarkerName}`}>
-                          <td className="py-2">
-                            <div className="flex items-center gap-2">
-                              {arrow(t.slopePerDay)}
-                              <span className="font-medium">{t.biomarkerName}</span>
-                              <span className="text-xs text-muted-foreground">{t.unit}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 text-right font-mono">{t.lastValue?.toFixed(2)}</td>
-                          <td className="py-2 text-right font-mono">{slopeYear?.toFixed(2) ?? "—"}</td>
-                          <td className="py-2 text-right font-mono">{t.r2?.toFixed(2) ?? "—"}</td>
-                          <td className="py-2 text-right font-mono">{t.projection30?.toFixed(2) ?? "—"}</td>
-                          <td className="py-2 text-right font-mono">{t.projection90?.toFixed(2) ?? "—"}</td>
-                          <td className="py-2 text-right font-mono">{t.projection365?.toFixed(2) ?? "—"}</td>
-                          <td className="py-2 text-right font-mono text-muted-foreground">{t.sampleCount}</td>
-                        </tr>
+                        <Fragment key={t.id}>
+                          <tr
+                            className="border-b border-border/20 cursor-pointer hover:bg-muted/30 transition-colors"
+                            data-testid={`trend-row-${t.biomarkerName}`}
+                            onClick={() => toggle(t.biomarkerName)}
+                          >
+                            <td className="py-2">
+                              <div className="flex items-center gap-2">
+                                {isOpen
+                                  ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                                  : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+                                {arrow(t.slopePerDay)}
+                                <span className="font-medium">{t.biomarkerName}</span>
+                                <span className="text-xs text-muted-foreground">{t.unit}</span>
+                              </div>
+                            </td>
+                            <td className="py-2 text-right font-mono">{t.lastValue?.toFixed(2)}</td>
+                            <td className="py-2 text-right font-mono">{slopeYear?.toFixed(2) ?? "—"}</td>
+                            <td className="py-2 text-right font-mono">{t.r2?.toFixed(2) ?? "—"}</td>
+                            <td className="py-2 text-right font-mono">{t.projection30?.toFixed(2) ?? "—"}</td>
+                            <td className="py-2 text-right font-mono">{t.projection90?.toFixed(2) ?? "—"}</td>
+                            <td className="py-2 text-right font-mono">{t.projection365?.toFixed(2) ?? "—"}</td>
+                            <td className="py-2 text-right font-mono text-muted-foreground">{t.sampleCount}</td>
+                          </tr>
+                          {isOpen && patientId && (
+                            <tr className="border-b border-border/20 bg-muted/10">
+                              <td colSpan={8} className="py-4 px-3">
+                                <TrendChart patientId={patientId} biomarkerName={t.biomarkerName} />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
