@@ -47,3 +47,26 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# ── Secrets / environment ──────────────────────────────────────────────────
+# Never commit a populated env file. The committed template `.env.example`
+# is the only env file allowed in version control, hence the explicit
+# negation below. If you add a new env variant (e.g. `.env.test`), add it
+# to this block too.
+.env
+.env.local
+.env.development
+.env.staging
+.env.production
+.env.*.local
+!.env.example
+
+# ── PHI / patient uploads ───────────────────────────────────────────────────
+# Anything written by the records upload pipeline. Never commit user PDFs,
+# DICOM files, lab images, etc. The pre-commit hook (.githooks/pre-commit)
+# is the second line of defence.
+uploads/
+artifacts/api-server/uploads/
+attached_assets/*.pdf
+attached_assets/*.dcm
+attached_assets/*.DCM

@@ -15,6 +15,23 @@ try {
   process.exit(1);
 }
 
+// Fail fast at boot if SESSION_SECRET isn't set in production. cookie-parser
+// will accept a missing/weak secret silently and just stop signing cookies,
+// which means session integrity (and therefore CSRF + auth) is broken in a
+// way the operator only notices once exploitation happens. The dev fallback
+// string is hard-coded into app.ts; if production is using it, signed-cookie
+// integrity is identical to "no secret at all".
+if (process.env.NODE_ENV === "production") {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret === "dev-fallback-secret-change-me" || secret.length < 32) {
+    logger.fatal(
+      { hasSecret: !!secret, length: secret?.length ?? 0 },
+      "SESSION_SECRET missing, set to the dev fallback, or shorter than 32 chars in production — refusing to start. Set SESSION_SECRET to 32+ random bytes (e.g. `openssl rand -base64 48`).",
+    );
+    process.exit(1);
+  }
+}
+
 // Fail fast at boot if STATIC_DIR is set but the directory or its index.html
 // isn't readable. In production this prevents the autoscale container from
 // starting only to serve a 500 on every page load when the SPA build wasn't

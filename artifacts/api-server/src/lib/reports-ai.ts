@@ -1,0 +1,233 @@
+import {
+  anthropic,
+  LLM_MODELS,
+  withLLMRetry,
+  parseJSONFromLLM,
+} from "./llm-client";
+import {
+  buildDemographicBlock,
+  buildHistoryBlock,
+  type PatientContext,
+  type BiomarkerHistoryEntry,
+} from "./patient-context";
+import type { ReconciledOutput } from "./reconciliation";
+
+export interface ComprehensiveReportSection {
+  system: string;
+  status: "urgent" | "watch" | "normal" | "optimal" | "insufficient_data";
+  headline: string;
+  interpretation: string;
+  keyBiomarkers: Array<{
+    name: string;
+    latestValue: string;
+    unit: string | null;
+    trend: "improving" | "declining" | "stable" | "fluctuating" | "single_point";
+    optimalRange: string | null;
+    flag: "urgent" | "watch" | "normal" | "optimal" | null;
+    note: string;
+  }>;
+  recommendations: string[];
+}
+
+export interface ComprehensiveReportOutput {
+  executiveSummary: string;
+  patientNarrative: string; // long-form, plain English, 4-6 paragraphs
+  clinicalNarrative: string; // analytical, denser, for clinicians
+  unifiedHealthScore: number;
+  sections: ComprehensiveReportSection[];
+  crossPanelPatterns: Array<{
+    title: string;
+    description: string;
+    biomarkersInvolved: string[];
+    significance: "urgent" | "watch" | "interesting" | "positive";
+  }>;
+  topConcerns: string[];
+  topPositives: string[];
+  urgentFlags: string[];
+  recommendedNextSteps: string[];
+  followUpTesting: string[];
+}
+
+const COMPREHENSIVE_REPORT_PROMPT = `You are the Chief Medical Synthesist — producing the patient's complete medical-grade health report by integrating EVERY blood panel, imaging report, genetics result, and wearable summary they have on file.
+
+Your role:
+- Read across ALL panels (you receive a time-ordered set of per-record reconciled interpretations + a flat biomarker history)
+- Produce ONE unified, narrative-led report that reads like the world's best preventive-medicine clinician wrote it after reviewing the full chart
+- Integrate trends, not just point-in-time values — a single in-range result means little; the trajectory is the story
+- Group findings by body system; within each system, surface the SPECIFIC biomarkers that matter and what their pattern means for THIS patient
+- Identify cross-system patterns the per-panel analyses individually missed (e.g. metabolic syndrome forming, subclinical inflammation rising in lockstep with declining vitamin D)
+- Be specific. Cite the actual numbers. Avoid generic wellness language.
+
+You may also receive anonymised patient demographics — use them to calibrate optimal ranges and contextualise findings.
+
+NARRATIVE STYLE (applies to executiveSummary, patientNarrative, clinicalNarrative, and every section narrative):
+- Write in flowing prose paragraphs separated by a blank line. NO inline markdown decoration: no \`**bold**\`, no \`### headers\`, no horizontal rules.
+- The frontend renders this through a typographic component — emphasis, hierarchy and rhythm come from sentence craft and paragraph breaks, not from \`**\` or \`###\`.
+- Markdown bullet lists are acceptable ONLY when enumerating discrete recommendations or explicit next steps. Otherwise stay in prose.
+
+Body systems to cover (omit any with truly no data; mark "insufficient_data" if the patient only has a single value that you cannot meaningfully interpret):
+- Cardiovascular (lipids, ApoB, Lp(a), homocysteine, BP if available)
+- Metabolic (glucose, HbA1c, insulin, HOMA-IR, triglycerides)
+- Hormonal (thyroid panel, sex hormones, cortisol)
+- Vitamins & Nutritional (D, B12, folate, ferritin, magnesium, zinc)
+- Hematology (CBC — RBC, WBC, platelets, RDW, MCV)
+- Kidney & Liver (creatinine, eGFR, BUN, ALT, AST, ALP, bilirubin, GGT)
+- Inflammatory (CRP, hs-CRP, ESR, ferritin in inflammatory context)
+- Other (anything that doesn't fit but is clinically meaningful)
+
+Critical: ANONYMISED data only. NEVER include patient names or identifiers.
+
+Respond with valid JSON only:
+{
+  "executiveSummary": "string (3-4 sentence overview — the headline take)",
+  "patientNarrative": "string (4-6 paragraphs, plain English, second-person, warm but precise — what's working, what needs attention, what to do next)",
+  "clinicalNarrative": "string (3-5 paragraphs, clinical language, denser — for sharing with their physician)",
+  "unifiedHealthScore": number (0-100),
+  "sections": [
+    {
+      "system": "Cardiovascular|Metabolic|Hormonal|Vitamins & Nutritional|Hematology|Kidney & Liver|Inflammatory|Other",
+      "status": "urgent|watch|normal|optimal|insufficient_data",
+      "headline": "string (1 sentence — the takeaway for this system)",
+      "interpretation": "string (2-4 sentences — what this looks like for this patient, citing specific values and trends)",
+      "keyBiomarkers": [
+        {
+          "name": "string",
+          "latestValue": "string (number with unit, e.g. '5.4')",
+          "unit": "string|null",
+          "trend": "improving|declining|stable|fluctuating|single_point",
+          "optimalRange": "string|null (e.g. '<5.0')",
+          "flag": "urgent|watch|normal|optimal|null",
+          "note": "string (≤1 sentence — what this specific marker means here)"
+        }
+      ],
+      "recommendations": ["string (specific to THIS patient)"]
+    }
+  ],
+  "crossPanelPatterns": [
+    {
+      "title": "string",
+      "description": "string (2-3 sentences)",
+      "biomarkersInvolved": ["string"],
+      "significance": "urgent|watch|interesting|positive"
+    }
+  ],
+  "topConcerns": ["string"],
+  "topPositives": ["string"],
+  "urgentFlags": ["string"],
+  "recommendedNextSteps": ["string"],
+  "followUpTesting": ["string"]
+}`;
+
+export interface ComprehensiveReportInput {
+  patientCtx?: PatientContext;
+  panelReconciled: Array<{
+    recordId: number;
+    recordType: string;
+    testDate: string | null;
+    uploadedAt: string;
+    reconciledOutput: ReconciledOutput | null;
+  }>;
+  biomarkerHistory: BiomarkerHistoryEntry[];
+  currentSupplements?: Array<{ name: string; dosage: string | null }>;
+  imagingInterpretations?: Array<{
+    studyId: number;
+    modality: string | null;
+    bodyPart: string | null;
+    description: string | null;
+    studyDate: string | null;
+    patientNarrative: string;
+    clinicalNarrative: string;
+    topConcerns: string[];
+    urgentFlags: string[];
+    contextNote: string;
+  }>;
+}
+
+export async function runComprehensiveReport(
+  input: ComprehensiveReportInput,
+): Promise<ComprehensiveReportOutput> {
+  const demographics = input.patientCtx ? buildDemographicBlock(input.patientCtx) : "";
+  const historyBlock = buildHistoryBlock(input.biomarkerHistory);
+
+  // Compact panel summaries — drop heavy lens fields, keep the reconciled
+  // interpretation per record so the synthesist can integrate.
+  const compactPanels = input.panelReconciled
+    .filter((p) => p.reconciledOutput)
+    .map((p) => ({
+      recordId: p.recordId,
+      recordType: p.recordType,
+      testDate: p.testDate,
+      uploadedAt: p.uploadedAt,
+      // Only the cross-panel-relevant fields — narratives are already
+      // covered downstream and would just bloat the prompt.
+      summary: p.reconciledOutput?.clinicalNarrative ?? "",
+      topConcerns: p.reconciledOutput?.topConcerns ?? [],
+      topPositives: p.reconciledOutput?.topPositives ?? [],
+      urgentFlags: p.reconciledOutput?.urgentFlags ?? [],
+      gauges: p.reconciledOutput?.gaugeUpdates ?? [],
+      score: p.reconciledOutput?.unifiedHealthScore ?? null,
+    }));
+
+  const supplementsBlock =
+    input.currentSupplements && input.currentSupplements.length > 0
+      ? `\n\nCurrent supplement stack (consider for context, do not re-recommend duplicates):\n${JSON.stringify(input.currentSupplements, null, 2)}`
+      : "";
+
+  const imagingBlock =
+    input.imagingInterpretations && input.imagingInterpretations.length > 0
+      ? `\n\nImaging studies on file (DICOM-header-derived interpretations — DO NOT treat as radiology pixel findings; use only as imaging context to integrate with the bloodwork):\n${JSON.stringify(input.imagingInterpretations, null, 2)}`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+
+  const parsed = await withLLMRetry("comprehensiveReport", async () => {
+    const message = await anthropic.messages.create({
+      model: LLM_MODELS.reconciliation,
+      // Cross-panel comprehensive report regularly produces 7+ body-system
+      // sections × multiple key biomarkers × narrative + multiple trailing
+      // arrays. 8000 tokens routinely truncated mid-JSON, dropping the
+      // crossPanelPatterns/topConcerns/etc. arrays at the tail.
+      max_tokens: 16000,
+      system: COMPREHENSIVE_REPORT_PROMPT,
+      messages: [{ role: "user", content: userPayload }],
+    });
+
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    return parseJSONFromLLM(text) as ComprehensiveReportOutput;
+  });
+
+  // Defensive defaults so consumers can render without optional-chaining
+  // every nested array.
+  const toFiniteNumber = (v: unknown, fallback: number): number => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  return {
+    executiveSummary: parsed.executiveSummary ?? "",
+    patientNarrative: parsed.patientNarrative ?? "",
+    clinicalNarrative: parsed.clinicalNarrative ?? "",
+    unifiedHealthScore: toFiniteNumber(parsed.unifiedHealthScore, 50),
+    sections: (parsed.sections ?? []).map((s) => ({
+      system: s.system ?? "Other",
+      status: s.status ?? "normal",
+      headline: s.headline ?? "",
+      interpretation: s.interpretation ?? "",
+      keyBiomarkers: (s.keyBiomarkers ?? []).map((b) => ({
+        name: b.name ?? "",
+        latestValue: b.latestValue ?? "",
+        unit: b.unit ?? null,
+        trend: b.trend ?? "single_point",
+        optimalRange: b.optimalRange ?? null,
+        flag: b.flag ?? null,
+        note: b.note ?? "",
+      })),
+      recommendations: s.recommendations ?? [],
+    })),
+    crossPanelPatterns: parsed.crossPanelPatterns ?? [],
+    topConcerns: parsed.topConcerns ?? [],
+    topPositives: parsed.topPositives ?? [],
+    urgentFlags: parsed.urgentFlags ?? [],
+    recommendedNextSteps: parsed.recommendedNextSteps ?? [],
+    followUpTesting: parsed.followUpTesting ?? [],
+  };
+}

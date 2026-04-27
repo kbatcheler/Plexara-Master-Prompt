@@ -155,6 +155,13 @@ app.use(clerkMiddleware());
 const RATE_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 15 * 60 * 1000); // 15 min
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX_REQUESTS ?? 600);
 const LLM_RATE_MAX = Number(process.env.RATE_LIMIT_LLM_MAX_REQUESTS ?? 30);
+// Stricter cap for sensitive-action endpoints (sharing PHI externally,
+// invitation tokens, compliance data exports, dev-auth bypass). These are
+// either security-impactful (token forging / abuse-of-share) or expensive
+// (compliance exports run multi-table dumps + PHI decryption). Default of
+// 20/window is conservative — typical real-user usage is single digits per
+// hour. See ISSUE 7 in the round-2 remediation plan.
+const SENSITIVE_RATE_MAX = Number(process.env.RATE_LIMIT_SENSITIVE_MAX_REQUESTS ?? 20);
 
 const globalLimiter = rateLimit({
   windowMs: RATE_WINDOW_MS,
@@ -171,6 +178,14 @@ const llmLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many AI requests" },
+});
+
+const sensitiveLimiter = rateLimit({
+  windowMs: RATE_WINDOW_MS,
+  max: SENSITIVE_RATE_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many sensitive-action requests" },
 });
 
 app.use("/api", globalLimiter);
@@ -208,6 +223,50 @@ app.use("/api", (req, res, next): void => {
   const isLLM = segments.some((s) => LLM_SEGMENTS.has(s));
   if (isLLM) {
     llmLimiter(req, res, next);
+    return;
+  }
+  next();
+});
+
+// Sensitive-action limiter — fires AFTER the global limiter (which already
+// counted the request) but BEFORE the router so an over-limit caller never
+// reaches the handler. Patient IDs are UUIDs that never collide with these
+// segment names, so a "does any URL segment match?" check is precise and
+// avoids regex maintenance.
+//
+// Compliance NOTE: there is no `/api/me/compliance/*` mount today — the
+// compliance router is mounted at `/api/me/` and exposes the discrete
+// routes `/consents`, `/consents/:scopeKey`, `/data-residency`,
+// `/data-requests`, and `/baa-report` (consent toggles, residency moves,
+// PHI export/deletion requests, BAA export). Each of those segment names
+// is unique to the compliance surface, so we list them explicitly rather
+// than relying on a `compliance` umbrella that doesn't exist in routing.
+//
+// Surfaces matched:
+//   /api/patients/:pid/share-links              ← share
+//   /api/share/...                              ← share (public token resolution)
+//   /api/patients/:pid/invitations              ← invitations
+//   /api/invitations/...                        ← invitations (public accept flow)
+//   /api/me/consents (+ /:scopeKey)             ← consent grants
+//   /api/me/data-residency                      ← region change
+//   /api/me/data-requests                       ← PHI export/deletion
+//   /api/me/baa-report                          ← BAA artefact download
+//   /api/admin/data-requests*                   ← admin view of the above
+//   /api/dev-auth/*                             ← dev-auth (bypass cookie issuance)
+const SENSITIVE_SEGMENTS: ReadonlySet<string> = new Set([
+  "share-links",
+  "share",
+  "invitations",
+  "consents",
+  "data-residency",
+  "data-requests",
+  "baa-report",
+  "dev-auth",
+]);
+app.use("/api", (req, res, next): void => {
+  const segments = req.path.split("/").filter(Boolean);
+  if (segments.some((s) => SENSITIVE_SEGMENTS.has(s))) {
+    sensitiveLimiter(req, res, next);
     return;
   }
   next();
