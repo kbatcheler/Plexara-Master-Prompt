@@ -223,16 +223,37 @@ app.use("/api", notFoundHandler);
 // In production Docker images we ship the Vite build at /app/public and
 // point STATIC_DIR at it. Replit's preview pane uses a separate Vite dev
 // server, so STATIC_DIR is unset in dev and this branch is skipped.
-const staticDir = process.env.STATIC_DIR;
-if (staticDir) {
+//
+// STATIC_DIR may be relative (e.g. "artifacts/plexara/dist/public" — the
+// value the autoscale runner uses). express.static would resolve it against
+// process.cwd(), but res.sendFile REQUIRES an absolute path or it throws
+// synchronously. Resolve once up front so both paths agree and any cwd
+// surprise is caught here, not on every request.
+const staticDirRaw = process.env.STATIC_DIR;
+if (staticDirRaw) {
+  const staticDir = path.resolve(staticDirRaw);
   app.use(express.static(staticDir, { maxAge: "1h", index: false }));
   // SPA fallback. Express 5 uses path-to-regexp v6 which requires named
-  // wildcards; `(.*)` matches everything that wasn't already handled by
-  // /api or /api/storage above.
-  app.get(/.*/, (_req, res) => {
-    res.sendFile(path.join(staticDir, "index.html"));
+  // wildcards; `/.*/` matches everything that wasn't already handled by
+  // /api or static assets above. The sendFile callback surfaces any I/O
+  // error (missing index.html, permissions) into pino + the central error
+  // handler instead of letting Express's default 500 swallow the cause.
+  const indexHtml = path.join(staticDir, "index.html");
+  app.get(/.*/, (req, res, next) => {
+    res.sendFile(indexHtml, (err) => {
+      if (err) {
+        logger.error(
+          { err, indexHtml, staticDir, cwd: process.cwd(), url: req.url },
+          "Failed to serve SPA index.html",
+        );
+        next(err);
+      }
+    });
   });
-  logger.info({ staticDir }, "Serving static frontend");
+  logger.info(
+    { staticDir, raw: staticDirRaw, cwd: process.cwd() },
+    "Serving static frontend",
+  );
 }
 
 // Central error handler MUST be the very last middleware. Catches:

@@ -1,3 +1,5 @@
+import { existsSync, statSync } from "node:fs";
+import path from "node:path";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { assertPhiKeyConfigured } from "./lib/phi-crypto";
@@ -11,6 +13,31 @@ try {
 } catch (err) {
   logger.fatal({ err }, "PHI encryption key not configured — refusing to start");
   process.exit(1);
+}
+
+// Fail fast at boot if STATIC_DIR is set but the directory or its index.html
+// isn't readable. In production this prevents the autoscale container from
+// starting only to serve a 500 on every page load when the SPA build wasn't
+// shipped or the runner's CWD isn't what we assumed. In dev STATIC_DIR is
+// unset so this check is skipped entirely.
+const staticDirRaw = process.env.STATIC_DIR;
+if (staticDirRaw) {
+  const resolved = path.resolve(staticDirRaw);
+  const indexHtml = path.join(resolved, "index.html");
+  try {
+    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+      throw new Error(`STATIC_DIR does not exist or is not a directory: ${resolved}`);
+    }
+    if (!existsSync(indexHtml)) {
+      throw new Error(`STATIC_DIR is missing index.html: ${indexHtml}`);
+    }
+  } catch (err) {
+    logger.fatal(
+      { err, staticDirRaw, resolved, cwd: process.cwd() },
+      "STATIC_DIR validation failed — refusing to start",
+    );
+    process.exit(1);
+  }
 }
 
 // Surface dev-auth state at boot so the operator sees it in deployment logs.
