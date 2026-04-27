@@ -1,6 +1,14 @@
 import { Link } from "wouter";
 import { Activity, Shield, Cpu, ArrowRight } from "lucide-react";
 
+// In development we expose a static-credential dev-login page (App.tsx
+// only registers the /dev-login route when import.meta.env.DEV is true).
+// In production /dev-login does not exist, so the CTA must point at the
+// real Clerk-backed sign-in route or wouter falls through to the SPA's
+// 404 page. The two CTAs below shared the same hard-coded /dev-login
+// link before, which is what produced the post-deploy 404.
+const ENTER_PLATFORM_HREF = import.meta.env.DEV ? "/dev-login" : "/sign-in";
+
 export default function Landing() {
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/30 flex flex-col">
@@ -12,7 +20,7 @@ export default function Landing() {
           <span className="font-heading font-semibold text-xl tracking-tight">Plexara<span className="text-primary">.</span>health</span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/dev-login" className="text-sm font-medium bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
+          <Link href={ENTER_PLATFORM_HREF} className="text-sm font-medium bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">
             Enter Platform
           </Link>
         </div>
@@ -42,7 +50,7 @@ export default function Landing() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
-            <Link href="/dev-login" className="flex items-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-medium hover:bg-primary/90 transition-all hover:scale-105 shadow-lg shadow-primary/20">
+            <Link href={ENTER_PLATFORM_HREF} className="flex items-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-medium hover:bg-primary/90 transition-all hover:scale-105 shadow-lg shadow-primary/20">
               Enter Platform
               <ArrowRight className="w-4 h-4" />
             </Link>
