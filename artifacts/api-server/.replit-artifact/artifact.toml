@@ -13,31 +13,22 @@ paths = ["/api"]
 run = "pnpm --filter @workspace/api-server run dev"
 
 [services.production]
-
-[services.production.build]
-# In autoscale we ship a single container that serves both the API and the
-# built Plexara SPA. Build the web app first so its assets are present at
-# artifacts/plexara/dist/public, then build the API bundle.
-args = [
+# Build the Plexara SPA first (its bundle is served as static), then build the
+# api-server bundle that ships in the container.
+build = [
   "sh",
   "-c",
   "pnpm --filter @workspace/plexara run build && pnpm --filter @workspace/api-server run build",
 ]
-
-[services.production.build.env]
-NODE_ENV = "production"
-
-[services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
-
-[services.production.run.env]
-PORT = "8080"
-NODE_ENV = "production"
-# When STATIC_DIR is set, the Express app mounts express.static() and a SPA
-# catch-all for everything that isn't /api/*. This makes the api-server the
-# single service exposed by autoscale on port 8080.
-STATIC_DIR = "artifacts/plexara/dist/public"
+# Run the api-server with STATIC_DIR pointing at the built SPA. The Express
+# app mounts express.static() + an SPA catch-all when STATIC_DIR is set, so
+# this single Node process serves both /api/* and the React app.
+# NODE_ENV is forced to production; PORT is provided by the deploy runtime.
+run = [
+  "sh",
+  "-c",
+  "NODE_ENV=production STATIC_DIR=artifacts/plexara/dist/public exec node --enable-source-maps artifacts/api-server/dist/index.mjs",
+]
 
 [services.production.health.startup]
 path = "/api/healthz"
