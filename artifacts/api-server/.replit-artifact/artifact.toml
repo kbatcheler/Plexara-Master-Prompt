@@ -7,7 +7,15 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 [[services]]
 localPort = 8080
 name = "API Server"
-paths = ["/api"]
+# In production we ship a SINGLE container: this Express process serves
+# both /api/* (route handlers) and the React SPA (express.static + catch-all
+# fallback when STATIC_DIR is set). Claiming "/" here makes the autoscale
+# router send ALL public traffic to this service. Without this, the router
+# tries to forward "/" to the plexara web service's port (20812), which has
+# no [services.production] block and isn't running — producing the bare
+# "Internal Server Error" the edge proxy returns when no upstream is
+# reachable. /api still routes here too because we're the only service.
+paths = ["/"]
 
 [services.development]
 run = "pnpm --filter @workspace/api-server run dev"

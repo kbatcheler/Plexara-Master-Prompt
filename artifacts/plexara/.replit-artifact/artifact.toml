@@ -11,7 +11,15 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = [ "/" ]
+# Empty paths in production: this is a dev-only Vite server. The production
+# deploy ships the built SPA inside the api-server container (via STATIC_DIR
+# in artifacts/api-server/.replit-artifact/artifact.toml), and api-server's
+# own [[services]] block claims "/". If this service still claimed "/" here,
+# the autoscale router would try to forward "/" traffic to localPort 20812
+# in the production container — where nothing is listening — and the edge
+# proxy would return a bare 500 "Internal Server Error". Dev is unaffected
+# because the dev preview pane uses `previewPath`, not `paths`, to route.
+paths = []
 localPort = 20812
 
 [services.development]
