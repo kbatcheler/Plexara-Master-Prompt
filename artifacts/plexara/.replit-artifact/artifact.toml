@@ -17,14 +17,12 @@ localPort = 20812
 [services.development]
 run = "pnpm --filter @workspace/plexara run dev"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/plexara", "run", "build" ]
-publicDir = "artifacts/plexara/dist/public"
-serve = "static"
-
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+# Production deployment intentionally lives in the api-server artifact.
+# In autoscale we ship a single container: the api-server runs the Express
+# app on port 8080 with STATIC_DIR pointing at this package's `dist/public`,
+# so Plexara is served as the SPA fallback by the same Node process.
+# Defining `[services.production]` here would create a second exposed port,
+# which Cloud Run / autoscale rejects.
 
 [services.env]
 PORT = "20812"

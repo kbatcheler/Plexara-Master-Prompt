@@ -15,7 +15,14 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
+# In autoscale we ship a single container that serves both the API and the
+# built Plexara SPA. Build the web app first so its assets are present at
+# artifacts/plexara/dist/public, then build the API bundle.
+args = [
+  "sh",
+  "-c",
+  "pnpm --filter @workspace/plexara run build && pnpm --filter @workspace/api-server run build",
+]
 
 [services.production.build.env]
 NODE_ENV = "production"
@@ -27,6 +34,10 @@ args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 [services.production.run.env]
 PORT = "8080"
 NODE_ENV = "production"
+# When STATIC_DIR is set, the Express app mounts express.static() and a SPA
+# catch-all for everything that isn't /api/*. This makes the api-server the
+# single service exposed by autoscale on port 8080.
+STATIC_DIR = "artifacts/plexara/dist/public"
 
 [services.production.health.startup]
 path = "/api/healthz"
