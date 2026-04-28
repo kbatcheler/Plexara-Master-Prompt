@@ -26,8 +26,25 @@ interface TimelineData {
   biomarkers: TimelineBiomarker[];
 }
 
+interface InterventionRate {
+  months: number;
+  changePerMonth: number;
+  targetDate: string;
+}
+interface Intervention {
+  direction: "increase" | "decrease";
+  currentValue: number;
+  targetValue: number;
+  deficit?: number;
+  excess?: number;
+  ratesNeeded: InterventionRate[];
+  currentTrajectory: string;
+  willReachOptimalNaturally: boolean;
+  naturalCrossingDate: string | null;
+}
 interface Trajectory {
   biomarker: string;
+  unit?: string | null;
   observations: Array<{ date: string; value: number }>;
   optimalLow: number | null;
   optimalHigh: number | null;
@@ -37,6 +54,7 @@ interface Trajectory {
   projection12mo: number;
   projection24mo: number;
   optimalCrossingDate: string | null;
+  intervention?: Intervention | null;
 }
 
 interface CorrelationData {
@@ -144,6 +162,42 @@ function BiomarkerChart({ b, trajectory }: { b: TimelineBiomarker; trajectory?: 
             Linear projection (R²={trajectory.rSquared.toFixed(2)}): 12mo ≈ {trajectory.projection12mo.toFixed(2)} {b.unit ?? ""}
             {trajectory.optimalCrossingDate && <> · projected to enter optimal range by {new Date(trajectory.optimalCrossingDate).toLocaleDateString()}</>}
           </p>
+        )}
+        {trajectory?.intervention && (
+          <div className="mt-3 p-3 rounded-lg bg-secondary/50 text-xs space-y-2" data-testid={`intervention-${b.biomarkerName}`}>
+            <p className="font-medium text-foreground flex items-center gap-1.5">
+              {trajectory.intervention.direction === "increase" ? (
+                <TrendingUp className="w-3.5 h-3.5 text-primary" />
+              ) : (
+                <TrendingDown className="w-3.5 h-3.5 text-primary" />
+              )}
+              Pathway to optimal
+            </p>
+            <p className="text-muted-foreground">
+              Current: <span className="font-mono text-foreground">{trajectory.intervention.currentValue.toFixed(2)}</span>
+              {" → "}Target: <span className="font-mono text-foreground">{trajectory.intervention.targetValue.toFixed(2)}</span>
+              {b.unit ? ` ${b.unit}` : ""}
+            </p>
+            <p className="text-muted-foreground">{trajectory.intervention.currentTrajectory}</p>
+            {trajectory.intervention.willReachOptimalNaturally && trajectory.intervention.naturalCrossingDate ? (
+              <p className="text-emerald-600 dark:text-emerald-400">
+                ✓ At current rate, you will reach optimal by {new Date(trajectory.intervention.naturalCrossingDate).toLocaleDateString()}
+              </p>
+            ) : (
+              <div className="text-muted-foreground">
+                <p>To reach optimal range:</p>
+                <ul className="mt-1 space-y-0.5 list-disc pl-4">
+                  {trajectory.intervention.ratesNeeded.map((r) => (
+                    <li key={r.months}>
+                      In {r.months} months: {trajectory.intervention!.direction === "decrease" ? "reduce" : "increase"} by{" "}
+                      <span className="font-mono">{r.changePerMonth.toFixed(2)}</span>
+                      {b.unit ? ` ${b.unit}` : ""}/month (target: {new Date(r.targetDate).toLocaleDateString()})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
       </CardContent>
     </Card>

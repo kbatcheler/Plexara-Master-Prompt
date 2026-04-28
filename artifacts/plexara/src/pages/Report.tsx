@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRoute } from "wouter";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
-import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles } from "lucide-react";
+import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReportShareCard } from "../components/ReportShareCard";
 import AINarrative from "@/components/AINarrative";
@@ -111,11 +111,47 @@ function flagChip(flag: BiomarkerFlag): string {
   }
 }
 
-function ComprehensiveView({ report, onRegenerate, regenerating }: {
+function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
   report: ComprehensiveReport;
   onRegenerate: () => void;
   regenerating: boolean;
+  patientId: number;
 }) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // Server-rendered PDF download. We hit the report-export endpoint with
+  // credentials and stream the binary into a Blob so the browser writes a
+  // proper file rather than navigating away. Failures surface inline so
+  // the user knows the click was acknowledged but didn't produce a file.
+  const downloadPdf = useCallback(async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const res = await fetch(`/api/patients/${patientId}/report-export/export-pdf`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `Server returned ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `plexara-report-${new Date().toISOString().split("T")[0]}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Failed to download PDF");
+    } finally {
+      setDownloading(false);
+    }
+  }, [patientId]);
+
   return (
     <div className="max-w-4xl mx-auto p-8 space-y-8 print:p-0">
       <div className="flex items-center justify-between print:hidden">
@@ -128,11 +164,26 @@ function ComprehensiveView({ report, onRegenerate, regenerating }: {
             {regenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
             {regenerating ? "Regenerating…" : "Regenerate"}
           </Button>
+          <Button
+            onClick={downloadPdf}
+            variant="outline"
+            size="sm"
+            disabled={downloading}
+            data-testid="btn-download-pdf"
+          >
+            {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+            {downloading ? "Generating…" : "Download PDF"}
+          </Button>
           <Button onClick={() => window.print()} variant="outline" size="sm">
-            <Printer className="w-4 h-4 mr-2" />Print / save PDF
+            <Printer className="w-4 h-4 mr-2" />Print
           </Button>
         </div>
       </div>
+      {downloadError && (
+        <div className="text-xs text-red-600 dark:text-red-400 print:hidden -mt-4" data-testid="text-download-error">
+          PDF download failed: {downloadError}
+        </div>
+      )}
 
       <header className="border-b border-border/40 pb-5">
         <h2 className="text-3xl font-heading font-bold">Plexara Health Report</h2>
@@ -489,5 +540,5 @@ export default function Report() {
     );
   }
 
-  return <ComprehensiveView report={comp} onRegenerate={generate} regenerating={generating} />;
+  return <ComprehensiveView report={comp} onRegenerate={generate} regenerating={generating} patientId={patientId!} />;
 }

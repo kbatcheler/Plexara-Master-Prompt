@@ -97,9 +97,39 @@ Respond with valid JSON:
   ]
 }`;
 
-export async function runReconciliation(lensAOutput: LensOutput, lensBOutput: LensOutput, lensCOutput: LensOutput, patientCtx?: PatientContext): Promise<ReconciledOutput> {
+/**
+ * Reconcile 2 or 3 successful lens outputs into a unified interpretation.
+ *
+ * GRACEFUL DEGRADATION (2-of-3): the upstream pipeline guarantees the caller
+ * passes between 2 and 3 lens outputs. When fewer than 3 lenses succeeded,
+ * the caller passes the `degraded` payload listing the failed lens labels;
+ * this function then injects an explicit notice into the prompt so the
+ * reconciliation model knows it is working with a partial picture and must
+ * adjust confidence + flag the partial nature in the narratives.
+ *
+ * The previous signature accepted three positional `LensOutput`s with the
+ * caller substituting Lens A's output for any missing lens — a silent
+ * violation of the "independent adversarial validation" guarantee. Never
+ * substitute one lens for another.
+ */
+export async function runReconciliation(
+  lensOutputs: Array<{ label: string; output: LensOutput }>,
+  patientCtx?: PatientContext,
+  degraded?: { failedLenses: string[] },
+): Promise<ReconciledOutput> {
+  if (lensOutputs.length < 2) {
+    throw new Error(`runReconciliation requires at least 2 lens outputs, got ${lensOutputs.length}`);
+  }
   const demographics = patientCtx ? buildDemographicBlock(patientCtx) : "";
-  const prompt = `Three independent analyses of the same anonymised patient data:${demographics}\n\nLens A (Clinical Synthesist):\n${JSON.stringify(lensAOutput, null, 2)}\n\nLens B (Evidence Checker):\n${JSON.stringify(lensBOutput, null, 2)}\n\nLens C (Contrarian Analyst):\n${JSON.stringify(lensCOutput, null, 2)}`;
+
+  let degradedNotice = "";
+  if (degraded && degraded.failedLenses.length > 0) {
+    degradedNotice = `\n\nIMPORTANT: This analysis is based on ${lensOutputs.length} of 3 analytical lenses. The following lens(es) were unavailable: ${degraded.failedLenses.join(", ")}. Adjust your confidence scores downward accordingly. Flag in both the patient and clinician narratives that this is a partial analysis and recommend re-running when all three lenses are available.`;
+  }
+
+  const prompt = `${lensOutputs.length} independent analyses of the same anonymised patient data:${demographics}${degradedNotice}\n\n${
+    lensOutputs.map((l) => `${l.label}:\n${JSON.stringify(l.output, null, 2)}`).join("\n\n")
+  }`;
 
   return withLLMRetry("reconciliation", async () => {
     const message = await anthropic.messages.create({

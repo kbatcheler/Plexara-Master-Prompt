@@ -93,6 +93,60 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
         }
       }
 
+      // ── Intervention modelling ───────────────────────────────────────
+      // When the most recent value is outside the optimal range, compute
+      // the rate-of-change required to land inside the band over 3, 6 and
+      // 12 month horizons. This turns the predictive view from a passive
+      // forecast into an actionable "what would it take to fix this"
+      // pathway. `intervention` is null when the marker is already optimal
+      // (or has no optimal range to compare against) so the UI can hide
+      // the pathway block cleanly.
+      let intervention: Record<string, unknown> | null = null;
+      const lastValue = last.value;
+      const targetMonths = [3, 6, 12];
+
+      if (optimalLow !== null && lastValue < optimalLow) {
+        const deficit = optimalLow - lastValue;
+        intervention = {
+          direction: "increase",
+          currentValue: lastValue,
+          targetValue: optimalLow,
+          deficit,
+          ratesNeeded: targetMonths.map((m) => ({
+            months: m,
+            changePerMonth: deficit / m,
+            targetDate: new Date(lastDateMs + m * 30 * day).toISOString().split("T")[0],
+          })),
+          currentTrajectory: slopePerDay > 0
+            ? `Currently improving at ${(slopePerDay * 30).toFixed(3)} per month`
+            : slopePerDay < 0
+              ? `Currently declining at ${(Math.abs(slopePerDay) * 30).toFixed(3)} per month — trend is moving away from optimal`
+              : "Currently stable — no significant trend",
+          willReachOptimalNaturally: slopePerDay > 0 && crossingDate !== null,
+          naturalCrossingDate: slopePerDay > 0 ? crossingDate : null,
+        };
+      } else if (optimalHigh !== null && lastValue > optimalHigh) {
+        const excess = lastValue - optimalHigh;
+        intervention = {
+          direction: "decrease",
+          currentValue: lastValue,
+          targetValue: optimalHigh,
+          excess,
+          ratesNeeded: targetMonths.map((m) => ({
+            months: m,
+            changePerMonth: excess / m,
+            targetDate: new Date(lastDateMs + m * 30 * day).toISOString().split("T")[0],
+          })),
+          currentTrajectory: slopePerDay < 0
+            ? `Currently improving at ${(Math.abs(slopePerDay) * 30).toFixed(3)} per month`
+            : slopePerDay > 0
+              ? `Currently increasing at ${(slopePerDay * 30).toFixed(3)} per month — trend is moving away from optimal`
+              : "Currently stable — no significant trend",
+          willReachOptimalNaturally: slopePerDay < 0 && crossingDate !== null,
+          naturalCrossingDate: slopePerDay < 0 ? crossingDate : null,
+        };
+      }
+
       trajectories.push({
         biomarker: name,
         unit: sorted[sorted.length - 1].unit,
@@ -106,6 +160,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
         projection12mo: p12,
         projection24mo: p24,
         optimalCrossingDate: crossingDate,
+        intervention,
       });
 
       try {

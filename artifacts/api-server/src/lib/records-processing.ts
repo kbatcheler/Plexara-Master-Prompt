@@ -27,6 +27,7 @@ import {
   type PatientContext,
   type ReconciledOutput,
   type BiomarkerHistoryEntry,
+  type LensOutput,
 } from "./ai";
 import { logger } from "./logger";
 import { isProviderAllowed } from "./consent";
@@ -415,10 +416,61 @@ export async function runInterpretationPipeline(
     const lensBOutput = bResult.status === "fulfilled" ? bResult.value : null;
     const lensCOutput = cResult.status === "fulfilled" ? cResult.value : null;
 
-    if (lensAOutput) {
-      const effectiveLensB = lensBOutput || lensAOutput;
-      const effectiveLensC = lensCOutput || lensAOutput;
-      const rawReconciled = await runReconciliation(lensAOutput, effectiveLensB, effectiveLensC, patientCtx);
+    // ── GRACEFUL DEGRADATION (2-of-3) ─────────────────────────────────────
+    // Never substitute one lens's output for another — that would silently
+    // violate the "independent adversarial validation" guarantee. Instead:
+    //   - 3/3 succeeded → reconcile all three (full confidence path)
+    //   - 2/3 succeeded → reconcile the two that survived; tell the
+    //     reconciler explicitly which lens is missing so it can adjust
+    //     confidence and flag the partial analysis in the narratives.
+    //   - 0–1/3 succeeded → abort the interpretation: a single lens is
+    //     not cross-validated and is therefore not a Plexara interpretation.
+    //     Mark the record `error` with a clear, user-visible explanation
+    //     so the dashboard surfaces it instead of leaving status="processing".
+    const successfulLenses = [
+      lensAOutput && "A (Clinical Synthesist)",
+      lensBOutput && "B (Evidence Checker)",
+      lensCOutput && "C (Contrarian Analyst)",
+    ].filter(Boolean) as string[];
+
+    const failedLenses = [
+      !lensAOutput && "A (Clinical Synthesist / Claude)",
+      !lensBOutput && "B (Evidence Checker / GPT)",
+      !lensCOutput && "C (Contrarian Analyst / Gemini)",
+    ].filter(Boolean) as string[];
+
+    if (successfulLenses.length < 2) {
+      logger.error(
+        { patientId, recordId, successful: successfulLenses, failed: failedLenses },
+        "Fewer than 2 lenses completed — interpretation aborted",
+      );
+      await db.update(interpretationsTable)
+        .set({
+          lensesCompleted: successfulLenses.length,
+          reconciledOutput: encryptJson({
+            error: true,
+            message: `Only ${successfulLenses.length} of 3 analytical lenses completed. At least 2 are required for cross-validated interpretation. Failed: ${failedLenses.join(", ")}. Please retry.`,
+          }) as object,
+        })
+        .where(eq(interpretationsTable.id, interpretationId));
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+      return;
+    }
+
+    // Build the lens outputs array for reconciliation — only successful
+    // lenses, in stable label order so the reconciler's per-lens references
+    // match across runs.
+    const lensOutputs: { label: string; output: LensOutput }[] = [];
+    if (lensAOutput) lensOutputs.push({ label: "Lens A (Clinical Synthesist)", output: lensAOutput });
+    if (lensBOutput) lensOutputs.push({ label: "Lens B (Evidence Checker)", output: lensBOutput });
+    if (lensCOutput) lensOutputs.push({ label: "Lens C (Contrarian Analyst)", output: lensCOutput });
+
+    {
+      const rawReconciled = await runReconciliation(
+        lensOutputs,
+        patientCtx,
+        failedLenses.length > 0 ? { failedLenses } : undefined,
+      );
 
       // Defensive normalisation: the hardened JSON parser (jsonrepair fallback)
       // can now coax a parseable object out of slightly malformed LLM output,
@@ -596,12 +648,6 @@ export async function runInterpretationPipeline(
           logger.error({ orchErr, patientId, recordId }, "Post-interpretation orchestrator failed");
         }
       });
-    } else {
-      // No Lens A → can't reconcile. Mark the record as errored so the UI
-      // surfaces it instead of leaving status="processing" forever.
-      await db.update(recordsTable)
-        .set({ status: "error" })
-        .where(eq(recordsTable.id, recordId));
     }
   } catch (err) {
     logger.error({ err, recordId, interpretationId }, "Interpretation pipeline failed");

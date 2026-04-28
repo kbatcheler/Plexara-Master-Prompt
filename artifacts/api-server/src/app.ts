@@ -262,6 +262,7 @@ const SENSITIVE_SEGMENTS: ReadonlySet<string> = new Set([
   "data-requests",
   "baa-report",
   "dev-auth",
+  "report-export",
 ]);
 app.use("/api", (req, res, next): void => {
   const segments = req.path.split("/").filter(Boolean);

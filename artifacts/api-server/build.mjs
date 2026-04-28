@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, mkdir, cp } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -129,6 +129,20 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     entryPoints: { migrate: path.resolve(artifactDir, "../../lib/db/src/migrate.ts") },
     outdir: distDir,
   });
+
+  // pdfkit reads its built-in font .afm files from `<bundle>/data/*.afm` at runtime.
+  // esbuild does not bundle these binary assets, so copy pdfkit's data folder into dist/.
+  try {
+    const pdfkitDataSrc = path.resolve(
+      artifactDir,
+      "../../node_modules/.pnpm/pdfkit@0.18.0/node_modules/pdfkit/js/data",
+    );
+    const pdfkitDataDest = path.resolve(distDir, "data");
+    await mkdir(pdfkitDataDest, { recursive: true });
+    await cp(pdfkitDataSrc, pdfkitDataDest, { recursive: true });
+  } catch (err) {
+    console.warn("[build] could not copy pdfkit data:", err.message);
+  }
 }
 
 buildAll().catch((err) => {

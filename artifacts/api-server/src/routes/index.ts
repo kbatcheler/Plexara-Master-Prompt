@@ -20,6 +20,7 @@ import shareRouter, { publicRouter as sharePublicRouter } from "./share";
 import protocolsRouter, { globalRouter as protocolsGlobalRouter } from "./protocols";
 import reportsRouter from "./reports";
 import comprehensiveReportRouter from "./comprehensive-report";
+import reportExportRouter from "./report-export";
 import storageRouter from "./storage";
 import geneticsRouter, { globalRouter as pgsCatalogRouter } from "./genetics";
 import imagingRouter, { dicomRouter } from "./imaging";
@@ -110,6 +111,10 @@ if (ENABLE_PHYSICIAN_PORTAL) {
 router.use("/patients/:patientId/protocols", protocolsRouter);
 router.use("/patients/:patientId/reports", reportsRouter);
 router.use("/patients/:patientId/comprehensive-report", comprehensiveReportRouter);
+// PDF export of the latest comprehensive report. Mounted unconditionally —
+// the PDF is useful with or without the physician portal — but the route
+// itself decides whether to mint a share-link QR based on the same flag.
+router.use("/patients/:patientId/report-export", reportExportRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
 router.use("/protocols", protocolsGlobalRouter);
 router.use("/me", accountRouter);

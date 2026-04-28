@@ -7,13 +7,17 @@ import {
   chatMessagesTable,
   interpretationsTable,
   biomarkerResultsTable,
+  biomarkerReferenceTable,
   gaugesTable,
+  predictionsTable,
+  supplementsTable,
 } from "@workspace/db";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { decryptJson } from "../lib/phi-crypto";
 import { validate } from "../middlewares/validate";
 import { chatBody } from "../lib/validators";
+import { isProviderAllowed } from "../lib/consent";
 import { z } from "zod";
 
 const router = Router({ mergeParams: true });
@@ -74,6 +78,18 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
   const patientId = parseInt((req.params.patientId as string));
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
+
+  // Chat enrichment sends biomarker history, predictions, and reconciled
+  // interpretations (PHI) to Anthropic. Gate on the same consent flag the
+  // interpretation/report pipelines use; fail closed if the account has not
+  // granted Anthropic access.
+  if (!(await isProviderAllowed(userId, "anthropic"))) {
+    res.status(403).json({
+      error: "Anthropic AI consent not granted — visit Consent & data control to enable AI chat.",
+    });
+    return;
+  }
+
   const { question, subjectType, subjectRef, conversationId } = req.body as z.infer<typeof chatBody>;
 
   try {
@@ -86,6 +102,72 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
       .orderBy(desc(biomarkerResultsTable.createdAt))
       .limit(50);
     const gauges = await db.select().from(gaugesTable).where(eq(gaugesTable.patientId, patientId));
+
+    // ── Subject-specific enrichment ──────────────────────────────────────
+    // When the user asks about a specific biomarker / gauge / supplement,
+    // pull richer targeted data so the LLM can ground its answer in actual
+    // history, reference ranges, and predicted trajectories rather than
+    // only the recent-50-biomarker summary block.
+    let subjectContext: Record<string, unknown> = {};
+
+    if (subjectType === "biomarker" && subjectRef) {
+      const history = await db.select().from(biomarkerResultsTable)
+        .where(and(
+          eq(biomarkerResultsTable.patientId, patientId),
+          eq(biomarkerResultsTable.biomarkerName, subjectRef),
+        ))
+        .orderBy(biomarkerResultsTable.testDate);
+
+      const [ref] = await db.select().from(biomarkerReferenceTable)
+        .where(eq(biomarkerReferenceTable.biomarkerName, subjectRef));
+
+      const [prediction] = await db.select().from(predictionsTable)
+        .where(and(
+          eq(predictionsTable.patientId, patientId),
+          eq(predictionsTable.biomarkerName, subjectRef),
+        ));
+
+      subjectContext = {
+        biomarkerHistory: history.map((h) => ({
+          value: h.value, unit: h.unit, date: h.testDate,
+          optimalLow: h.optimalRangeLow, optimalHigh: h.optimalRangeHigh,
+        })),
+        reference: ref ? {
+          clinicalRangeLow: ref.clinicalRangeLow, clinicalRangeHigh: ref.clinicalRangeHigh,
+          optimalRangeLow: ref.optimalRangeLow, optimalRangeHigh: ref.optimalRangeHigh,
+          description: ref.description, clinicalSignificance: ref.clinicalSignificance,
+        } : null,
+        prediction: prediction ? {
+          slopePerDay: prediction.slopePerDay,
+          projection6mo: prediction.projection6mo,
+          projection12mo: prediction.projection12mo,
+          optimalCrossingDate: prediction.optimalCrossingDate,
+        } : null,
+      };
+    }
+
+    if (subjectType === "gauge" && subjectRef) {
+      const [gauge] = await db.select().from(gaugesTable)
+        .where(and(
+          eq(gaugesTable.patientId, patientId),
+          eq(gaugesTable.domain, subjectRef),
+        ));
+      subjectContext = { gauge, domainName: subjectRef };
+    }
+
+    if (subjectType === "supplement" && subjectRef) {
+      // The supplements table uses (name, dosage, frequency, startedAt, active) —
+      // surface the patient's current regimen so the LLM can reason about
+      // dosing, timing and active vs discontinued items when answering.
+      const supplements = await db.select().from(supplementsTable)
+        .where(eq(supplementsTable.patientId, patientId));
+      subjectContext = {
+        supplements: supplements.map((s) => ({
+          name: s.name, dosage: s.dosage, frequency: s.frequency,
+          isActive: s.active, startedAt: s.startedAt,
+        })),
+      };
+    }
 
     const contextBlock = JSON.stringify({
       reconciled: decryptJson(latest?.reconciledOutput) ?? null,
@@ -100,7 +182,11 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
       })),
       subjectType: subjectType ?? "general",
       subjectRef: subjectRef ?? null,
-    }, null, 2).slice(0, 30000);
+      // Include enriched subject-specific data when present. Cap at 40k chars
+      // to leave headroom for the system prompt + chat history within the
+      // model's context window.
+      subjectDetail: Object.keys(subjectContext).length > 0 ? subjectContext : undefined,
+    }, null, 2).slice(0, 40000);
 
     let activeConvId: number;
     if (conversationId) {
@@ -136,7 +222,8 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
 Rules:
 - Never claim to diagnose. You provide educational interpretation.
 - Cite specific biomarker names and values when referenced.
-- If asked about a specific finding (subjectType + subjectRef), focus on that.
+- If asked about a specific finding (subjectType + subjectRef), focus on that. You may have detailed history, predictions, and reference data for it in the subjectDetail field — use ALL of it. Reference specific values and trends. If predictions show a concerning trajectory, mention it.
+- When the subject is a biomarker, compare the patient's values to both clinical normal AND optimal ranges. Note the trajectory if available. Suggest what might improve the trajectory if relevant.
 - Be concise (max 250 words). Use plain English unless the user asks for clinical detail.
 - If data is insufficient, say so and suggest what additional record would help.
 - Never invent values; if a biomarker isn't in the payload, say it is not available.
