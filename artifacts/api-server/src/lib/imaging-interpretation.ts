@@ -33,7 +33,7 @@ const genAI = new GoogleGenAI({
 
 const MODELS = {
   lensA: process.env.LLM_LENS_A_MODEL || "claude-sonnet-4-6",
-  lensB: process.env.LLM_LENS_B_MODEL || "gpt-5",
+  lensB: process.env.LLM_LENS_B_MODEL || "gpt-5.2",
   lensC: process.env.LLM_LENS_C_MODEL || "gemini-2.5-pro",
   reconciliation: process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
 } as const;

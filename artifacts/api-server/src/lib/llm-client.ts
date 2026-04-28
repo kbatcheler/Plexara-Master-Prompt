@@ -48,19 +48,26 @@ export const genAI = new GoogleGenAI({
  * Plexara's documented production configuration.
  */
 export const LLM_MODELS = {
+  // ── TESTING POSTURE: top-tier models across the board ─────────────────
+  // Per request, we are running every step on the highest-quality model
+  // each provider currently ships. This trades extra latency + cost for
+  // maximum interpretation quality during the testing phase. Revisit
+  // before production by setting the env overrides below to mix in
+  // faster/cheaper models where the quality delta is small.
   lensA: process.env.LLM_LENS_A_MODEL || "claude-sonnet-4-6",
   lensB: process.env.LLM_LENS_B_MODEL || "gpt-5.2",
-  lensC: process.env.LLM_LENS_C_MODEL || "gemini-2.5-flash",
+  lensC: process.env.LLM_LENS_C_MODEL || "gemini-2.5-pro",
   reconciliation: process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
   // Utility model — used for lighter Claude calls (narratives, gauge
   // labels). Defaults to the reconciliation model so the pipeline stays
   // internally consistent without extra config.
   utility: process.env.LLM_UTILITY_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
-  // Extraction model — structured data extraction from PDFs/images is a
-  // narrow shape-matching task that doesn't need the full reasoning power
-  // of the lens/reconciliation models. Defaulting to a faster/cheaper
-  // Haiku-class model cuts ~3-5s off every upload (Enhancement A1).
-  extraction: process.env.LLM_EXTRACTION_MODEL || "claude-haiku-4-5-20251001",
+  // Extraction model — structured data extraction from PDFs/images.
+  // Bumped from Haiku to Sonnet 4.6 for the testing posture so PDF
+  // parsing accuracy matches the reasoning lenses. Set
+  // LLM_EXTRACTION_MODEL=claude-haiku-4-5-20251001 to revert to the
+  // faster/cheaper extraction path.
+  extraction: process.env.LLM_EXTRACTION_MODEL || "claude-sonnet-4-6",
 } as const;
 
 /**
