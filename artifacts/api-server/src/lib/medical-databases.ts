@@ -92,6 +92,120 @@ export async function searchMedications(query: string, limit = 10): Promise<RxNo
   return hits;
 }
 
+// ────────────────────────── RxTerms (NIH Clinical Tables) ─────────
+//
+// RxTerms is a drug-name autocomplete dataset maintained by the NLM
+// Lister Hill National Center for Biomedical Communications. It powers
+// many EHR med-name lookups. The Clinical Tables search API is keyless
+// and returns a fixed-shape JSON array:
+//   [ totalCount, [rxcui, ...], extraData, [displayString, ...] ]
+// We map that to a simple object array the frontend can render.
+//
+// Endpoint: https://clinicaltables.nlm.nih.gov/api/rxterms/v3/search
+
+export interface RxTermsHit {
+  rxcui: string;
+  displayName: string;
+  source: "RxTerms";
+  sourceUrl: string;
+}
+
+type RxTermsResponse = [number, string[], unknown, string[]];
+
+/** Live RxTerms autocomplete by partial term (used by /lookup/rxterms). */
+export async function searchRxTerms(query: string, limit = 10): Promise<RxTermsHit[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const url =
+    `https://clinicaltables.nlm.nih.gov/api/rxterms/v3/search?` +
+    `terms=${encodeURIComponent(q)}&maxList=${limit}`;
+  const data = await fetchJson<RxTermsResponse>(url, "rxterms-search");
+  if (!Array.isArray(data) || data.length < 4) return [];
+  const codes = Array.isArray(data[1]) ? data[1] : [];
+  const names = Array.isArray(data[3]) ? data[3] : [];
+  const len = Math.min(codes.length, names.length, limit);
+  const hits: RxTermsHit[] = [];
+  for (let i = 0; i < len; i++) {
+    const rxcui = String(codes[i] ?? "").trim();
+    const displayName = String(names[i] ?? "").trim();
+    if (!rxcui || !displayName) continue;
+    hits.push({
+      rxcui,
+      displayName,
+      source: "RxTerms",
+      sourceUrl: `https://mor.nlm.nih.gov/RxNav/search?searchBy=RXCUI&searchTerm=${encodeURIComponent(rxcui)}`,
+    });
+  }
+  return hits;
+}
+
+// ────────────────────────── DSLD (NIH Office of Dietary Supplements) ──
+//
+// DSLD = Dietary Supplement Label Database. It catalogs labels of
+// commercial supplement products and their ingredients. Public, keyless,
+// and enormous (200k+ products). We expose a thin proxy so the UI can
+// suggest both ingredient and product matches without any data leaving
+// the patient's device unredacted.
+//
+// Endpoint: https://api.ods.od.nih.gov/dsld/v9/browse-ingredients
+
+export interface DsldIngredientHit {
+  id: string;
+  name: string;
+  source: "DSLD";
+  sourceUrl: string;
+}
+
+interface DsldIngredientResponse {
+  hits?: { hits?: Array<{ _id?: string; _source?: { name?: string; commonName?: string } }> };
+  // Some API versions return a flatter shape; we tolerate both.
+  results?: Array<{ id?: string; name?: string }>;
+}
+
+/** Search the DSLD ingredient index by partial name. */
+export async function searchDsld(query: string, limit = 10): Promise<DsldIngredientHit[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  // The browse-ingredients endpoint accepts a simple `q` search term
+  // and supports `from`/`size` paging.
+  const url =
+    `https://api.ods.od.nih.gov/dsld/v9/browse-ingredients?` +
+    `q=${encodeURIComponent(q)}&from=0&size=${limit}`;
+  const data = await fetchJson<DsldIngredientResponse>(url, "dsld-ingredients");
+  if (!data) return [];
+  const hits: DsldIngredientHit[] = [];
+  // Newer ES-style shape
+  const esHits = data.hits?.hits ?? [];
+  for (const h of esHits) {
+    const id = String(h._id ?? "").trim();
+    const name = (h._source?.commonName ?? h._source?.name ?? "").trim();
+    if (!id || !name) continue;
+    hits.push({
+      id,
+      name,
+      source: "DSLD",
+      sourceUrl: `https://dsld.od.nih.gov/ingredient/${encodeURIComponent(id)}`,
+    });
+    if (hits.length >= limit) break;
+  }
+  // Older flat shape fallback
+  if (hits.length === 0 && Array.isArray(data.results)) {
+    for (const r of data.results) {
+      const id = String(r.id ?? "").trim();
+      const name = String(r.name ?? "").trim();
+      if (!id || !name) continue;
+      hits.push({
+        id,
+        name,
+        source: "DSLD",
+        sourceUrl: `https://dsld.od.nih.gov/ingredient/${encodeURIComponent(id)}`,
+      });
+      if (hits.length >= limit) break;
+    }
+  }
+  return hits;
+}
+
 // ────────────────────────── OpenFDA ─────────────────────────
 
 export interface OpenFDAEvent {

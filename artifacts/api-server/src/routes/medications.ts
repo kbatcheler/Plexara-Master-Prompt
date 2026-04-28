@@ -28,6 +28,11 @@ const createBody = z.object({
   endedAt: z.string().max(40).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   active: z.boolean().optional(),
+  // Additive: when the user picks a med from the RxTerms autocomplete,
+  // the frontend also sends the canonical RXCUI so we can wire to RxNav
+  // / OpenFDA later without ambiguous name parsing. Optional + nullable
+  // preserves the existing API shape for any old client.
+  rxNormCui: z.string().max(40).nullable().optional(),
 });
 const updateBody = createBody.partial();
 
@@ -131,6 +136,7 @@ router.post("/", requireAuth, validate({ body: createBody }), async (req, res): 
       endedAt: body.endedAt ?? null,
       notes: body.notes ?? null,
       active: body.active ?? true,
+      rxNormCui: body.rxNormCui ?? null,
     })
     .returning();
   res.status(201).json(created);
@@ -156,6 +162,10 @@ router.patch("/:id", requireAuth, validate({ body: updateBody }), async (req, re
       ...(body.endedAt !== undefined ? { endedAt: body.endedAt } : {}),
       ...(body.notes !== undefined ? { notes: body.notes } : {}),
       ...(body.active !== undefined ? { active: body.active } : {}),
+      // Allow correcting/clearing the RxNorm code on update — explicit
+      // null clears the link if the user later re-edits the row to a
+      // free-text value. Mirrors the create path's null-on-edit semantics.
+      ...(body.rxNormCui !== undefined ? { rxNormCui: body.rxNormCui } : {}),
     })
     .where(and(eq(medicationsTable.id, id), eq(medicationsTable.patientId, patientId)))
     .returning();

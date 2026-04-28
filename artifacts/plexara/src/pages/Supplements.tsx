@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity } from "lucide-react";
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
+import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
 
 interface Supplement {
   id: number;
@@ -385,8 +386,8 @@ interface DepletionFinding {
 
 function MedicationsPanel({ patientId }: { patientId: number }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<{ name: string; drugClass: string; dosage: string; startedAt: string }>({
-    name: "", drugClass: "", dosage: "", startedAt: "",
+  const [form, setForm] = useState<{ name: string; drugClass: string; dosage: string; startedAt: string; rxNormCui: string | null }>({
+    name: "", drugClass: "", dosage: "", startedAt: "", rxNormCui: null,
   });
 
   const medsQ = useQuery<MedicationRow[]>({
@@ -414,10 +415,14 @@ function MedicationsPanel({ patientId }: { patientId: number }) {
           drugClass: body.drugClass || null,
           dosage: body.dosage || null,
           startedAt: body.startedAt || null,
+          // Only include rxNormCui when the user actually picked a
+          // suggestion from the RxTerms autocomplete; if they typed
+          // free-text we leave it null so we never invent a code.
+          rxNormCui: body.rxNormCui || null,
         }),
       }),
     onSuccess: () => {
-      setForm({ name: "", drugClass: "", dosage: "", startedAt: "" });
+      setForm({ name: "", drugClass: "", dosage: "", startedAt: "", rxNormCui: null });
       qc.invalidateQueries({ queryKey: ["medications"] });
     },
   });
@@ -448,9 +453,27 @@ function MedicationsPanel({ patientId }: { patientId: number }) {
             className="grid grid-cols-1 md:grid-cols-[2fr_1.4fr_1fr_1fr_auto] gap-2"
             onSubmit={(e) => { e.preventDefault(); if (form.name.trim()) addMut.mutate(form); }}
           >
-            <Input
+            <NihAutocompleteInput
               value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onChange={(name) => setForm((f) => ({
+                ...f,
+                name,
+                // Free-text edits invalidate any previously-picked
+                // RXCUI so we don't silently pin the wrong code to a
+                // mistyped name.
+                rxNormCui: null,
+              }))}
+              onSelect={(item: NihAutocompleteSuggestion) => setForm((f) => ({
+                ...f,
+                name: item.label,
+                rxNormCui: item.code,
+              }))}
+              endpoint="/lookup/rxterms"
+              mapItem={(raw) => {
+                const r = raw as { rxcui?: string; displayName?: string };
+                if (!r.rxcui || !r.displayName) return null;
+                return { code: r.rxcui, label: r.displayName, badge: "RxTerms" };
+              }}
               placeholder="e.g. atorvastatin"
               data-testid="med-name-input"
             />

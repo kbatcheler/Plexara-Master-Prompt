@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronsUpDown, Search } from "lucide-react";
+import { Check, ChevronsUpDown, Search, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverAnchor } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,16 @@ import {
   categoryLabel,
   type CatalogSupplement,
 } from "../../lib/supplement-catalog";
+import { api } from "../../lib/api";
+
+interface DsldHit {
+  id: string;
+  name: string;
+}
+
+const DSLD_DEBOUNCE_MS = 300;
+const DSLD_MIN_QUERY = 2;
+const DSLD_TRIGGER_LOCAL_RESULTS = 5;
 
 interface Props {
   value: string;
@@ -90,12 +100,54 @@ export function SupplementNameInput({
     return groups;
   }, [results]);
 
+  // ── DSLD secondary tier ──
+  // When the typed query is non-trivial AND the local catalog returns
+  // few matches, augment the dropdown with NIH DSLD ingredient hits.
+  // Debounced 300 ms, abortable, and entirely additive — the existing
+  // catalog-driven flow keeps working if DSLD is unreachable.
+  const [dsldHits, setDsldHits] = useState<DsldHit[]>([]);
+  const [dsldLoading, setDsldLoading] = useState(false);
+  useEffect(() => {
+    const q = value.trim();
+    const shouldQuery = q.length >= DSLD_MIN_QUERY && results.length < DSLD_TRIGGER_LOCAL_RESULTS;
+    if (!shouldQuery) {
+      setDsldHits([]);
+      setDsldLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setDsldLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const data = await api<{ results: DsldHit[] }>(
+          `/lookup/dsld?q=${encodeURIComponent(q)}`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        // Drop DSLD entries already represented in the local catalog
+        // (case-insensitive) so we don't duplicate the row visually.
+        const localNames = new Set(results.map((r) => r.name.toLowerCase()));
+        setDsldHits((data.results ?? []).filter((h) => !localNames.has(h.name.toLowerCase())).slice(0, 8));
+      } catch (err) {
+        if ((err as Error & { name?: string }).name === "AbortError") return;
+        setDsldHits([]);
+      } finally {
+        if (!controller.signal.aborted) setDsldLoading(false);
+      }
+    }, DSLD_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [value, results]);
+
   const flatList = useMemo(() => {
-    const items: Array<{ kind: "recent" | "catalog"; item: CatalogSupplement }> = [];
+    const items: Array<{ kind: "recent" | "catalog" | "dsld"; item: CatalogSupplement }> = [];
     for (const r of recent) items.push({ kind: "recent", item: r });
     for (const r of results) items.push({ kind: "catalog", item: r });
+    for (const h of dsldHits) items.push({ kind: "dsld", item: { name: h.name, category: "other" } });
     return items;
-  }, [recent, results]);
+  }, [recent, results, dsldHits]);
 
   useEffect(() => {
     setActiveIdx(0);
@@ -216,8 +268,32 @@ export function SupplementNameInput({
                   })}
                 </div>
               ))}
+              {(dsldHits.length > 0 || dsldLoading) && (
+                <div className="px-2 pt-2 pb-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 pb-1 flex items-center gap-1.5">
+                    <span>From NIH DSLD</span>
+                    {dsldLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                  </div>
+                  {dsldHits.map((h, i) => {
+                    const idx = recent.length + results.length + i;
+                    const item: CatalogSupplement = { name: h.name, category: "other" };
+                    return (
+                      <Row
+                        key={`dsld-${h.id}`}
+                        idx={idx}
+                        activeIdx={activeIdx}
+                        item={item}
+                        onChoose={choose}
+                        onHover={() => setActiveIdx(idx)}
+                        isSelected={exact?.name === h.name}
+                        showCategory={false}
+                      />
+                    );
+                  })}
+                </div>
+              )}
               <div className="border-t border-border/40 px-3 py-2 text-[11px] text-muted-foreground bg-muted/20">
-                {SUPPLEMENT_CATALOG.length} known supplements · ↑↓ navigate · Enter to select · Esc to close
+                {SUPPLEMENT_CATALOG.length} curated · live NIH DSLD lookup · ↑↓ navigate · Enter to select · Esc to close
               </div>
             </>
           )}

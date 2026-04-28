@@ -41,6 +41,16 @@ export const medicationsTable = pgTable("medications", {
   endedAt: text("ended_at"),
   notes: text("notes"),
   active: boolean("active").notNull().default(true),
+  /**
+   * Canonical RxNorm Concept Unique Identifier captured when the user
+   * picks a medication from the NIH RxTerms autocomplete. Optional —
+   * free-text entries (or pre-RxTerms records) leave this NULL. Used
+   * for unambiguous downstream linkage to RxNav properties, OpenFDA
+   * adverse-event lookups, and depletion-rule matching that doesn't
+   * have to fuzzy-match brand vs generic names. Additive column;
+   * existing rows are unaffected.
+   */
+  rxNormCui: text("rx_norm_cui"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
