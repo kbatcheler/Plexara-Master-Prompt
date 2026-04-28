@@ -65,6 +65,18 @@ export const biomarkerTrendsTable = pgTable("biomarker_trends", {
   projection365: real("projection_365d"),
   bandLow30: real("band_low_30d"),
   bandHigh30: real("band_high_30d"),
+  // Enhancement I — Lab Methodology Awareness.
+  // `crossLab` = true when the underlying samples for this trend
+  // came from ≥2 distinct labs. `multiMethodology` = true when ≥2
+  // distinct assay techniques contributed (e.g. immunoassay + LC-MS/MS
+  // for testosterone). UI/clinician copy should warn that the slope
+  // may reflect inter-method bias rather than a true biological change.
+  // `methodologies` and `labs` are optional comma-joined audits to
+  // surface the actual sources.
+  crossLab: boolean("cross_lab").notNull().default(false),
+  multiMethodology: boolean("multi_methodology").notNull().default(false),
+  methodologies: text("methodologies"),
+  labs: text("labs"),
   computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   patientBiomarkerIdx: uniqueIndex("trends_patient_biomarker_idx").on(t.patientId, t.biomarkerName),

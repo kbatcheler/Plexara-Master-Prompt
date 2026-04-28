@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, BookOpenCheck, Check, AlertCircle } from "lucide-react";
+import { Loader2, BookOpenCheck, Check, AlertCircle, ShieldAlert } from "lucide-react";
 import { useToast } from "../hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -22,6 +22,18 @@ interface Protocol {
   citations: string[] | null;
   retestBiomarkers: string[] | null;
   retestIntervalWeeks: number | null;
+  /** Enhancement K — present on patient-scoped lists; omitted on the global library list. */
+  contraindications?: ContraindicationFinding[];
+  hasCriticalContraindication?: boolean;
+}
+interface ContraindicationFinding {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  componentName: string;
+  source: "medication" | "genetic" | "biomarker";
+  reason: string;
+  patientNarrative: string;
+  clinicianNarrative: string;
 }
 interface EligibilityEntry {
   protocol: Protocol;
@@ -47,8 +59,13 @@ function evidenceTone(level: string): string {
 }
 
 function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: Protocol; eligible?: boolean; alreadyAdopted?: boolean; onAdopt?: () => void; adopting?: boolean }) {
+  const hasCritical = !!p.hasCriticalContraindication;
+  const contraindications = p.contraindications ?? [];
+  const borderClass = hasCritical
+    ? "border-l-4 border-l-destructive"
+    : eligible ? "border-l-4 border-l-primary" : "";
   return (
-    <Card className={`transition-shadow hover:shadow-md ${eligible ? "border-l-4 border-l-primary" : ""}`}>
+    <Card className={`transition-shadow hover:shadow-md ${borderClass}`}>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -59,6 +76,11 @@ function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: P
             <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{p.category}</Badge>
             <Badge variant="outline" className={`text-[10px] uppercase tracking-wide capitalize ${evidenceTone(p.evidenceLevel)}`}>{p.evidenceLevel} evidence</Badge>
             {p.requiresPhysician && <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-status-watch/40 text-status-watch bg-status-watch/5">Physician-guided</Badge>}
+            {hasCritical && (
+              <Badge className="text-[10px] uppercase tracking-wide bg-destructive text-destructive-foreground hover:bg-destructive">
+                <ShieldAlert className="w-3 h-3 mr-1" />Contraindicated
+              </Badge>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -79,6 +101,24 @@ function ProtocolCard({ p, eligible, alreadyAdopted, onAdopt, adopting }: { p: P
         )}
         {p.citations && p.citations.length > 0 && (
           <p className="text-[11px] text-muted-foreground italic border-l-2 border-border pl-3">{p.citations.join(" · ")}</p>
+        )}
+        {contraindications.length > 0 && (
+          <div className={`rounded-md border p-3 space-y-2 ${hasCritical ? "border-destructive/40 bg-destructive/5" : "border-status-watch/40 bg-status-watch/5"}`}>
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide">
+              <ShieldAlert className={`w-3.5 h-3.5 ${hasCritical ? "text-destructive" : "text-status-watch"}`} />
+              <span className={hasCritical ? "text-destructive" : "text-status-watch"}>
+                {hasCritical ? "Contraindicated for you" : "Use with caution"}
+              </span>
+            </div>
+            <ul className="space-y-1.5 text-xs">
+              {contraindications.map((c) => (
+                <li key={`${c.ruleId}-${c.componentName}`} className="leading-relaxed">
+                  <strong className="font-medium">{c.componentName}:</strong>{" "}
+                  <span className="text-muted-foreground">{c.patientNarrative}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {onAdopt && (
           <div className="flex items-center gap-2 pt-2">
@@ -111,8 +151,13 @@ export default function Protocols() {
   const { toast } = useToast();
 
   async function load() {
-    api<Protocol[]>("/protocols").then(setAllProtocols).catch(() => setAllProtocols([]));
-    if (!patientId) return;
+    if (!patientId) {
+      api<Protocol[]>("/protocols").then(setAllProtocols).catch(() => setAllProtocols([]));
+      return;
+    }
+    // Patient-scoped list returns the same library + AI-generated set,
+    // PLUS the contraindications array per protocol (Enhancement K).
+    api<Protocol[]>(`/patients/${patientId}/protocols`).then(setAllProtocols).catch(() => setAllProtocols([]));
     api<EligibilityEntry[]>(`/patients/${patientId}/protocols/eligibility`).then(setEligibility).catch(() => setEligibility([]));
     api<Adoption[]>(`/patients/${patientId}/protocols/adoptions`).then(setAdoptions).catch(() => setAdoptions([]));
   }

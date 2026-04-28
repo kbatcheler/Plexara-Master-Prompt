@@ -179,8 +179,13 @@ export default function Supplements() {
       <Tabs defaultValue="stack" className="space-y-4">
         <TabsList>
           <TabsTrigger value="stack" data-testid="tab-stack">My Stack ({stack.filter((s) => s.active).length})</TabsTrigger>
+          <TabsTrigger value="medications" data-testid="tab-medications">Medications</TabsTrigger>
           <TabsTrigger value="recommendations" data-testid="tab-recommendations">AI Recommendations ({activeRecs.length})</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="medications" className="space-y-4">
+          <MedicationsPanel patientId={patientId} />
+        </TabsContent>
 
         <TabsContent value="stack" className="space-y-4">
           <Card>
@@ -356,5 +361,198 @@ export default function Supplements() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+interface MedicationRow {
+  id: number;
+  name: string;
+  drugClass: string | null;
+  dosage: string | null;
+  frequency: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  notes: string | null;
+  active: boolean;
+  createdAt: string;
+}
+interface DrugClassOption { drugClass: string; displayName: string; examples: string[] }
+interface DepletionFinding {
+  medicationName: string; drugClass: string; biomarker: string;
+  value: number; unit: string; threshold: { comparator: string; value: number; unit: string } | null;
+  patientNarrative: string; mechanism: string; suggestedAction: string | null;
+}
+
+function MedicationsPanel({ patientId }: { patientId: number }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState<{ name: string; drugClass: string; dosage: string; startedAt: string }>({
+    name: "", drugClass: "", dosage: "", startedAt: "",
+  });
+
+  const medsQ = useQuery<MedicationRow[]>({
+    queryKey: ["medications", patientId],
+    queryFn: () => api(`/patients/${patientId}/medications`),
+    enabled: !!patientId,
+  });
+  const rulesQ = useQuery<DrugClassOption[]>({
+    queryKey: ["medications", "rules"],
+    queryFn: () => api(`/patients/${patientId}/medications/rules`),
+    enabled: !!patientId,
+  });
+  const depletionsQ = useQuery<{ detectedCount: number; findings: DepletionFinding[] }>({
+    queryKey: ["medications", "depletions", patientId],
+    queryFn: () => api(`/patients/${patientId}/medications/depletions`),
+    enabled: !!patientId,
+  });
+
+  const addMut = useMutation({
+    mutationFn: (body: typeof form) =>
+      api(`/patients/${patientId}/medications`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: body.name,
+          drugClass: body.drugClass || null,
+          dosage: body.dosage || null,
+          startedAt: body.startedAt || null,
+        }),
+      }),
+    onSuccess: () => {
+      setForm({ name: "", drugClass: "", dosage: "", startedAt: "" });
+      qc.invalidateQueries({ queryKey: ["medications"] });
+    },
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ id, active }: { id: number; active: boolean }) =>
+      api(`/patients/${patientId}/medications/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["medications"] }),
+  });
+  const delMut = useMutation({
+    mutationFn: (id: number) => api(`/patients/${patientId}/medications/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["medications"] }),
+  });
+
+  const meds = medsQ.data ?? [];
+  const active = meds.filter((m) => m.active);
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Pill className="w-4 h-4" /> Add a medication</CardTitle>
+          <CardDescription>
+            Tracking your prescriptions lets the analysis contextualise expected drug effects (e.g. statin lowering LDL) and watch for known nutrient depletions.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="grid grid-cols-1 md:grid-cols-[2fr_1.4fr_1fr_1fr_auto] gap-2"
+            onSubmit={(e) => { e.preventDefault(); if (form.name.trim()) addMut.mutate(form); }}
+          >
+            <Input
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. atorvastatin"
+              data-testid="med-name-input"
+            />
+            <select
+              value={form.drugClass}
+              onChange={(e) => setForm((f) => ({ ...f, drugClass: e.target.value }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              data-testid="med-class-select"
+            >
+              <option value="">— drug class (optional) —</option>
+              {(rulesQ.data ?? []).map((r) => (
+                <option key={r.drugClass} value={r.drugClass}>{r.displayName}</option>
+              ))}
+            </select>
+            <Input
+              value={form.dosage}
+              onChange={(e) => setForm((f) => ({ ...f, dosage: e.target.value }))}
+              placeholder="dose, e.g. 20 mg"
+            />
+            <Input
+              type="date"
+              value={form.startedAt}
+              onChange={(e) => setForm((f) => ({ ...f, startedAt: e.target.value }))}
+            />
+            <Button type="submit" size="sm" disabled={addMut.isPending}>
+              {addMut.isPending ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <Plus className="w-3 h-3 mr-2" />}
+              Add
+            </Button>
+          </form>
+          <p className="text-[10px] text-muted-foreground mt-2 italic">
+            Selecting a drug class enables automated depletion checks (statin, metformin, PPI, OCP, beta-blocker, levothyroxine, thiazide, ACE-inhibitor).
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Active medications ({active.length})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {medsQ.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
+            meds.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No medications recorded yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {meds.map((m) => (
+                  <div key={m.id} className={`rounded-md border p-3 ${m.active ? "" : "opacity-60"}`} data-testid={`medication-${m.id}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="font-medium flex items-center gap-2 flex-wrap">
+                          <span className="capitalize">{m.name}</span>
+                          {m.dosage && <span className="text-xs text-muted-foreground">{m.dosage}</span>}
+                          {m.drugClass && <Badge variant="outline" className="text-[10px]">{m.drugClass}</Badge>}
+                          {!m.active && <Badge variant="secondary" className="text-[10px]">stopped</Badge>}
+                        </div>
+                        {m.startedAt && <div className="text-[10px] text-muted-foreground mt-1">Started {m.startedAt}</div>}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => toggleMut.mutate({ id: m.id, active: !m.active })}>
+                          {m.active ? "Stop" : "Resume"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => delMut.mutate(m.id)}>
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="w-4 h-4" /> Drug-induced biomarker effects
+            {(depletionsQ.data?.detectedCount ?? 0) > 0 && <Badge variant="destructive">{depletionsQ.data!.detectedCount}</Badge>}
+          </CardTitle>
+          <CardDescription>
+            Known nutrient or electrolyte depletions detected against your latest labs and active medications.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {depletionsQ.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
+            (depletionsQ.data?.detectedCount ?? 0) === 0 ? (
+              <p className="text-sm text-muted-foreground flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> No drug-induced depletions detected on your current stack.</p>
+            ) : (
+              <div className="space-y-2">
+                {depletionsQ.data!.findings.map((f, i) => (
+                  <div key={i} className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3" data-testid={`depletion-${i}`}>
+                    <div className="font-medium capitalize">{f.medicationName} → {f.biomarker} depletion</div>
+                    <p className="text-sm mt-1">{f.patientNarrative}</p>
+                    <p className="text-xs text-muted-foreground mt-1"><strong>Current value:</strong> {f.value} {f.unit}</p>
+                    <p className="text-xs text-muted-foreground"><strong>Mechanism:</strong> {f.mechanism}</p>
+                    {f.suggestedAction && <p className="text-xs mt-1"><strong>Suggested action:</strong> {f.suggestedAction}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+        </CardContent>
+      </Card>
+    </>
   );
 }

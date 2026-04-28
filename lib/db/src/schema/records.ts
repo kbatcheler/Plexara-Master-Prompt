@@ -11,6 +11,12 @@ export const recordsTable = pgTable("records", {
   fileName: text("file_name").notNull(),
   uploadDate: timestamp("upload_date", { withTimezone: true }).notNull().defaultNow(),
   testDate: text("test_date"),
+  // Enhancement E: optional time-of-draw (HH:MM, 24h) extracted from
+  // the lab requisition. Used by circadian profiles to flag morning-
+  // sensitive markers (cortisol, testosterone, TSH) drawn outside the
+  // expected window so the lens prompts can contextualise atypical
+  // values rather than alert on them.
+  drawTime: text("draw_time"),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -7,7 +7,11 @@ import {
   biomarkerResultsTable,
   supplementsTable,
   stackChangesTable,
+  medicationsTable,
+  geneticProfilesTable,
+  geneticVariantsTable,
 } from "@workspace/db";
+import { checkContraindications, type ContraindicationFinding } from "../lib/contraindications";
 import { eq, and, or, desc, inArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
@@ -254,6 +258,49 @@ globalRouter.get("/", async (req, res): Promise<void> => {
   }
 });
 
+/**
+ * Enhancement K — load all patient context needed for contraindication
+ * cross-checks (active medications, genetic variants for the most-recent
+ * profile, latest non-derived biomarker per name). Pure read; safe to
+ * call from any GET endpoint.
+ */
+async function loadContraindicationContext(patientId: number) {
+  const [meds, profiles, biomarkers] = await Promise.all([
+    db.select().from(medicationsTable).where(eq(medicationsTable.patientId, patientId)),
+    db.select().from(geneticProfilesTable)
+      .where(eq(geneticProfilesTable.patientId, patientId))
+      .orderBy(desc(geneticProfilesTable.id))
+      .limit(1),
+    db.select().from(biomarkerResultsTable).where(eq(biomarkerResultsTable.patientId, patientId)),
+  ]);
+  let variants: Array<{ rsId: string; genotype: string }> = [];
+  if (profiles.length > 0) {
+    const rows = await db.select().from(geneticVariantsTable)
+      .where(eq(geneticVariantsTable.profileId, profiles[0].id));
+    variants = rows.map((v) => ({ rsId: v.rsid, genotype: v.genotype }));
+  }
+  // Latest non-derived value per biomarker name (lower-cased).
+  const latest = new Map<string, { name: string; value: number; unit: string | null }>();
+  const sorted = [...biomarkers].sort((a, b) => {
+    const at = a.testDate ? new Date(a.testDate).getTime() : 0;
+    const bt = b.testDate ? new Date(b.testDate).getTime() : 0;
+    return bt - at;
+  });
+  for (const r of sorted) {
+    if ((r as { isDerived?: boolean }).isDerived) continue;
+    const k = (r.biomarkerName || "").toLowerCase();
+    if (!k || latest.has(k)) continue;
+    const v = typeof r.value === "number" ? r.value : Number(r.value);
+    if (!Number.isFinite(v)) continue;
+    latest.set(k, { name: k, value: v, unit: r.unit ?? null });
+  }
+  return {
+    medications: meds.map((m) => ({ name: m.name, isActive: m.active !== false })),
+    genetics: variants,
+    biomarkers: Array.from(latest.values()),
+  };
+}
+
 /** Curated reference protocols UNION this patient's AI-generated personalised protocols. */
 async function loadPatientVisibleProtocols(patientId: number) {
   return db.select().from(protocolsTable)
@@ -308,6 +355,10 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
       .where(and(eq(protocolAdoptionsTable.patientId, patientId), eq(protocolAdoptionsTable.status, "active")));
     const activeIds = new Set(adoptions.map((a) => a.protocolId));
 
+    // Enhancement K: enrich each eligibility entry with the same
+    // contraindication info served by GET /patients/:id/protocols, so
+    // recommended cards on the dashboard render the red badge correctly.
+    const ctx = await loadContraindicationContext(patientId);
     const evaluated = protocols.map((p) => {
       const rules = (p.eligibilityRules as EligibilityRule[]) ?? [];
       const matches = rules.map((r) => {
@@ -319,7 +370,14 @@ patientRouter.get("/eligibility", requireAuth, async (req, res): Promise<void> =
         return { rule: r, met, observed: v, reason: met ? "matched" as const : "out_of_threshold" as const };
       });
       const eligible = matches.length > 0 && matches.some((m) => m.met);
-      return { protocol: p, matches, eligible, alreadyAdopted: activeIds.has(p.id) };
+      const components = (p.componentsJson as ProtocolComponent[]) ?? [];
+      const findings = checkContraindications(components, ctx.medications, ctx.genetics, ctx.biomarkers);
+      const enrichedProtocol = {
+        ...p,
+        contraindications: findings,
+        hasCriticalContraindication: findings.some((c) => c.severity === "critical"),
+      };
+      return { protocol: enrichedProtocol, matches, eligible, alreadyAdopted: activeIds.has(p.id) };
     });
     res.json(evaluated);
   } catch (err) {
@@ -411,14 +469,68 @@ patientRouter.get("/", requireAuth, async (req, res): Promise<void> => {
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
     await ensureSeeded();
-    const list = await loadPatientVisibleProtocols(patientId);
-    res.json(list.map((p) => ({
-      ...p,
-      isCurated: p.source === "curated",
-      isPersonalised: p.source === "ai-generated",
-    })));
+    const [list, ctx] = await Promise.all([
+      loadPatientVisibleProtocols(patientId),
+      loadContraindicationContext(patientId),
+    ]);
+    res.json(list.map((p) => {
+      const components = (p.componentsJson as ProtocolComponent[]) ?? [];
+      const contraindications: ContraindicationFinding[] = checkContraindications(
+        components,
+        ctx.medications,
+        ctx.genetics,
+        ctx.biomarkers,
+      );
+      return {
+        ...p,
+        isCurated: p.source === "curated",
+        isPersonalised: p.source === "ai-generated",
+        contraindications,
+        hasCriticalContraindication: contraindications.some((c) => c.severity === "critical"),
+      };
+    }));
   } catch (err) {
     req.log.error({ err }, "Failed to list patient protocols");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Enhancement K — dedicated contraindications endpoint for a single
+ * protocol. Useful for the adoption confirmation modal to show all
+ * findings without re-fetching the full library.
+ */
+patientRouter.get("/:protocolId/contraindications", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  const protocolId = parseInt(req.params.protocolId as string);
+  const patient = await getPatient(patientId, userId);
+  if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
+  if (!Number.isFinite(protocolId)) { res.status(400).json({ error: "Invalid protocolId" }); return; }
+  try {
+    // IDOR guard: enforce same visibility rules as `loadPatientVisibleProtocols`.
+    // A patient may only inspect curated protocols OR ai-generated protocols
+    // that belong to THEIR own patientId. Any other lookup → 404 (not 403,
+    // to avoid leaking the existence of another patient's record).
+    const [protocol] = await db.select().from(protocolsTable)
+      .where(and(
+        eq(protocolsTable.id, protocolId),
+        or(
+          eq(protocolsTable.source, "curated"),
+          and(eq(protocolsTable.source, "ai-generated"), eq(protocolsTable.patientId, patientId)),
+        ),
+      ));
+    if (!protocol) { res.status(404).json({ error: "Protocol not found" }); return; }
+    const ctx = await loadContraindicationContext(patientId);
+    const components = (protocol.componentsJson as ProtocolComponent[]) ?? [];
+    const findings = checkContraindications(components, ctx.medications, ctx.genetics, ctx.biomarkers);
+    res.json({
+      protocolId,
+      contraindications: findings,
+      hasCriticalContraindication: findings.some((c) => c.severity === "critical"),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to load contraindications");
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -544,7 +656,17 @@ patientRouter.post("/adoptions", requireAuth, validate({ body: protocolAdoptBody
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const { protocolId } = req.body as { protocolId: number };
   try {
-    const [protocol] = await db.select().from(protocolsTable).where(eq(protocolsTable.id, protocolId));
+    // IDOR guard (Enhancement K hardening): a patient may only adopt
+    // curated protocols OR ai-generated protocols that belong to THEIR
+    // own patientId. 404 (not 403) to avoid leaking foreign IDs.
+    const [protocol] = await db.select().from(protocolsTable)
+      .where(and(
+        eq(protocolsTable.id, protocolId),
+        or(
+          eq(protocolsTable.source, "curated"),
+          and(eq(protocolsTable.source, "ai-generated"), eq(protocolsTable.patientId, patientId)),
+        ),
+      ));
     if (!protocol) { res.status(404).json({ error: "Protocol not found" }); return; }
     const components = (protocol.componentsJson as ProtocolComponent[]) ?? [];
     const supplementComponents = components.filter((c) => c.type === "supplement");

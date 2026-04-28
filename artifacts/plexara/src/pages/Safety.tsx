@@ -6,13 +6,20 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Loader2, ShieldAlert, RefreshCw, X, ExternalLink, GitBranchPlus, CheckCircle2 } from "lucide-react";
+import { Loader2, ShieldAlert, RefreshCw, X, ExternalLink, GitBranchPlus, CheckCircle2, Activity, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Interaction {
   ruleId: number; substanceA: string; substanceB: string; severity: string;
   mechanism: string; clinicalEffect: string; source: string | null; citation: string | null;
   matchedFrom: string[]; dismissedAt: string | null;
+}
+interface PatternCriterion { label: string; matched: boolean; detail: string }
+interface DetectedPattern {
+  slug: string; name: string; category: string; severity: string;
+  description: string; patientNarrative: string; clinicalSignificance: string;
+  matchedCount: number; totalCriteria: number; minRequired: number;
+  criteria: PatternCriterion[]; triggeringBiomarkers: string[];
 }
 interface Disagreement {
   id: number; interpretationId: number; finding: string;
@@ -69,8 +76,19 @@ export default function Safety() {
     },
   });
 
+  const patternsQ = useQuery<{ patterns: DetectedPattern[]; libraryCount: number; detectedCount: number }>({
+    queryKey: ["safety", "patterns", patientId],
+    queryFn: () => api(`/patients/${patientId}/patterns`),
+    enabled: !!patientId,
+  });
+
   const active = interactionsQ.data?.interactions.filter((i) => !i.dismissedAt) ?? [];
   const dismissed = interactionsQ.data?.interactions.filter((i) => i.dismissedAt) ?? [];
+  const PATTERN_SEV: Record<string, string> = {
+    urgent: "border-destructive/60 bg-destructive/10",
+    watch: "border-amber-500/50 bg-amber-500/10",
+    info: "border-border/40 bg-secondary/20",
+  };
 
   return (
     <div className="container max-w-5xl py-8 space-y-6">
@@ -163,6 +181,76 @@ export default function Safety() {
               </div>
             </details>
           )}
+        </CardContent>
+      </Card>
+
+      {/* ── Detected health patterns (Enhancement C) ── */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Activity className="w-4 h-4 text-primary" />
+                Detected health patterns
+                {(patternsQ.data?.detectedCount ?? 0) > 0 && <Badge variant="secondary">{patternsQ.data!.detectedCount}</Badge>}
+              </CardTitle>
+              <CardDescription>
+                Multi-biomarker patterns scanned across your latest panel — the kind of signals that hide when you only look at one number at a time. Scanning {patternsQ.data?.libraryCount ?? "…"} curated patterns.
+              </CardDescription>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => patternsQ.refetch()} disabled={patternsQ.isFetching}>
+              {patternsQ.isFetching ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-2" />}
+              Rescan
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {patternsQ.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
+            patternsQ.isError ? <p className="text-sm text-destructive">Pattern scan failed.</p> :
+            (patternsQ.data?.detectedCount ?? 0) === 0 ? (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" /> No multi-biomarker patterns triggered against your latest data.
+              </p>
+            ) : (
+              patternsQ.data!.patterns.map((p) => (
+                <details key={p.slug} className={`rounded-md border p-3 ${PATTERN_SEV[p.severity] ?? ""}`} data-testid={`pattern-${p.slug}`}>
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="font-medium flex items-center gap-2 flex-wrap">
+                          {p.name}
+                          <Badge variant={p.severity === "urgent" ? "destructive" : "secondary"} className="text-[10px] uppercase">{p.severity}</Badge>
+                          <Badge variant="outline" className="text-[10px]">{p.category}</Badge>
+                          <span className="text-[10px] text-muted-foreground">{p.matchedCount}/{p.totalCriteria} criteria · min {p.minRequired}</span>
+                        </div>
+                        <p className="text-sm mt-2">{p.patientNarrative}</p>
+                      </div>
+                      <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-1" />
+                    </div>
+                  </summary>
+                  <div className="mt-3 pt-3 border-t border-border/30 space-y-2">
+                    <div>
+                      <div className="text-[10px] uppercase text-muted-foreground mb-1">Why this pattern matters clinically</div>
+                      <p className="text-xs">{p.clinicalSignificance}</p>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-muted-foreground mb-1">Evidence breakdown</div>
+                      <ul className="text-xs space-y-1">
+                        {p.criteria.map((c, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <span className={c.matched ? "text-emerald-400" : "text-muted-foreground"}>{c.matched ? "✓" : "○"}</span>
+                            <span><strong>{c.label}:</strong> <span className="text-muted-foreground">{c.detail}</span></span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </details>
+              ))
+            )}
+          <p className="text-[10px] text-muted-foreground italic">
+            Pattern detection is a screening signal, not a diagnosis. Discuss any flagged pattern with your clinician — they can confirm whether further workup is appropriate.
+          </p>
         </CardContent>
       </Card>
 

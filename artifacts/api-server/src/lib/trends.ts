@@ -43,6 +43,8 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
     unit: biomarkerResultsTable.unit,
     testDate: biomarkerResultsTable.testDate,
     createdAt: biomarkerResultsTable.createdAt,
+    methodology: biomarkerResultsTable.methodology,
+    labName: biomarkerResultsTable.labName,
   })
     .from(biomarkerResultsTable)
     .where(and(eq(biomarkerResultsTable.patientId, patientId), gte(biomarkerResultsTable.createdAt, cutoff)));
@@ -56,7 +58,15 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
   // bogus 1.0, and turns trend projections into noise. So we collapse all
   // values for a given (name, date) into a single point using the MEDIAN —
   // robust to one outlier among duplicates that should otherwise agree.
-  const buckets = new Map<string, { unit: string | null; byDay: Map<number, number[]> }>();
+  // Per-biomarker bucketing tracks (a) per-day values for trend math and
+  // (b) the distinct set of methodologies and labs that contributed —
+  // needed to set crossLab / multiMethodology flags later (Enhancement I).
+  const buckets = new Map<string, {
+    unit: string | null;
+    byDay: Map<number, number[]>;
+    methodologies: Set<string>;
+    labs: Set<string>;
+  }>();
   for (const r of rows) {
     if (!r.value) continue;
     const v = parseFloat(r.value);
@@ -69,10 +79,12 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
     const t = Math.floor(tRaw / DAY_MS) * DAY_MS;
     let b = buckets.get(r.name);
     if (!b) {
-      b = { unit: r.unit, byDay: new Map() };
+      b = { unit: r.unit, byDay: new Map(), methodologies: new Set(), labs: new Set() };
       buckets.set(r.name, b);
     }
     if (!b.unit) b.unit = r.unit;
+    if (r.methodology) b.methodologies.add(r.methodology.trim().toLowerCase());
+    if (r.labName) b.labs.add(r.labName.trim());
     const arr = b.byDay.get(t) ?? [];
     arr.push(v);
     b.byDay.set(t, arr);
@@ -86,15 +98,20 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   };
 
-  const grouped = new Map<string, { unit: string | null; pts: SeriesPoint[] }>();
+  const grouped = new Map<string, {
+    unit: string | null;
+    pts: SeriesPoint[];
+    methodologies: Set<string>;
+    labs: Set<string>;
+  }>();
   for (const [name, b] of buckets) {
     const pts: SeriesPoint[] = [];
     for (const [t, vs] of b.byDay) pts.push({ t, v: median(vs) });
-    grouped.set(name, { unit: b.unit, pts });
+    grouped.set(name, { unit: b.unit, pts, methodologies: b.methodologies, labs: b.labs });
   }
 
   let computed = 0;
-  for (const [name, { unit, pts }] of grouped) {
+  for (const [name, { unit, pts, methodologies, labs }] of grouped) {
     if (pts.length < 2) continue;
     pts.sort((a, b) => a.t - b.t);
     // Centre the time axis on the first point so intercept = value at t0
@@ -108,6 +125,15 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
     const lastTDays = (last.t - t0) / DAY_MS;
     const proj = (deltaDays: number) => reg.intercept + reg.slope * (lastTDays + deltaDays);
     const band = reg.residualSd * 1.96;
+
+    // Cross-lab / multi-methodology audit — drives the comparability
+    // warning surfaced to clinicians and patients. We only treat methodology
+    // sets of size ≥2 as "mixed" to avoid raising a flag merely because
+    // most rows lack methodology metadata (legacy uploads).
+    const crossLab = labs.size >= 2;
+    const multiMethodology = methodologies.size >= 2;
+    const methodologyAudit = methodologies.size > 0 ? Array.from(methodologies).sort().join(", ") : null;
+    const labAudit = labs.size > 0 ? Array.from(labs).sort().join(", ") : null;
 
     const trendRow = {
       patientId,
@@ -126,6 +152,10 @@ export async function recomputeTrendsForPatient(patientId: number, windowDays: n
       projection365: proj(365),
       bandLow30: proj(30) - band,
       bandHigh30: proj(30) + band,
+      crossLab,
+      multiMethodology,
+      methodologies: methodologyAudit,
+      labs: labAudit,
       computedAt: new Date(),
     };
 

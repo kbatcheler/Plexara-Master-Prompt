@@ -39,6 +39,16 @@ export const biomarkerResultsTable = pgTable("biomarker_results", {
   // Enhancement B). Trend/baseline/dashboard surfaces filter on this so
   // derived ratios can be styled differently from lab-reported markers.
   isDerived: boolean("is_derived").notNull().default(false),
+  // Enhancement I — Lab Methodology Awareness.
+  // `methodology` is the assay technique reported by the lab (e.g.
+  // "immunoassay", "LC-MS/MS", "HPLC", "ELISA", "spectrophotometry").
+  // Different methodologies for the same biomarker (notably
+  // testosterone, vitamin D, cortisol, thyroid hormones) produce
+  // numerically incomparable results, so cross-lab trend lines that
+  // mix methodologies must be flagged. `labName` is the (anonymised)
+  // performing lab. Both are nullable for backfill compatibility.
+  methodology: text("methodology"),
+  labName: text("lab_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

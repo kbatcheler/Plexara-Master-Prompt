@@ -67,6 +67,7 @@ Return valid JSON only:
 {
   "documentType": "blood_panel",
   "testDate": "YYYY-MM-DD or null",
+  "drawTime": "HH:MM in 24h format, or null if absent. Look for 'Collection Time', 'Drawn at', 'Specimen Collected', 'Time Collected'.",
   "labName": "[LAB]",
   "biomarkers": [
     {
@@ -76,6 +77,7 @@ Return valid JSON only:
       "labRefLow": number or null,
       "labRefHigh": number or null,
       "category": "CBC|Metabolic|Lipid|Thyroid|Hormonal|Inflammatory|Vitamins|Metabolic Health|Liver|Kidney|Cardiac|Other",
+      "methodology": "string or null — assay technique reported on the report (e.g. 'LC-MS/MS', 'immunoassay', 'ELISA', 'HPLC', 'spectrophotometry', 'electrochemiluminescence'). Look near the biomarker name, in a Methodology/Method/Assay column, or in panel footnotes. Critical for testosterone, vitamin D, cortisol, thyroid panels.",
       "flagged": boolean,
       "confidence": "high|medium|low"
     }

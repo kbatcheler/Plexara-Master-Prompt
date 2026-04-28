@@ -10,13 +10,20 @@ import {
   biomarkerReferenceTable,
   baselinesTable,
   alertPreferencesTable,
+  geneticProfilesTable,
+  geneticVariantsTable,
+  wearableMetricsTable,
 } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { stripPII, hashData } from "./pii";
 import { computeRatiosFromData } from "./ratios";
+import { buildMedicationBlock, type MedicationContext } from "./medication-biomarker-rules";
+import { evaluateCircadianContext, seasonalVitaminDAdjustment } from "./circadian";
+import { scanNutrigenomicCrossReferences, type PatientGenotype } from "./nutrigenomics";
+import { scanWearableBiomarkerFusion, type WearableObservation, type BiomarkerPoint } from "./wearable-biomarker-fusion";
 import { getAllBiomarkerReferences } from "./biomarker-cache";
 import {
   runLensA,
@@ -158,10 +165,28 @@ export async function processUploadedDocument(opts: {
         extractionConfidence: "high",
       });
 
+      // Enhancement E: persist the extracted draw time (HH:MM 24h) onto
+      // the record. Captured at panel level, not per-biomarker — every
+      // tube was drawn at the same moment so it's a record-scoped fact.
+      // We only update if the extractor returned a value to avoid
+      // clobbering a value the user supplied at upload time.
+      const extractedDrawTime = typeof structuredData.drawTime === "string" && /^\d{2}:\d{2}$/.test(structuredData.drawTime)
+        ? structuredData.drawTime
+        : null;
+      if (extractedDrawTime) {
+        await db.update(recordsTable).set({ drawTime: extractedDrawTime }).where(eq(recordsTable.id, recordId));
+      }
+
       const biomarkers = (structuredData.biomarkers as Array<{
         name: string; value: number; unit: string;
         labRefLow?: number; labRefHigh?: number; category?: string;
+        methodology?: string | null;
       }>) || [];
+      // Lab name is captured at the panel level by the extraction prompt
+      // ("labName": "[LAB]") and stamped onto every biomarker row so
+      // downstream cross-lab comparison logic (Enhancement I) can flag
+      // mixed-source trend lines without re-querying the records table.
+      const panelLabName = (structuredData.labName as string | undefined) || null;
 
       if (biomarkers.length > 0) {
         // Build the row payloads synchronously (no I/O), then defer the
@@ -186,7 +211,14 @@ export async function processUploadedDocument(opts: {
             optimalRangeLow: ref?.optimalRangeLow ? ref.optimalRangeLow.toString() : null,
             optimalRangeHigh: ref?.optimalRangeHigh ? ref.optimalRangeHigh.toString() : null,
             testDate: (structuredData.testDate as string) || testDate || null,
+            // Enhancement I: persist methodology + lab attribution for
+            // cross-lab comparability tracking. Both fields are nullable
+            // and degrade gracefully when extraction omits them.
+            methodology: bm.methodology ?? null,
+            labName: panelLabName,
           };
+          // Note: drawTime is captured at the record level (records.drawTime),
+          // not on each biomarker row, since it applies to the whole panel.
         });
         // Single batch insert, started immediately, awaited later by the
         // pipeline before the post-interpretation orchestrator runs (so
@@ -296,6 +328,74 @@ async function loadBiomarkerHistory(patientId: number, excludeRecordId: number):
   return Array.from(grouped.values());
 }
 
+/**
+ * Enhancement D: load active medications for the lens prompts. Pulled
+ * from the structured `medicationsTable`; if the table is empty we
+ * return [] and the medication block is omitted entirely (the patient-
+ * profile jsonb `patient.medications` field still flows through
+ * `buildPatientContext` and the demographic prompt block, so we are
+ * never silently dropping medication context).
+ */
+async function loadActiveMedications(patientId: number): Promise<MedicationContext[]> {
+  const { medicationsTable: mt } = await import("@workspace/db");
+  const rows = await db
+    .select({
+      name: mt.name,
+      drugClass: mt.drugClass,
+      dosage: mt.dosage,
+      startedAt: mt.startedAt,
+    })
+    .from(mt)
+    .where(and(eq(mt.patientId, patientId), eq(mt.active, true)));
+  return rows.map((r) => ({
+    name: r.name,
+    drugClass: r.drugClass,
+    dosage: r.dosage,
+    startedAt: r.startedAt,
+  }));
+}
+
+/**
+ * Enhancement C: load patterns detected on the previous orchestrator
+ * run (stored as `alerts` rows with `triggerType = "pattern"`) so the
+ * lens prompts can reason about persistence vs resolution. We load
+ * only the minimal structured fields the lenses need — name, severity,
+ * patient narrative, and clinical significance — to keep prompt
+ * tokens bounded.
+ */
+async function loadPreviousPatterns(patientId: number): Promise<Array<{
+  name: string;
+  severity: string;
+  description: string;
+  detectedAt: string | null;
+  evidence: unknown;
+}>> {
+  const rows = await db
+    .select({
+      title: alertsTable.title,
+      severity: alertsTable.severity,
+      description: alertsTable.description,
+      createdAt: alertsTable.createdAt,
+      relatedBiomarkers: alertsTable.relatedBiomarkers,
+      status: alertsTable.status,
+      triggerType: alertsTable.triggerType,
+    })
+    .from(alertsTable)
+    .where(and(
+      eq(alertsTable.patientId, patientId),
+      eq(alertsTable.triggerType, "pattern"),
+      eq(alertsTable.status, "active"),
+    ));
+
+  return rows.map((r) => ({
+    name: r.title,
+    severity: r.severity,
+    description: r.description,
+    detectedAt: r.createdAt?.toISOString() ?? null,
+    evidence: r.relatedBiomarkers,
+  }));
+}
+
 export async function runInterpretationPipeline(
   patientId: number,
   recordId: number,
@@ -311,8 +411,13 @@ export async function runInterpretationPipeline(
   // stable) but use the enriched payload for actual lens dispatch and
   // for the audit hash (audit must reflect what was actually sent).
   const derivedRatios = computeRatiosFromData(structuredData as Record<string, unknown>);
-  const anonymisedForLens: AnonymisedData = derivedRatios.length
-    ? { ...anonymised, derivedRatios: derivedRatios.map((r) => ({
+  // Build the enriched payload incrementally so we can layer on
+  // Enhancement-C `previousPatterns` below without recomputing the
+  // ratios block twice. We MUST keep the original `anonymised` for
+  // `idempotencyKey` (recompute determinism) but use `anonymisedForLens`
+  // for actual lens dispatch and the audit hash.
+  const ratiosBlock = derivedRatios.length
+    ? derivedRatios.map((r) => ({
         name: r.spec.name,
         slug: r.spec.slug,
         category: r.spec.category,
@@ -323,8 +428,8 @@ export async function runInterpretationPipeline(
         optimalRange: { low: r.spec.optimalLow, high: r.spec.optimalHigh },
         clinicalRange: { low: r.spec.clinicalLow, high: r.spec.clinicalHigh },
         interpretation: r.interpretation,
-      })) }
-    : anonymised;
+      }))
+    : null;
   const version = opts.version ?? 1;
   const idempotencyKey = makeIdempotencyKey(recordId, anonymised, version);
 
@@ -338,6 +443,141 @@ export async function runInterpretationPipeline(
   if (history.length > 0) {
     logger.info({ patientId, recordId, biomarkers: history.length }, "Loaded biomarker history for lens prompts");
   }
+
+  // Enhancement C: load any patterns detected on the *previous*
+  // orchestrator run so the lenses can reason about persistence
+  // ("metabolic syndrome pattern still present after 3 panels") vs
+  // resolution ("silent inflammation pattern no longer triggers").
+  // Patterns generated by the current run aren't available yet — that
+  // happens post-interpretation in the orchestrator. Loading these as
+  // additive `previousPatterns` context costs ~one indexed query and
+  // requires no prompt-text edits — the lens prompt JSON-dumps the
+  // anonymised payload in full, so new fields auto-flow through.
+  const previousPatterns = await loadPreviousPatterns(patientId);
+  if (previousPatterns.length > 0) {
+    logger.info({ patientId, recordId, previousPatterns: previousPatterns.length }, "Loaded previously-detected patterns for lens prompts");
+  }
+
+  // Enhancement D: load active medications and a class-aware effects
+  // block. The lenses use this to *contextualise* findings — e.g. a
+  // statin patient's low LDL is the medication working, not a dietary
+  // win to flag — instead of treating expected drug effects as noise.
+  const activeMedications = await loadActiveMedications(patientId);
+  const medicationBlock = activeMedications.length > 0
+    ? buildMedicationBlock(activeMedications)
+    : null;
+  if (activeMedications.length > 0) {
+    logger.info({ patientId, recordId, medications: activeMedications.length }, "Loaded active medications for lens prompts");
+  }
+
+  // Enhancement E: circadian + seasonal context. Both blocks are pure
+  // functions over already-loaded data (record drawTime, biomarker
+  // names, testDate) — zero extra DB hits. Lens prompts get a context
+  // block they can quote when interpreting morning-sensitive markers
+  // or vitamin D values drawn off-season.
+  const recordRow = await db.query.recordsTable.findFirst({
+    where: eq(recordsTable.id, recordId),
+    columns: { drawTime: true, testDate: true },
+  });
+  const biomarkerNamesForCircadian = (structuredData.biomarkers as Array<{ name?: string }> | undefined)?.map((b) => b?.name ?? "").filter(Boolean) ?? [];
+  const circadianFindings = evaluateCircadianContext(recordRow?.drawTime ?? null, biomarkerNamesForCircadian);
+  const hasVitaminD = biomarkerNamesForCircadian.some((n) => n.toLowerCase().includes("vitamin d") || n.toLowerCase() === "25-oh vit d" || n.toLowerCase().includes("25-hydroxy"));
+  const seasonalVitD = hasVitaminD ? seasonalVitaminDAdjustment(recordRow?.testDate ?? null) : null;
+
+  // Enhancement F: nutrigenomic SNP × biomarker cross-reference. We
+  // load the patient's variants only if they have an uploaded genetic
+  // profile — most patients won't. The scan is a pure function over
+  // the rsids we curate (5 rules, ~6 rsids), so it's a single bounded
+  // query. Findings are dropped when the at-risk genotype lacks the
+  // required biomarker evidence — silence over noise.
+  let nutrigenomicFindings: ReturnType<typeof scanNutrigenomicCrossReferences> = [];
+  try {
+    const watchedRsids = Array.from(new Set(["rs1801133", "rs429358", "rs7412", "rs1544410", "rs762551"]));
+    const profile = await db.query.geneticProfilesTable.findFirst({
+      where: eq(geneticProfilesTable.patientId, patientId),
+      columns: { id: true },
+    });
+    if (profile) {
+      const variantRows = await db
+        .select({ rsid: geneticVariantsTable.rsid, genotype: geneticVariantsTable.genotype })
+        .from(geneticVariantsTable)
+        .where(and(eq(geneticVariantsTable.profileId, profile.id), inArray(geneticVariantsTable.rsid, watchedRsids)));
+      const genotypes: PatientGenotype[] = variantRows.map((r) => ({ rsid: r.rsid, genotype: r.genotype }));
+      const bmMap = new Map<string, number>();
+      for (const b of (structuredData.biomarkers as Array<{ name?: string; value?: number | null }> | undefined) ?? []) {
+        if (!b?.name || b.value == null) continue;
+        const n = b.name.toLowerCase();
+        if (!bmMap.has(n) && Number.isFinite(b.value)) bmMap.set(n, b.value as number);
+      }
+      nutrigenomicFindings = scanNutrigenomicCrossReferences(genotypes, bmMap);
+      if (nutrigenomicFindings.length > 0) {
+        logger.info({ patientId, recordId, findings: nutrigenomicFindings.length }, "Detected nutrigenomic cross-references for lens prompts");
+      }
+    }
+  } catch (err) {
+    // Non-fatal: lens still runs without this enrichment.
+    logger.warn({ err, patientId, recordId }, "Nutrigenomic scan failed (continuing without)");
+  }
+
+  // Enhancement H: wearable × biomarker fusion. Loads wearable metrics
+  // from the 28 days preceding the draw and computes trend correlations
+  // for each fusion rule whose biomarker is present in this panel.
+  // Only fires when the patient has wearable data — most don't, so the
+  // bounded query is cheap.
+  let fusionFindings: ReturnType<typeof scanWearableBiomarkerFusion> = [];
+  try {
+    const drawDateStr = recordRow?.testDate ?? null;
+    const drawDate = drawDateStr ? new Date(drawDateStr) : new Date();
+    const windowStart = new Date(drawDate.getTime() - 28 * 24 * 60 * 60 * 1000);
+    const wearableRows = await db
+      .select({
+        metricKey: wearableMetricsTable.metricKey,
+        value: wearableMetricsTable.value,
+        recordedAt: wearableMetricsTable.recordedAt,
+      })
+      .from(wearableMetricsTable)
+      .where(and(
+        eq(wearableMetricsTable.patientId, patientId),
+        sql`${wearableMetricsTable.recordedAt} >= ${windowStart.toISOString()}`,
+        sql`${wearableMetricsTable.recordedAt} <= ${drawDate.toISOString()}`,
+      ));
+    if (wearableRows.length > 0) {
+      const wearables: WearableObservation[] = wearableRows.map((w) => ({
+        metricKey: w.metricKey,
+        value: w.value,
+        recordedAt: w.recordedAt,
+      }));
+      const biomarkers: BiomarkerPoint[] = ((structuredData.biomarkers as Array<{ name?: string; value?: number | null }> | undefined) ?? [])
+        .filter((b): b is { name: string; value: number } => !!b?.name && b.value != null && Number.isFinite(b.value))
+        .map((b) => ({ name: b.name.toLowerCase(), value: b.value, testDate: drawDateStr ?? "" }));
+      fusionFindings = scanWearableBiomarkerFusion(wearables, biomarkers, drawDate);
+      if (fusionFindings.length > 0) {
+        logger.info({ patientId, recordId, findings: fusionFindings.length }, "Detected wearable×biomarker fusion findings");
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, patientId, recordId }, "Wearable fusion scan failed (continuing without)");
+  }
+
+  // Compose the lens-facing payload now that ratios + previousPatterns +
+  // medications + circadian are all ready. Only attach keys when there's
+  // data — keeps prompt JSON clean for fresh patients with no history.
+  // The audit hash downstream intentionally hashes THIS enriched object
+  // so reruns can detect when the actual model input has changed (e.g.
+  // a new medication added since last run, even with same biomarkers).
+  const hasEnrichment = ratiosBlock || previousPatterns.length > 0 || medicationBlock || circadianFindings || seasonalVitD || nutrigenomicFindings.length > 0 || fusionFindings.length > 0;
+  const anonymisedForLens: AnonymisedData = hasEnrichment
+    ? {
+        ...anonymised,
+        ...(ratiosBlock ? { derivedRatios: ratiosBlock } : {}),
+        ...(previousPatterns.length > 0 ? { previousPatterns } : {}),
+        ...(medicationBlock ? { activeMedicationsContext: medicationBlock, activeMedications } : {}),
+        ...(circadianFindings ? { circadianContext: circadianFindings } : {}),
+        ...(seasonalVitD ? { seasonalAdjustment: seasonalVitD } : {}),
+        ...(nutrigenomicFindings.length > 0 ? { nutrigenomicContext: nutrigenomicFindings } : {}),
+        ...(fusionFindings.length > 0 ? { wearableBiomarkerFusion: fusionFindings } : {}),
+      }
+    : anonymised;
 
   const accountId = patient?.accountId || "";
   const allowAnthropic = await isProviderAllowed(accountId, "anthropic");

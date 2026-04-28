@@ -11,6 +11,7 @@ import { UnifiedHealthScoreHero } from "../components/dashboard/UnifiedHealthSco
 import { IntelligenceSummary } from "../components/dashboard/IntelligenceSummary";
 import { SupplementImpactCard } from "../components/dashboard/SupplementImpactCard";
 import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard";
+import { SymptomLoggerCard } from "../components/dashboard/SymptomLoggerCard";
 import { AlertBanner, type AlertSeverity } from "../components/AlertBanner";
 import { ChevronRight, FileText, Activity } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -172,6 +173,9 @@ export default function Dashboard() {
 
       {/* ── Supplement impact (closes the feedback loop) ── */}
       {patientId && <SupplementImpactCard patientId={patientId} />}
+
+      {/* ── Symptom logger + correlation engine (Enhancement G) ── */}
+      {patientId && <SymptomLoggerCard patientId={patientId} />}
 
       {/* ── Recent records (card-list) ── */}
       <section aria-labelledby="recent-heading" className="space-y-4">

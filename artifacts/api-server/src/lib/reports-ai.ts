@@ -141,6 +141,38 @@ export interface ComprehensiveReportInput {
     urgentFlags: string[];
     contextNote: string;
   }>;
+  // Enhancement J — optional cross-panel domain delta report. When
+  // provided AND divergent (improving + deteriorating domains coexist),
+  // it is appended to the LLM prompt as an explicit summary so the
+  // synthesist can address the divergence in its narrative.
+  domainDeltaReport?: {
+    comparablePanels: { oldDate: string; newDate: string };
+    domainDeltas: Array<{
+      domain: string;
+      scoreOld: number;
+      scoreNew: number;
+      delta: number;
+      direction: "improved" | "stable" | "deteriorated";
+      oldCount: number;
+      newCount: number;
+    }>;
+    divergentPattern: boolean;
+    divergentSummary: string | null;
+  } | null;
+  // Enhancement L — patient's personal response profiles (n>=3 only).
+  // When present, the synthesist quotes prior responses to the same
+  // intervention so recommendations carry empirical weight.
+  personalResponseProfiles?: Array<{
+    interventionType: "supplement" | "medication" | "protocol";
+    interventionName: string;
+    biomarkerName: string;
+    n: number;
+    meanDelta: number;
+    meanDeltaPct: number;
+    meanDaysElapsed: number;
+    classification: "responder" | "non-responder" | "adverse" | "mixed";
+    narrative: string;
+  }>;
 }
 
 export async function runComprehensiveReport(
@@ -178,7 +210,47 @@ export async function runComprehensiveReport(
       ? `\n\nImaging studies on file (DICOM-header-derived interpretations — DO NOT treat as radiology pixel findings; use only as imaging context to integrate with the bloodwork):\n${JSON.stringify(input.imagingInterpretations, null, 2)}`
       : "";
 
-  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+  // Enhancement J: when ≥2 comparable panels exist, surface the
+  // domain-level delta report verbatim. Even when no divergence is
+  // present the per-domain direction list helps the synthesist write
+  // a "what's improving / what's holding steady / what needs attention"
+  // narrative grounded in actual cross-panel evidence rather than
+  // hallucinated comparison.
+  const deltaBlock =
+    input.domainDeltaReport && input.domainDeltaReport.domainDeltas.length > 0
+      ? `\n\nMulti-panel domain delta (between ${input.domainDeltaReport.comparablePanels.oldDate} and ${input.domainDeltaReport.comparablePanels.newDate}):\n${JSON.stringify(
+          {
+            divergentPattern: input.domainDeltaReport.divergentPattern,
+            divergentSummary: input.domainDeltaReport.divergentSummary,
+            domainDeltas: input.domainDeltaReport.domainDeltas,
+          },
+          null,
+          2,
+        )}`
+      : "";
+
+  // Enhancement L — quote the patient's empirical response history so
+  // the synthesist can ground recommendations in *this* patient's
+  // observed track record (not population averages). Only n>=3 profiles
+  // are passed through; the upstream pipeline already filters.
+  const personalResponseBlock =
+    input.personalResponseProfiles && input.personalResponseProfiles.length > 0
+      ? `\n\nPersonal response history (n>=3 per row):\n${JSON.stringify(
+          input.personalResponseProfiles.map((p) => ({
+            interventionType: p.interventionType,
+            interventionName: p.interventionName,
+            biomarkerName: p.biomarkerName,
+            n: p.n,
+            meanDeltaPct: Number(p.meanDeltaPct.toFixed(3)),
+            meanDaysElapsed: p.meanDaysElapsed,
+            classification: p.classification,
+          })),
+          null,
+          2,
+        )}`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
 
   const parsed = await withLLMRetry("comprehensiveReport", async () => {
     const message = await anthropic.messages.create({

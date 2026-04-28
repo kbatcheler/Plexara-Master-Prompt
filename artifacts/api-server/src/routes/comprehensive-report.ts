@@ -8,7 +8,9 @@ import {
   biomarkerResultsTable,
   supplementsTable,
   imagingStudiesTable,
+  interventionOutcomesTable,
 } from "@workspace/db";
+import { buildPersonalResponseProfiles, type OutcomePair } from "../lib/longitudinal-learning";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
@@ -30,6 +32,7 @@ import {
 } from "../lib/ai";
 import { decryptInterpretationFields } from "../lib/phi-crypto";
 import { sanitizeFreeText } from "../lib/imaging-interpretation";
+import { computeDomainDeltaReport } from "../lib/multi-panel-delta";
 
 const router = Router({ mergeParams: true });
 
@@ -162,11 +165,85 @@ export async function buildReportInputs(patientId: number) {
     })
     .filter((x): x is ImagingInterpretationLite => x !== null);
 
+  // Enhancement C: include patterns detected for the patient so the
+  // comprehensive synthesist can integrate them into its narrative
+  // (e.g. "Across the last three panels we have seen a persistent
+  // metabolic-syndrome pattern…"). Computed live to stay in sync with
+  // the latest panel; cost is one indexed query plus an in-memory scan.
+  const { scanPatternsForPatient } = await import("../lib/patterns");
+  const detectedPatterns = await scanPatternsForPatient(patientId);
+
+  // Enhancement G: include strong symptom × biomarker correlations.
+  // Computed live to stay in sync; bounded to top 10 |r| ≥ 0.5 by the
+  // engine, so the prompt impact is small.
+  const { scanSymptomBiomarkerCorrelations } = await import("../lib/symptom-correlation");
+  const { symptomsTable } = await import("@workspace/db");
+  const symRows = await db.select().from(symptomsTable).where(eq(symptomsTable.patientId, patientId));
+  const bmObsRows = await db
+    .select({
+      name: biomarkerResultsTable.biomarkerName,
+      testDate: biomarkerResultsTable.testDate,
+      value: biomarkerResultsTable.value,
+    })
+    .from(biomarkerResultsTable)
+    .where(and(eq(biomarkerResultsTable.patientId, patientId), eq(biomarkerResultsTable.isDerived, false)));
+  const symptomCorrelations = scanSymptomBiomarkerCorrelations(
+    symRows.map((s) => ({ name: s.name, loggedAt: s.loggedAt, severity: s.severity })),
+    bmObsRows
+      .filter((b) => b.testDate && b.value !== null)
+      .map((b) => ({ name: b.name, testDate: b.testDate as string, value: parseFloat(b.value as unknown as string) }))
+      .filter((b) => Number.isFinite(b.value)),
+  );
+
+  // Enhancement J — multi-panel delta. Computed from the patient's full
+  // biomarker history so ad-hoc /report calls stay consistent with what
+  // the orchestrator persists. Returns null when there are <2 comparable
+  // panels yet.
+  const domainDeltaReport = computeDomainDeltaReport(
+    allBiomarkers.map((b) => ({
+      name: b.biomarkerName,
+      category: b.category,
+      value: b.value,
+      testDate: b.testDate,
+      optimalRangeLow: b.optimalRangeLow,
+      optimalRangeHigh: b.optimalRangeHigh,
+      labReferenceLow: b.labReferenceLow,
+      labReferenceHigh: b.labReferenceHigh,
+      isDerived: b.isDerived,
+    })),
+  );
+
+  // Enhancement L — load persisted intervention outcomes and aggregate
+  // into personal response profiles (n>=3 only). Read-only here so that
+  // ad-hoc /report calls reflect whatever the orchestrator most recently
+  // persisted without recomputing the (more expensive) outcome derivation.
+  const outcomeRows = await db.select().from(interventionOutcomesTable)
+    .where(eq(interventionOutcomesTable.patientId, patientId));
+  const outcomePairs: OutcomePair[] = outcomeRows.map((r) => ({
+    interventionType: r.interventionType as OutcomePair["interventionType"],
+    interventionName: r.interventionName,
+    biomarkerName: r.biomarkerName,
+    preTestDate: r.preTestDate,
+    preValue: r.preValue,
+    postTestDate: r.postTestDate,
+    postValue: r.postValue,
+    daysElapsed: r.daysElapsed,
+    delta: r.delta,
+    deltaPct: r.deltaPct,
+    direction: r.direction as OutcomePair["direction"],
+    metadata: (r.metadata ?? undefined) as Record<string, unknown> | undefined,
+  }));
+  const personalResponseProfiles = buildPersonalResponseProfiles(outcomePairs);
+
   return {
     panelReconciled,
     biomarkerHistory,
     currentSupplements,
     imagingInterpretations,
+    detectedPatterns,
+    symptomCorrelations,
+    domainDeltaReport,
+    personalResponseProfiles,
     sourceRecordIds: records.map((r) => r.id),
   };
 }
@@ -208,6 +285,16 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       biomarkerHistory: inputs.biomarkerHistory,
       currentSupplements: inputs.currentSupplements,
       imagingInterpretations: inputs.imagingInterpretations,
+      // Enhancement J: ad-hoc /report calls also benefit from the
+      // multi-panel delta. Computed inline here from the patient's full
+      // biomarker history (same canonical input as the orchestrator step).
+      domainDeltaReport: inputs.domainDeltaReport ?? null,
+      // Enhancement L: surface persisted personal-response profiles
+      // (n>=3) so ad-hoc reports also benefit from the patient's
+      // empirical response history.
+      personalResponseProfiles: inputs.personalResponseProfiles && inputs.personalResponseProfiles.length > 0
+        ? inputs.personalResponseProfiles
+        : undefined,
     });
 
     // Persist (PHI-encrypted): narratives in *_narrative text columns,
