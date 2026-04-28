@@ -18,6 +18,7 @@ import {
   processUploadedDocument,
   runInterpretationPipeline,
 } from "../lib/records-processing";
+import { runPostInterpretationPipeline } from "../lib/post-interpretation-orchestrator";
 import { inArray, or } from "drizzle-orm";
 
 /**
@@ -61,6 +62,17 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
     await db.delete(biomarkerResultsTable).where(eq(biomarkerResultsTable.recordId, recordId));
     await db.delete(extractedDataTable).where(eq(extractedDataTable.recordId, recordId));
     await db.delete(recordsTable).where(eq(recordsTable.id, recordId));
+
+    // Re-derive trends, ratios, patterns, comprehensive report and intervention
+    // outcomes from the patient's now-smaller dataset. The orchestrator is
+    // idempotent (delete-then-insert pattern across all derived tables), so a
+    // simple re-run rebuilds the entire intelligence layer to match reality.
+    // Run in the background so the DELETE response stays fast.
+    setImmediate(() => {
+      runPostInterpretationPipeline(patientId).catch((err) => {
+        logger.error({ err, patientId, recordId }, "Post-delete recompute failed");
+      });
+    });
 
     res.status(204).send();
   } catch (err) {
