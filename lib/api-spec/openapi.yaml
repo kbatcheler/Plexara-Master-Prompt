@@ -1018,6 +1018,8 @@ components:
           type: ["string", "null"]
         clinicalSignificance:
           type: ["string", "null"]
+        functionalMedicineNote:
+          type: ["string", "null"]
       required:
         - id
         - biomarkerName

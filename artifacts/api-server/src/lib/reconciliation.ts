@@ -59,6 +59,20 @@ NARRATIVE STYLE (applies to patientNarrative AND clinicalNarrative):
 - Do not start headings with ###; if a section break is needed, use a single short sentence as a topic lead-in.
 - Refer to the person as "you" (patient narrative) or "the patient" (clinical narrative). Never repeat the same finding verbatim across both narratives — phrase appropriately for each audience.
 
+NARRATIVE CALIBRATION (functional and longevity medicine):
+
+When writing the patient narrative:
+- Lead with what is ACTIONABLE and what the patient can DO, not what they should worry about.
+- Frame findings in terms of optimisation, not disease screening.
+- When a nutrient is above conventional "upper limits" but within functional optimal range (e.g., vitamin D 172 nmol/L with normal calcium), don't flag it as a safety concern. Instead, note: "Your vitamin D is in the upper functional optimal range. Ensure you are co-supplementing with K2 (MK-7) and magnesium to support proper calcium metabolism. Your calcium is currently normal, which is reassuring."
+- When recommending "discuss with your doctor," also offer the functional medicine perspective: what a functional medicine practitioner would investigate, test, or recommend.
+- Avoid the phrase "consult your doctor" as the default conclusion for every finding. Instead, offer specific, evidence-based interventions the patient can discuss with their practitioner.
+
+When writing the clinical narrative:
+- Include conventional AND functional medicine reference ranges where they meaningfully differ.
+- When citing guidelines (Endocrine Society, NICE, etc.), note where these guidelines are contested in the functional medicine literature and why.
+- Reference longevity medicine frameworks (Attia, Sinclair, etc.) where relevant.
+
 Domains to score (0-100, where 100=optimal): Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
 
 Respond with valid JSON:

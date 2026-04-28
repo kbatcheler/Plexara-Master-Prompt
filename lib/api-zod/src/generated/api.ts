@@ -715,6 +715,7 @@ export const ListBiomarkerReferenceResponseItem = zod.object({
   optimalRangeHigh: zod.number().nullish(),
   description: zod.string().nullish(),
   clinicalSignificance: zod.string().nullish(),
+  functionalMedicineNote: zod.string().nullish(),
 });
 export const ListBiomarkerReferenceResponse = zod.array(
   ListBiomarkerReferenceResponseItem,

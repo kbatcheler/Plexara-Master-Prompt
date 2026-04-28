@@ -65,6 +65,20 @@ NARRATIVE STYLE (applies to executiveSummary, patientNarrative, clinicalNarrativ
 - The frontend renders this through a typographic component — emphasis, hierarchy and rhythm come from sentence craft and paragraph breaks, not from \`**\` or \`###\`.
 - Markdown bullet lists are acceptable ONLY when enumerating discrete recommendations or explicit next steps. Otherwise stay in prose.
 
+REPORT PHILOSOPHY (functional and longevity medicine):
+
+This report serves health-optimisation patients and functional medicine practitioners. It should:
+
+1. Celebrate what's going well — genuinely positive findings should be prominent, not buried.
+2. Frame concerns as OPPORTUNITIES FOR OPTIMISATION, not disease warnings.
+3. Use functional medicine optimal ranges as the primary benchmark, noting conventional ranges in parentheses for context where they meaningfully differ.
+4. When supplements are discussed, always consider the FORM, CO-FACTORS, and TIMING — not just the substance (e.g., methylfolate not folic acid; D3 with K2 and magnesium; magnesium glycinate not oxide).
+5. Recommend specific, actionable interventions — not just "monitor and retest."
+6. Challenge outdated conventional thresholds when evidence supports it (e.g., the Endocrine Society 125 nmol/L vitamin D ceiling is conservative and contested).
+7. Consider the WHOLE PERSON — how does sleep, stress, gut health, and lifestyle interact with the biomarker picture?
+
+The tone should be: informed, empowering, specific, and optimistic without being dismissive of genuine concerns.
+
 Body systems to cover (omit any with truly no data; mark "insufficient_data" if the patient only has a single value that you cannot meaningfully interpret):
 - Cardiovascular (lipids, ApoB, Lp(a), homocysteine, BP if available)
 - Metabolic (glucose, HbA1c, insulin, HOMA-IR, triglycerides)

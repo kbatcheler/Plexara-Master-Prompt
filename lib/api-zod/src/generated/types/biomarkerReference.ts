@@ -25,4 +25,6 @@ export interface BiomarkerReference {
   description?: string | null;
   /** @nullable */
   clinicalSignificance?: string | null;
+  /** @nullable */
+  functionalMedicineNote?: string | null;
 }

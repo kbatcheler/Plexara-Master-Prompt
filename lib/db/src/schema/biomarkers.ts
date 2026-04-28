@@ -17,6 +17,7 @@ export const biomarkerReferenceTable = pgTable("biomarker_reference", {
   sexAdjusted: boolean("sex_adjusted").default(false),
   description: text("description"),
   clinicalSignificance: text("clinical_significance"),
+  functionalMedicineNote: text("functional_medicine_note"),
 });
 
 export const biomarkerResultsTable = pgTable("biomarker_results", {
