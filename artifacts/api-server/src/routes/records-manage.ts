@@ -13,10 +13,12 @@ import { logger } from "../lib/logger";
 import { assertWithinUploads } from "../lib/uploads";
 import { decryptStructuredJson } from "../lib/phi-crypto";
 import {
+  getPatientLimiter,
   inferMimeFromFileName,
   processUploadedDocument,
   runInterpretationPipeline,
 } from "../lib/records-processing";
+import { inArray, or } from "drizzle-orm";
 
 /**
  * Mutation sub-router — DELETE `/:recordId` and POST `/:recordId/reanalyze`.
@@ -76,6 +78,76 @@ router.delete("/:recordId", requireAuth, async (req, res): Promise<void> => {
 //       the file from disk and re-run the FULL pipeline (extract +
 //       biomarker insert + interpretation). This is the case that was
 //       previously useless: reanalyze would just feed `{}` to the lenses.
+/**
+ * Bulk reprocess: kicks the interpretation pipeline for every record on
+ * this patient that is currently `pending`, `consent_blocked`, or `error`.
+ * Used to unstick a queue after the user has just granted AI consent or
+ * after a transient provider outage. Returns the count of records flipped
+ * back to `pending`. The actual work runs in the background under the
+ * per-patient concurrency limiter, so this endpoint returns immediately.
+ */
+router.post("/reprocess-stuck", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+  try {
+    const stuck = await db.select().from(recordsTable).where(and(
+      eq(recordsTable.patientId, patientId),
+      or(
+        eq(recordsTable.status, "pending"),
+        eq(recordsTable.status, "consent_blocked"),
+        eq(recordsTable.status, "error"),
+      ),
+    ));
+    if (stuck.length === 0) {
+      res.json({ requeued: 0, recordIds: [] });
+      return;
+    }
+    const ids = stuck.map((r) => r.id);
+    await db.update(recordsTable).set({ status: "pending" }).where(inArray(recordsTable.id, ids));
+
+    const limiter = getPatientLimiter(patientId);
+    for (const r of stuck) {
+      setImmediate(() => {
+        limiter(async () => {
+          try {
+            // Prefer cached extraction → cheap re-run; otherwise full pipeline.
+            const [extracted] = await db.select().from(extractedDataTable).where(eq(extractedDataTable.recordId, r.id));
+            const cached = decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson);
+            if (cached && Object.keys(cached).length > 0) {
+              await runInterpretationPipeline(patientId, r.id, cached);
+              return;
+            }
+            if (r.filePath && fs.existsSync(r.filePath)) {
+              assertWithinUploads(r.filePath);
+              await processUploadedDocument({
+                patientId,
+                recordId: r.id,
+                filePath: r.filePath,
+                mimeType: inferMimeFromFileName(r.fileName ?? r.filePath),
+                recordType: r.recordType ?? "blood_panel",
+                testDate: r.testDate ?? null,
+              });
+              return;
+            }
+            await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, r.id));
+          } catch (err) {
+            logger.error({ err, recordId: r.id }, "Bulk reprocess failed");
+            await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, r.id));
+          }
+        }).catch(() => undefined);
+      });
+    }
+    res.json({ requeued: ids.length, recordIds: ids });
+  } catch (err) {
+    logger.error({ err, patientId }, "Failed to bulk-reprocess stuck records");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));

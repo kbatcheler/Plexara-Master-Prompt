@@ -256,6 +256,37 @@ paths:
         "404":
           description: Not found
 
+  /patients/{patientId}/records/reprocess-stuck:
+    post:
+      operationId: reprocessStuckRecords
+      tags: [records]
+      summary: Re-queue every record stuck in pending/consent_blocked/error
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Records re-queued for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requeued, recordIds]
+                properties:
+                  requeued:
+                    type: integer
+                  recordIds:
+                    type: array
+                    items:
+                      type: integer
+        "404":
+          description: Patient not found
+
   /patients/{patientId}/records/{recordId}/reanalyze:
     post:
       operationId: reanalyzeRecord

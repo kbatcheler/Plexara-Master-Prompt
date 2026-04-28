@@ -4,6 +4,7 @@ import {
   useListRecords,
   useDeleteRecord,
   useReanalyzeRecord,
+  useReprocessStuckRecords,
   getListRecordsQueryKey,
 } from "@workspace/api-client-react";
 import { UploadZone } from "../components/dashboard/UploadZone";
@@ -42,8 +43,27 @@ export default function Records() {
 
   const deleteRecord = useDeleteRecord();
   const reanalyzeRecord = useReanalyzeRecord();
+  const reprocessStuck = useReprocessStuckRecords();
   const { toast } = useToast();
   const [retryingId, setRetryingId] = useState<number | null>(null);
+
+  const stuckCount = (records ?? []).filter((r) =>
+    r.status === "pending" || r.status === "consent_blocked" || r.status === "error"
+  ).length;
+
+  const handleReprocessStuck = () => {
+    if (!patientId || stuckCount === 0) return;
+    reprocessStuck.mutate({ patientId }, {
+      onSuccess: (data) => {
+        toast({
+          title: "Re-queued for processing",
+          description: `${data.requeued} record${data.requeued === 1 ? "" : "s"} are being re-analysed in the background.`,
+        });
+        queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(patientId) });
+      },
+      onError: () => toast({ title: "Could not re-queue records", variant: "destructive" }),
+    });
+  };
 
   const handleDelete = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
@@ -116,6 +136,18 @@ export default function Records() {
           <h1 className="text-3xl font-heading font-bold text-foreground tracking-tight">Health Records</h1>
           <p className="text-muted-foreground mt-1">Manage and analyze your diagnostic data.</p>
         </div>
+        {stuckCount > 0 && (
+          <Button
+            variant="outline"
+            onClick={handleReprocessStuck}
+            disabled={reprocessStuck.isPending}
+          >
+            {reprocessStuck.isPending
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <RotateCw className="w-4 h-4 mr-2" />}
+            Re-process {stuckCount} stuck record{stuckCount === 1 ? "" : "s"}
+          </Button>
+        )}
       </div>
 
       <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">

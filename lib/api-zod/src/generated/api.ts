@@ -542,6 +542,18 @@ export const DeleteRecordParams = zod.object({
 });
 
 /**
+ * @summary Re-queue every record stuck in pending/consent_blocked/error
+ */
+export const ReprocessStuckRecordsParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const ReprocessStuckRecordsResponse = zod.object({
+  requeued: zod.number(),
+  recordIds: zod.array(zod.number()),
+});
+
+/**
  * @summary Trigger re-analysis of a record
  */
 export const ReanalyzeRecordParams = zod.object({

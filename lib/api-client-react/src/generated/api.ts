@@ -34,6 +34,7 @@ import type {
   Patient,
   Record,
   RecordDetail,
+  ReprocessStuckRecords200,
   UpdatePatientBody,
   UploadRecordBody,
 } from "./api.schemas";
@@ -838,6 +839,93 @@ export const useDeleteRecord = <
   TContext
 > => {
   return useMutation(getDeleteRecordMutationOptions(options));
+};
+
+/**
+ * @summary Re-queue every record stuck in pending/consent_blocked/error
+ */
+export const getReprocessStuckRecordsUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/records/reprocess-stuck`;
+};
+
+export const reprocessStuckRecords = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<ReprocessStuckRecords200> => {
+  return customFetch<ReprocessStuckRecords200>(
+    getReprocessStuckRecordsUrl(patientId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getReprocessStuckRecordsMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reprocessStuckRecords>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof reprocessStuckRecords>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  const mutationKey = ["reprocessStuckRecords"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof reprocessStuckRecords>>,
+    { patientId: number }
+  > = (props) => {
+    const { patientId } = props ?? {};
+
+    return reprocessStuckRecords(patientId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReprocessStuckRecordsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof reprocessStuckRecords>>
+>;
+
+export type ReprocessStuckRecordsMutationError = ErrorType<void>;
+
+/**
+ * @summary Re-queue every record stuck in pending/consent_blocked/error
+ */
+export const useReprocessStuckRecords = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reprocessStuckRecords>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof reprocessStuckRecords>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  return useMutation(getReprocessStuckRecordsMutationOptions(options));
 };
 
 /**

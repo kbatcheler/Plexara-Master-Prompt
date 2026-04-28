@@ -16,21 +16,21 @@ export const CONSENT_SCOPES: ConsentScopeDef[] = [
     category: "ai",
     label: "Anthropic (Claude) interpretation",
     description: "Allow de-identified health data to be sent to Anthropic's Claude API for the first interpretation lens.",
-    defaultGranted: false,
+    defaultGranted: true,
   },
   {
     key: "ai.openai.send_phi",
     category: "ai",
     label: "OpenAI (GPT) interpretation",
     description: "Allow de-identified health data to be sent to OpenAI's GPT API for the second interpretation lens.",
-    defaultGranted: false,
+    defaultGranted: true,
   },
   {
     key: "ai.gemini.send_phi",
     category: "ai",
     label: "Google (Gemini) interpretation",
     description: "Allow de-identified health data to be sent to Google's Gemini API for the third interpretation lens.",
-    defaultGranted: false,
+    defaultGranted: true,
   },
   {
     key: "sharing.physician",
@@ -44,14 +44,14 @@ export const CONSENT_SCOPES: ConsentScopeDef[] = [
     category: "analytics",
     label: "Aggregate analytics",
     description: "Allow your fully anonymous, aggregated metrics to inform population baselines.",
-    defaultGranted: false,
+    defaultGranted: true,
   },
   {
     key: "research.deidentified",
     category: "research",
     label: "De-identified research participation",
     description: "Allow de-identified data to be used for IRB-approved research studies (you can revoke at any time).",
-    defaultGranted: false,
+    defaultGranted: true,
   },
 ];
 

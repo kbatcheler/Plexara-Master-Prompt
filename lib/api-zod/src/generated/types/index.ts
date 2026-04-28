@@ -44,6 +44,7 @@ export * from "./recordDetailLensCOutput";
 export * from "./recordDetailReconciledOutput";
 export * from "./recordRecordType";
 export * from "./recordStatus";
+export * from "./reprocessStuckRecords200";
 export * from "./updatePatientBody";
 export * from "./updatePatientBodySex";
 export * from "./uploadRecordBody";

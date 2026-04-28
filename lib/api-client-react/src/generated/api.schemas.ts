@@ -588,6 +588,11 @@ export type UploadRecordBody = {
   testDate?: string | null;
 };
 
+export type ReprocessStuckRecords200 = {
+  requeued: number;
+  recordIds: number[];
+};
+
 export type ListBiomarkerResultsParams = {
   /**
    * @nullable

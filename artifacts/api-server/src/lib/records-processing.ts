@@ -55,7 +55,10 @@ import {
  * blow our LLM provider rate limits. Map keys are patientId, lazily-created
  * so we don't carry empty limiters around forever.
  */
-const PATIENT_BATCH_CONCURRENCY = 2;
+const PATIENT_BATCH_CONCURRENCY = (() => {
+  const raw = Number.parseInt(process.env.PATIENT_BATCH_CONCURRENCY ?? "4", 10);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 8) : 4;
+})();
 const patientLimiters = new Map<number, ReturnType<typeof createLimiter>>();
 export function getPatientLimiter(patientId: number) {
   let l = patientLimiters.get(patientId);
