@@ -239,6 +239,7 @@ export function UploadZone() {
           <option value="scan_report">CT / Scan Report</option>
           <option value="ultrasound">Ultrasound</option>
           <option value="genetic_test">Genetic Test</option>
+          <option value="pharmacogenomics">Pharmacogenomics (Drug-Gene)</option>
           <option value="epigenomics">Epigenomics / Methylation</option>
           <option value="wearable_data">Wearable Export</option>
           <option value="pathology_report">Pathology Report</option>

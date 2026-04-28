@@ -26,6 +26,69 @@ Return valid JSON only:
   "extractionNotes": "string"
 }`;
   }
+  // Pharmacogenomics / pharmacokinetics reports (drug-gene interaction
+  // profiles such as AttoDiagnostics, OneOme, Genomind, GenoPharm, etc.).
+  // MUST be matched BEFORE the broader "genetic" branch — these documents
+  // are structured around drug-gene pairs, not biomarkers, and the generic
+  // genetics prompt would lose all the medication-interaction tables.
+  if (t.includes("pharmacogen") || t.includes("pgx") || t.includes("pharmacokinetic") || t.includes("drug-gene") || t.includes("cyp")) {
+    return `You are a pharmacogenomics extraction specialist. Extract ALL drug-gene interaction data from this report.
+
+Return valid JSON only:
+{
+  "documentType": "pharmacogenomics",
+  "phenotypeTable": [
+    {
+      "gene": "string (e.g. CYP2D6, CYP2C19, SLCO1B1, APOE, TPMT, DPYD)",
+      "genotypeResult": "string (e.g. *1/*3, *1/*2, E3/E3)",
+      "activityScore": number or null,
+      "phenotype": "string (e.g. Intermediate Metabolizer, Normal Metabolizer, Poor Metabolizer)"
+    }
+  ],
+  "medicationInteractions": [
+    {
+      "drugName": "string",
+      "brandNames": ["string"],
+      "gene": "string",
+      "phenotype": "string",
+      "severity": 1,
+      "recommendation": "string (the CPIC/FDA/DPWG clinical recommendation)",
+      "source": "string (e.g. CPIC A, FDA 1, DPWG, PharmGKB 2A)"
+    }
+  ],
+  "seriousInteractions": [
+    {
+      "drugName": "string",
+      "recommendation": "string",
+      "reason": "string"
+    }
+  ],
+  "laboratoryResults": [
+    {
+      "gene": "string",
+      "rsid": "string",
+      "result": "string"
+    }
+  ],
+  "specimenDetails": {
+    "barcode": "string or null",
+    "type": "string or null",
+    "collected": "string date or null",
+    "generated": "string date or null"
+  },
+  "biomarkers": [],
+  "extractionNotes": "string"
+}
+
+CRITICAL INSTRUCTIONS:
+- This is a pharmacogenomics report, NOT a standard blood panel. Do NOT look for biomarker values.
+- Focus on extracting the Phenotype Table, Medication Summary, and individual drug-gene interactions.
+- Severity: 1 = mild, 2 = moderate, 3 = serious. For severity 3, extract the full avoid/alternative recommendation. For severity 2, extract the dosing adjustment recommendation.
+- Extract ALL laboratory results (gene, rsID, result) from the Laboratory Report section.
+- The document may be 30-50 pages. Process ALL pages — do not stop at page 10 or 20.
+- Anonymise: replace patient name with [PATIENT], DOB with [DOB], facility with [FACILITY].
+- Return ONLY valid JSON. No markdown, no preamble.`;
+  }
   if (t.includes("genetic") || t.includes("dna") || t.includes("epigen") || t.includes("methylation")) {
     return `You are a genetics/epigenomics extraction specialist. Extract structured data from this report. Do not include patient name.
 
@@ -94,51 +157,67 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
     const imageTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
     type ImageType = typeof imageTypes[number];
 
+    // Pharmacogenomics reports can run 30-50 pages of dense drug-gene
+    // tables, so extraction needs more output tokens than a typical blood
+    // panel and a longer wall-clock budget for large PDFs. The threshold
+    // below uses base64-encoded length (≈ 1.37× raw bytes) to estimate
+    // when to switch to the extended timeout.
+    const LARGE_DOC_BASE64_THRESHOLD = Math.floor(2 * 1024 * 1024 * 1.37); // ~2 MB raw
+    const isLargeDocument = base64File.length > LARGE_DOC_BASE64_THRESHOLD;
+    const extractionTimeout = isLargeDocument ? 120_000 : 60_000;
+    const extractionMaxTokens = 16384;
+
     if (imageTypes.includes(mimeType as ImageType)) {
-      const message = await anthropic.messages.create({
-        model: LLM_MODELS.extraction,
-        max_tokens: 4000,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mimeType as ImageType,
-                  data: base64File,
+      const message = await anthropic.messages.create(
+        {
+          model: LLM_MODELS.extraction,
+          max_tokens: extractionMaxTokens,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mimeType as ImageType,
+                    data: base64File,
+                  },
                 },
-              },
-              { type: "text", text: extractionPrompt },
-            ],
-          },
-        ],
-      });
+                { type: "text", text: extractionPrompt },
+              ],
+            },
+          ],
+        },
+        { timeout: extractionTimeout },
+      );
       const text = message.content[0].type === "text" ? message.content[0].text : "";
       return parseJSONFromLLM(text) as Record<string, unknown>;
     } else if (mimeType === "application/pdf") {
       // Anthropic native PDF support — model receives both visual and text layers.
-      const message = await anthropic.messages.create({
-        model: LLM_MODELS.extraction,
-        max_tokens: 4000,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: {
-                  type: "base64",
-                  media_type: "application/pdf",
-                  data: base64File,
+      const message = await anthropic.messages.create(
+        {
+          model: LLM_MODELS.extraction,
+          max_tokens: extractionMaxTokens,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "document",
+                  source: {
+                    type: "base64",
+                    media_type: "application/pdf",
+                    data: base64File,
+                  },
                 },
-              },
-              { type: "text", text: extractionPrompt },
-            ],
-          },
-        ],
-      });
+                { type: "text", text: extractionPrompt },
+              ],
+            },
+          ],
+        },
+        { timeout: extractionTimeout },
+      );
       const text = message.content[0]?.type === "text" ? message.content[0].text : "";
       return parseJSONFromLLM(text) as Record<string, unknown>;
     } else if (

@@ -4,8 +4,9 @@ import {
   extractedDataTable,
   biomarkerResultsTable,
   interpretationsTable,
+  alertsTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, desc, and } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -30,6 +31,24 @@ import {
 import { buildEnrichedLensPayload } from "./enrichment";
 import { dispatchLenses } from "./lens-dispatch";
 import { persistInterpretation } from "./interpretation-persist";
+
+/**
+ * Per-patient debounce map for the post-interpretation orchestrator.
+ *
+ * When a batch of N records is uploaded, each one independently completes
+ * its 3-lens pipeline and reaches the trigger point below. Without
+ * debouncing, that fires the orchestrator N times — and Steps 2/3/4
+ * (cross-record correlation, comprehensive report, supplement
+ * recommendations) are expensive LLM calls whose outputs are immediately
+ * superseded by the next run. Debouncing collapses N triggers into 1,
+ * fired ORCHESTRATOR_DEBOUNCE_MS after the last record finishes.
+ *
+ * Belt-and-braces: the orchestrator itself ALSO checks for any
+ * still-processing records on entry and skips its expensive LLM steps
+ * if it's an intermediate trigger (see post-interpretation-orchestrator.ts).
+ */
+const orchestratorDebounce = new Map<number, NodeJS.Timeout>();
+const ORCHESTRATOR_DEBOUNCE_MS = 10_000;
 
 /**
  * Per-patient batch processing limiter — caps concurrent 3-lens runs to 2
@@ -151,6 +170,21 @@ export async function processUploadedDocument(opts: {
         extractionConfidence: "high",
       });
 
+      // ── Pharmacogenomics: severity-3 medication interactions become
+      // urgent alerts immediately, BEFORE the 3-lens pipeline runs. PGx
+      // reports never reach the lens layer (they have no biomarkers), so
+      // this is the only place serious drug-gene risks get surfaced to
+      // the patient. We rely on the structured payload from the PGx
+      // extraction prompt — see extraction.ts.
+      if ((structuredData.documentType as string) === "pharmacogenomics") {
+        try {
+          await persistPgxAlerts(patientId, structuredData);
+        } catch (pgxErr) {
+          // Non-fatal: missing alerts won't block extraction success.
+          logger.error({ recordId, patientId, err: pgxErr }, "PGx alert persistence failed");
+        }
+      }
+
       // Enhancement E: persist the extracted draw time (HH:MM 24h) onto
       // the record. Captured at panel level, not per-biomarker — every
       // tube was drawn at the same moment so it's a record-scoped fact.
@@ -253,6 +287,80 @@ export async function processUploadedDocument(opts: {
     logger.error({ recordId, message: (bgErr as Error)?.message }, "Background processing failed");
     await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
   }
+}
+
+/**
+ * Persist urgent alerts for severity-3 medication interactions extracted
+ * from a pharmacogenomics report. These are "avoid" recommendations
+ * (e.g. CPIC A "do not prescribe X if patient is CYP2D6 PM") that
+ * warrant a clinician-facing alert independent of the 3-lens pipeline.
+ *
+ * No `relatedInterpretationId` — PGx reports don't generate
+ * interpretations. The alert is patient-scoped and surfaced via
+ * `triggerType = "pharmacogenomics"` so the dashboard can group them.
+ */
+async function persistPgxAlerts(
+  patientId: number,
+  structuredData: Record<string, unknown>,
+): Promise<void> {
+  const interactions = (structuredData.medicationInteractions as Array<{
+    drugName?: string;
+    gene?: string;
+    phenotype?: string;
+    severity?: number;
+    recommendation?: string;
+    source?: string;
+  }>) || [];
+
+  const urgent = interactions.filter((i) => i.severity === 3 && i.drugName && i.recommendation);
+  if (urgent.length === 0) return;
+
+  await db.insert(alertsTable).values(
+    urgent.map((i) => ({
+      patientId,
+      severity: "urgent",
+      title: `Pharmacogenomic risk: ${i.drugName}`,
+      description: `${i.recommendation}${i.gene ? ` (${i.gene}${i.phenotype ? ` — ${i.phenotype}` : ""})` : ""}${i.source ? ` [${i.source}]` : ""}`,
+      triggerType: "pharmacogenomics",
+      relatedBiomarkers: i.gene ? [i.gene] : null,
+    })),
+  );
+  logger.info(
+    { patientId, urgentCount: urgent.length },
+    "PGx urgent interactions persisted as alerts",
+  );
+}
+
+/**
+ * Look up the most recent pharmacogenomics profile for a patient —
+ * phenotype table + drug-gene interactions — for downstream consumers
+ * (lens enrichment, medication contraindication checks, etc.). Returns
+ * null when the patient has never uploaded a PGx report.
+ */
+export async function getLatestPgxProfile(patientId: number): Promise<{
+  phenotypes: Array<{ gene: string; genotypeResult?: string; phenotype: string; activityScore?: number | null }>;
+  interactions: Array<{ drugName: string; gene?: string; phenotype?: string; severity?: number; recommendation?: string; source?: string }>;
+  extractedAt: Date;
+} | null> {
+  const [latest] = await db
+    .select()
+    .from(extractedDataTable)
+    .where(and(
+      eq(extractedDataTable.patientId, patientId),
+      eq(extractedDataTable.dataType, "pharmacogenomics"),
+    ))
+    .orderBy(desc(extractedDataTable.createdAt))
+    .limit(1);
+  if (!latest) return null;
+
+  const decoded = decryptStructuredJson<Record<string, unknown>>(latest.structuredJson);
+  if (!decoded) return null;
+
+  return {
+    phenotypes: (decoded.phenotypeTable as Array<{ gene: string; genotypeResult?: string; phenotype: string; activityScore?: number | null }>) || [],
+    interactions: (decoded.medicationInteractions as Array<{ drugName: string; gene?: string; phenotype?: string; severity?: number; recommendation?: string; source?: string }>) || [],
+    extractedAt: latest.createdAt,
+  };
 }
 
 // Idempotency: stable key derived from (recordId, anonymised input, version).
@@ -468,25 +576,43 @@ export async function runInterpretationPipeline(
     );
 
     // ── POST-INTERPRETATION INTELLIGENCE PIPELINE ──
-    // Fire-and-forget: trends → correlation → comprehensive report →
-    // supplement recommendations → protocol matching. setImmediate
-    // decouples the async work from the HTTP response of the upload —
-    // the user gets their record marked complete instantly, and the
-    // downstream synthesis lands a few seconds later.
-    setImmediate(async () => {
-      try {
-        const { runPostInterpretationPipeline } = await import("./post-interpretation-orchestrator");
-        await runPostInterpretationPipeline(patientId);
-      } catch (orchErr) {
-        logger.error({ orchErr, patientId, recordId }, "Post-interpretation orchestrator failed");
-      }
-    });
+    // Per-patient debounced trigger (see scheduleOrchestrator below).
+    scheduleOrchestrator(patientId, recordId);
   } catch (err) {
     logger.error({ err, recordId, interpretationId }, "Interpretation pipeline failed");
     await db.update(recordsTable)
       .set({ status: "error" })
       .where(eq(recordsTable.id, recordId));
+    // Even on failure, schedule a debounced orchestrator run so that if
+    // this was the LAST in-flight record of a batch, the successful
+    // sibling records still get their final synthesis pass. Without
+    // this, an error on the trailing record could leave the orchestrator
+    // stuck in intermediate-skip mode forever for that batch.
+    scheduleOrchestrator(patientId, recordId);
   }
+}
+
+/**
+ * Per-patient debounced trigger: trends → correlation → comprehensive
+ * report → supplement recommendations → protocol matching. The
+ * orchestrator only fires ORCHESTRATOR_DEBOUNCE_MS after the LAST
+ * record for this patient finishes (success OR failure). A 6-panel
+ * batch upload therefore runs the orchestrator exactly once instead of
+ * 6 times, saving ~5 redundant comprehensive-report LLM calls.
+ */
+function scheduleOrchestrator(patientId: number, recordId: number): void {
+  const existingTimer = orchestratorDebounce.get(patientId);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(async () => {
+    orchestratorDebounce.delete(patientId);
+    try {
+      const { runPostInterpretationPipeline } = await import("./post-interpretation-orchestrator");
+      await runPostInterpretationPipeline(patientId);
+    } catch (orchErr) {
+      logger.error({ orchErr, patientId, recordId }, "Post-interpretation orchestrator failed");
+    }
+  }, ORCHESTRATOR_DEBOUNCE_MS);
+  orchestratorDebounce.set(patientId, timer);
 }
 
 /**

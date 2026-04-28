@@ -12,6 +12,33 @@ import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, Trending
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
 import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
 
+/**
+ * Drug-class → example medications fallback for the medication
+ * autocomplete. RxTerms only indexes drug NAMES, so a query like
+ * "statins" or "PPI" returns zero results. When the user's typed text
+ * matches one of these class keys, the empty-state surface offers the
+ * example drugs as clickable suggestions instead of a dead-end.
+ *
+ * Each entry is `"Generic (Brand)"`; the autocomplete component pastes
+ * just the generic name into the input when clicked.
+ */
+const DRUG_CLASS_HINTS: Record<string, string[]> = {
+  statins: ["atorvastatin (Lipitor)", "rosuvastatin (Crestor)", "simvastatin (Zocor)", "pravastatin (Pravachol)"],
+  statin: ["atorvastatin (Lipitor)", "rosuvastatin (Crestor)", "simvastatin (Zocor)", "pravastatin (Pravachol)"],
+  ppi: ["omeprazole (Prilosec)", "pantoprazole (Protonix)", "esomeprazole (Nexium)", "lansoprazole (Prevacid)"],
+  "proton pump": ["omeprazole (Prilosec)", "pantoprazole (Protonix)", "esomeprazole (Nexium)"],
+  "blood pressure": ["lisinopril (Zestril)", "amlodipine (Norvasc)", "losartan (Cozaar)", "metoprolol (Lopressor)"],
+  "blood thinner": ["apixaban (Eliquis)", "rivaroxaban (Xarelto)", "warfarin (Coumadin)", "clopidogrel (Plavix)"],
+  ssri: ["sertraline (Zoloft)", "escitalopram (Lexapro)", "fluoxetine (Prozac)", "citalopram (Celexa)"],
+  antidepressant: ["sertraline (Zoloft)", "escitalopram (Lexapro)", "fluoxetine (Prozac)", "venlafaxine (Effexor)"],
+  diabetes: ["metformin (Glucophage)", "semaglutide (Ozempic)", "empagliflozin (Jardiance)", "sitagliptin (Januvia)"],
+  thyroid: ["levothyroxine (Synthroid)", "liothyronine (Cytomel)"],
+  "birth control": ["ethinyl estradiol (Yaz)", "norethindrone (Camila)", "drospirenone (Yasmin)"],
+  beta: ["metoprolol (Lopressor)", "atenolol (Tenormin)", "propranolol (Inderal)", "carvedilol (Coreg)"],
+  ace: ["lisinopril (Zestril)", "enalapril (Vasotec)", "ramipril (Altace)"],
+  arb: ["losartan (Cozaar)", "valsartan (Diovan)", "telmisartan (Micardis)"],
+};
+
 interface Supplement {
   id: number;
   name: string;
@@ -453,30 +480,36 @@ function MedicationsPanel({ patientId }: { patientId: number }) {
             className="grid grid-cols-1 md:grid-cols-[2fr_1.4fr_1fr_1fr_auto] gap-2"
             onSubmit={(e) => { e.preventDefault(); if (form.name.trim()) addMut.mutate(form); }}
           >
-            <NihAutocompleteInput
-              value={form.name}
-              onChange={(name) => setForm((f) => ({
-                ...f,
-                name,
-                // Free-text edits invalidate any previously-picked
-                // RXCUI so we don't silently pin the wrong code to a
-                // mistyped name.
-                rxNormCui: null,
-              }))}
-              onSelect={(item: NihAutocompleteSuggestion) => setForm((f) => ({
-                ...f,
-                name: item.label,
-                rxNormCui: item.code,
-              }))}
-              endpoint="/lookup/rxterms"
-              mapItem={(raw) => {
-                const r = raw as { rxcui?: string; displayName?: string };
-                if (!r.rxcui || !r.displayName) return null;
-                return { code: r.rxcui, label: r.displayName, badge: "RxTerms" };
-              }}
-              placeholder="e.g. atorvastatin"
-              data-testid="med-name-input"
-            />
+            <div>
+              <NihAutocompleteInput
+                value={form.name}
+                onChange={(name) => setForm((f) => ({
+                  ...f,
+                  name,
+                  // Free-text edits invalidate any previously-picked
+                  // RXCUI so we don't silently pin the wrong code to a
+                  // mistyped name.
+                  rxNormCui: null,
+                }))}
+                onSelect={(item: NihAutocompleteSuggestion) => setForm((f) => ({
+                  ...f,
+                  name: item.label,
+                  rxNormCui: item.code,
+                }))}
+                endpoint="/lookup/rxterms"
+                mapItem={(raw) => {
+                  const r = raw as { rxcui?: string; displayName?: string };
+                  if (!r.rxcui || !r.displayName) return null;
+                  return { code: r.rxcui, label: r.displayName, badge: "RxTerms" };
+                }}
+                placeholder="Type drug name e.g. Crestor, rosuvastatin, omeprazole..."
+                data-testid="med-name-input"
+                emptyStateHints={DRUG_CLASS_HINTS}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Search by brand name (Crestor) or generic name (rosuvastatin) — start typing to see suggestions.
+              </p>
+            </div>
             <select
               value={form.drugClass}
               onChange={(e) => setForm((f) => ({ ...f, drugClass: e.target.value }))}

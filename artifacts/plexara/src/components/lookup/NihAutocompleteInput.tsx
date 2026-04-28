@@ -51,6 +51,20 @@ interface Props {
   placeholder?: string;
   inputClassName?: string;
   "data-testid"?: string;
+  /**
+   * Optional class-name → example-list map. When the user types a query
+   * that includes one of these keys but the upstream lookup returns
+   * nothing, we surface the example list as clickable "did you mean…"
+   * suggestions. Used by the medications input to handle drug-class
+   * names like "statins" / "PPI" / "blood pressure" gracefully —
+   * RxTerms searches by drug name, not class, so those queries
+   * otherwise hit a confusing empty state.
+   *
+   * Each example entry should be of the form `"Generic (Brand)"`; the
+   * portion before the first " (" is what gets pasted into the input
+   * when the user clicks it.
+   */
+  emptyStateHints?: Record<string, string[]>;
 }
 
 const DEBOUNCE_MS = 300;
@@ -65,6 +79,7 @@ export function NihAutocompleteInput({
   placeholder,
   inputClassName,
   "data-testid": testId,
+  emptyStateHints,
 }: Props) {
   const [suggestions, setSuggestions] = useState<NihAutocompleteSuggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -145,7 +160,11 @@ export function NihAutocompleteInput({
     }
   }
 
-  const showDropdown = open && (loading || suggestions.length > 0);
+  // Render the dropdown whenever it's open and the user has typed enough
+  // to have queried — even with zero results — so the empty-state
+  // surface (especially the drug-class hint UI) actually appears
+  // instead of silently disappearing.
+  const showDropdown = open && value.trim().length >= MIN_QUERY;
 
   return (
     <div ref={containerRef} className="relative">
@@ -179,9 +198,51 @@ export function NihAutocompleteInput({
           {loading && suggestions.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
           ) : suggestions.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              No matches — press Enter to keep what you typed.
-            </div>
+            (() => {
+              const matchedClass = emptyStateHints
+                ? Object.entries(emptyStateHints).find(
+                    ([key]) => value.toLowerCase().includes(key.toLowerCase()),
+                  )
+                : undefined;
+              if (matchedClass) {
+                return (
+                  <div className="px-3 py-2 text-xs text-muted-foreground space-y-1">
+                    <p className="font-medium text-foreground">
+                      "{value.trim()}" looks like a drug class. Try a specific medication name:
+                    </p>
+                    <ul className="space-y-0.5">
+                      {matchedClass[1].map((drug) => {
+                        const generic = drug.split(" (")[0];
+                        return (
+                          <li key={drug}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                onChange(generic);
+                                inputRef.current?.focus();
+                              }}
+                              className="cursor-pointer hover:text-foreground text-left w-full"
+                              data-testid={`${testId ?? "nih-autocomplete"}-class-hint-${generic}`}
+                            >
+                              → {drug}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p className="pt-1 text-[11px]">
+                      Or press Enter to keep what you typed.
+                    </p>
+                  </div>
+                );
+              }
+              return (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  No matches — press Enter to keep what you typed.
+                </div>
+              );
+            })()
           ) : (
             suggestions.map((s, i) => (
               <button

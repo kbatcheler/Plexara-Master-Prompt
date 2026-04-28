@@ -12,7 +12,7 @@ import {
   protocolAdoptionsTable,
   imagingStudiesTable,
 } from "@workspace/db";
-import { and, eq, desc, asc, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, desc, asc, isNotNull, isNull, sql, inArray } from "drizzle-orm";
 import { logger } from "./logger";
 import { runImagingInterpretation } from "./imaging-interpretation";
 import {
@@ -153,6 +153,39 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
 
   const allowAnthropic = await isProviderAllowed(patient.accountId, "anthropic");
 
+  // ── Intermediate-run guard ───────────────────────────────────────────
+  // If any records for this patient are still in-flight (`pending` =
+  // queued for processing, `processing` = lens pipeline in progress),
+  // this is an intermediate trigger that landed mid-batch (e.g. the
+  // debounce window expired between batch panels). Skip the expensive
+  // LLM steps (correlation, comprehensive report, supplements, protocol
+  // scan) — they'll re-run on the final debounced trigger when all
+  // records are complete. Cheap local computation steps (trends, ratios,
+  // patterns, depletions, delta, longitudinal learning) ALWAYS run
+  // because they update the gauges and timeline the user sees while
+  // waiting.
+  //
+  // Note: this is a coarse TOCTOU check. A new record could start
+  // processing AFTER this query but BEFORE Steps 2/3/4 run. That's
+  // fine — the new record's own completion will re-arm the debounce
+  // and fire one more orchestrator pass that picks up the freshly
+  // landed data. The advisory lock guarantees serialization between
+  // those passes.
+  const pendingRecords = await db
+    .select({ id: recordsTable.id })
+    .from(recordsTable)
+    .where(and(
+      eq(recordsTable.patientId, patientId),
+      inArray(recordsTable.status, ["pending", "processing"]),
+    ));
+  const isIntermediateRun = pendingRecords.length > 0;
+  if (isIntermediateRun) {
+    logger.info(
+      { patientId, pendingCount: pendingRecords.length },
+      "Intermediate orchestrator run — skipping LLM steps (will re-run when all records complete)",
+    );
+  }
+
   // ── Step 1: Trends + change-alerts + trajectory-alerts ────────────────
   // Must run FIRST because the comprehensive report and supplement engine
   // both want history-aware context.
@@ -223,6 +256,9 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
 
   // ── Step 2: Cross-record correlation (≥2 complete records) ────────────
   try {
+    if (isIntermediateRun) {
+      // Skip — will run on the final debounced trigger.
+    } else {
     const completeRecords = await db
       .select({ id: recordsTable.id })
       .from(recordsTable)
@@ -278,6 +314,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
         report.correlationGenerated = true;
       }
     }
+    } // end isIntermediateRun guard
   } catch (err) {
     logger.error({ err, patientId, step: "correlation" }, "Orchestrator step failed");
     report.errors.correlation = (err as Error)?.message ?? "unknown";
@@ -288,7 +325,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   // so we don't duplicate the per-record reconciliation join logic.
   let latestReportSections: ComprehensiveReportOutput | null = null;
   try {
-    if (allowAnthropic) {
+    if (!isIntermediateRun && allowAnthropic) {
       const inputs = await buildReportInputs(patientId);
       const haveAtLeastOne = inputs.panelReconciled.filter((p) => p.reconciledOutput).length > 0;
       if (haveAtLeastOne) {
@@ -342,7 +379,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   // Latest reconciled interpretation + active stack + history block +
   // cross-panel context from the freshly-generated comprehensive report.
   try {
-    if (allowAnthropic) {
+    if (!isIntermediateRun && allowAnthropic) {
       const [latest] = await db
         .select()
         .from(interpretationsTable)
@@ -426,6 +463,11 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   // ensure a `suggested` adoption row exists. Never auto-promote to
   // `active` — that requires explicit user adoption.
   try {
+    if (isIntermediateRun) {
+      // Skip — will run on the final debounced trigger so protocol
+      // suggestions reflect the full batch's biomarker state, not a
+      // partial mid-batch view.
+    } else {
     const protocols = await db.select().from(protocolsTable);
     const biomarkers = await db
       .select()
@@ -482,6 +524,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       });
       report.protocolsSuggested++;
     }
+    } // end isIntermediateRun guard
   } catch (err) {
     logger.error({ err, patientId, step: "protocols" }, "Orchestrator step failed");
     report.errors.protocols = (err as Error)?.message ?? "unknown";
