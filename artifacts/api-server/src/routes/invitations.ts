@@ -251,7 +251,11 @@ publicInvitationsRouter.get("/:token", async (req, res): Promise<void> => {
 // accept the same patient twice we return the existing membership.
 publicInvitationsRouter.post("/:token/accept", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
-  const token = req.params.token;
+  // With requireAuth in the middleware chain, Express 5's type inference
+  // widens req.params.token to string | string[]; narrow it here so the
+  // hashToken(string) call typechecks. Matches the GET handler above.
+  const rawToken = req.params.token;
+  const token = typeof rawToken === "string" ? rawToken : "";
   if (!token || token.length < 32) {
     res.status(400).json({ error: "Invalid token" });
     return;
