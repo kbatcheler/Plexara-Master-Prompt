@@ -101,4 +101,87 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
   }
 });
 
+/**
+ * GET /:recordId/progress  (Enhancement A3)
+ *
+ * Lightweight, polling-friendly status endpoint for the multi-stage
+ * upload UI. Returns the record status plus per-lens progress so the
+ * frontend can show a streaming "1 of 3 lenses complete" indicator
+ * instead of a blank loading state.
+ *
+ * The shape is deliberately small (no PHI, no large narratives) so it
+ * is safe to poll every 1-2 seconds without hammering the DB. Two
+ * cheap queries: records by id (always), interpretations by trigger
+ * record (only while still processing).
+ *
+ * Response shape (additive — no existing endpoint changed):
+ *   { status, lensesCompleted, stages: { extracted, lensA, lensB, lensC, reconciled } }
+ */
+router.get("/:recordId/progress", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt(req.params.patientId as string);
+  const recordId = parseInt(req.params.recordId as string);
+
+  if (!Number.isFinite(patientId) || !Number.isFinite(recordId)) {
+    res.status(400).json({ error: "Invalid patient or record id" });
+    return;
+  }
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+
+  try {
+    const [record] = await db
+      .select({ status: recordsTable.status })
+      .from(recordsTable)
+      .where(and(eq(recordsTable.id, recordId), eq(recordsTable.patientId, patientId)));
+
+    if (!record) {
+      res.status(404).json({ error: "Record not found" });
+      return;
+    }
+
+    // Only fetch the interpretation row while still in flight — for
+    // completed/errored records the stages are derivable purely from
+    // record.status, saving a join.
+    let lensesCompleted = 0;
+    if (record.status === "processing" || record.status === "pending") {
+      const [interp] = await db
+        .select({ lensesCompleted: interpretationsTable.lensesCompleted })
+        .from(interpretationsTable)
+        .where(and(
+          eq(interpretationsTable.patientId, patientId),
+          eq(interpretationsTable.triggerRecordId, recordId),
+        ))
+        .orderBy(desc(interpretationsTable.createdAt))
+        .limit(1);
+      lensesCompleted = interp?.lensesCompleted ?? 0;
+    } else if (record.status === "complete") {
+      // Once finalised, all three lenses are by definition done (a
+      // 2-of-3 partial counts the surviving lenses; orchestrator marks
+      // the third as failed but completed-counter still reflects what
+      // ran).
+      lensesCompleted = 3;
+    }
+
+    const stages = {
+      extracted: record.status !== "pending",
+      lensA: lensesCompleted >= 1,
+      lensB: lensesCompleted >= 2,
+      lensC: lensesCompleted >= 3,
+      reconciled: record.status === "complete",
+    };
+
+    res.json({
+      status: record.status,
+      lensesCompleted,
+      stages,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to read record progress");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;

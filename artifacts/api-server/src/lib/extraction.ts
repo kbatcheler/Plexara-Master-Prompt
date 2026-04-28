@@ -94,7 +94,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
 
     if (imageTypes.includes(mimeType as ImageType)) {
       const message = await anthropic.messages.create({
-        model: LLM_MODELS.utility,
+        model: LLM_MODELS.extraction,
         max_tokens: 4000,
         messages: [
           {
@@ -118,7 +118,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
     } else if (mimeType === "application/pdf") {
       // Anthropic native PDF support — model receives both visual and text layers.
       const message = await anthropic.messages.create({
-        model: LLM_MODELS.utility,
+        model: LLM_MODELS.extraction,
         max_tokens: 4000,
         messages: [
           {
@@ -154,7 +154,7 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
       }
       const truncated = decoded.length > 60000 ? decoded.slice(0, 60000) + "\n…[truncated]" : decoded;
       const message = await anthropic.messages.create({
-        model: LLM_MODELS.utility,
+        model: LLM_MODELS.extraction,
         max_tokens: 4000,
         messages: [
           {

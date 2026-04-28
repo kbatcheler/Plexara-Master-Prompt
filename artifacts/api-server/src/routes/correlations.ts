@@ -51,6 +51,11 @@ router.get("/timeline", requireAuth, async (req, res): Promise<void> => {
     }> = {};
 
     for (const b of allBiomarkers) {
+      // Derived rows (Enhancement B) have recordId=null and aren't surfaced
+      // by the per-record correlation grouping below — skip them so the
+      // recordId field stays a real number.
+      if (b.recordId === null) continue;
+      const recordId = b.recordId;
       const key = b.biomarkerName;
       if (!grouped[key]) {
         grouped[key] = {
@@ -65,7 +70,7 @@ router.get("/timeline", requireAuth, async (req, res): Promise<void> => {
         };
       }
       grouped[key].points.push({
-        recordId: b.recordId,
+        recordId,
         date: b.testDate,
         value: b.value,
       });
@@ -134,10 +139,16 @@ router.post("/generate", requireAuth, async (req, res): Promise<void> => {
 
     const panelMap: Record<number, { testDate: string | null; biomarkers: Array<{ name: string; value: number | null; unit: string | null; category: string | null }> }> = {};
     for (const b of allBiomarkers) {
-      if (!panelMap[b.recordId]) {
-        panelMap[b.recordId] = { testDate: b.testDate, biomarkers: [] };
+      // Skip derived rows (Enhancement B): they have recordId=null because
+      // they're computed across the patient's full history, not anchored to
+      // a single uploaded record. Cross-record correlation operates per
+      // panel, so derived rows have no place here.
+      if (b.recordId === null) continue;
+      const rid = b.recordId;
+      if (!panelMap[rid]) {
+        panelMap[rid] = { testDate: b.testDate, biomarkers: [] };
       }
-      panelMap[b.recordId].biomarkers.push({
+      panelMap[rid].biomarkers.push({
         name: b.biomarkerName,
         value: b.value !== null ? Number(b.value) : null,
         unit: b.unit,

@@ -22,7 +22,10 @@ export const biomarkerReferenceTable = pgTable("biomarker_reference", {
 export const biomarkerResultsTable = pgTable("biomarker_results", {
   id: serial("id").primaryKey(),
   patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
-  recordId: integer("record_id").notNull().references(() => recordsTable.id, { onDelete: "cascade" }),
+  // Nullable as of Enhancement B: derived biomarker rows (e.g. computed
+  // ratios such as TG:HDL) don't originate from a single uploaded record,
+  // so they have no record FK. Lab-extracted rows always carry one.
+  recordId: integer("record_id").references(() => recordsTable.id, { onDelete: "cascade" }),
   biomarkerName: text("biomarker_name").notNull(),
   category: text("category"),
   value: numeric("value"),
@@ -32,6 +35,10 @@ export const biomarkerResultsTable = pgTable("biomarker_results", {
   optimalRangeLow: numeric("optimal_range_low"),
   optimalRangeHigh: numeric("optimal_range_high"),
   testDate: text("test_date"),
+  // True when this row is a derived value (e.g. a computed ratio from
+  // Enhancement B). Trend/baseline/dashboard surfaces filter on this so
+  // derived ratios can be styled differently from lab-reported markers.
+  isDerived: boolean("is_derived").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

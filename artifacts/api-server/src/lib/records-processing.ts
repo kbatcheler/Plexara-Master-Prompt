@@ -16,6 +16,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { stripPII, hashData } from "./pii";
+import { computeRatiosFromData } from "./ratios";
+import { getAllBiomarkerReferences } from "./biomarker-cache";
 import {
   runLensA,
   runLensB,
@@ -120,6 +122,12 @@ export async function processUploadedDocument(opts: {
 
     let extractionFailed = false;
     let extractionFailureReason: string | null = null;
+    // Holds the deferred biomarker batch insert (Enhancement A2). Started
+    // during extraction, awaited inside the interpretation pipeline before
+    // the post-interpretation orchestrator runs so trend/ratio/pattern
+    // engines see this record's rows. `undefined` if extraction returned
+    // no biomarkers (e.g. imaging report) or used a cached extraction.
+    let biomarkerWritePromise: Promise<void> | undefined = undefined;
 
     // ── EXTRACTION CACHE (Phase 3b)
     // If this record already has an extraction row (e.g. re-analyse path,
@@ -156,11 +164,17 @@ export async function processUploadedDocument(opts: {
       }>) || [];
 
       if (biomarkers.length > 0) {
-        const refData = await db.select().from(biomarkerReferenceTable);
-        const refMap = new Map(refData.map(r => [r.biomarkerName.toLowerCase(), r]));
-        for (const bm of biomarkers) {
+        // Build the row payloads synchronously (no I/O), then defer the
+        // actual INSERTs to a single non-awaited promise that we hand to
+        // the interpretation pipeline. This removes biomarker DB latency
+        // (~1-2s for a typical panel) from the lens-dispatch critical
+        // path — lenses already read the in-memory `structuredData`, not
+        // the DB, so they don't need the rows to exist yet.
+        // (Enhancement A2 — overlap biomarker DB write with lens dispatch)
+        const refMap = await getAllBiomarkerReferences();
+        const rows = biomarkers.map((bm) => {
           const ref = refMap.get(bm.name.toLowerCase());
-          await db.insert(biomarkerResultsTable).values({
+          return {
             patientId,
             recordId,
             biomarkerName: bm.name,
@@ -172,8 +186,20 @@ export async function processUploadedDocument(opts: {
             optimalRangeLow: ref?.optimalRangeLow ? ref.optimalRangeLow.toString() : null,
             optimalRangeHigh: ref?.optimalRangeHigh ? ref.optimalRangeHigh.toString() : null,
             testDate: (structuredData.testDate as string) || testDate || null,
-          });
-        }
+          };
+        });
+        // Single batch insert, started immediately, awaited later by the
+        // pipeline before the post-interpretation orchestrator runs (so
+        // trend/ratio/pattern engines see this record's biomarkers).
+        biomarkerWritePromise = db.insert(biomarkerResultsTable).values(rows).then(
+          () => undefined,
+          (err) => {
+            logger.error({ recordId, err }, "Biomarker batch insert failed");
+            // Re-throw so awaiters can detect the failure and mark the
+            // record as errored rather than silently losing data.
+            throw err;
+          },
+        );
       } else if (recordTypeRequiresBiomarkers(recordType)) {
         extractionFailed = true;
         extractionFailureReason = "Extraction returned no biomarkers";
@@ -202,7 +228,9 @@ export async function processUploadedDocument(opts: {
       return;
     }
 
-    await runInterpretationPipeline(patientId, recordId, structuredData);
+    await runInterpretationPipeline(patientId, recordId, structuredData, {
+      biomarkerWritePromise,
+    });
   } catch (bgErr) {
     logger.error({ recordId, message: (bgErr as Error)?.message }, "Background processing failed");
     await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
@@ -236,10 +264,18 @@ async function loadBiomarkerHistory(patientId: number, excludeRecordId: number):
       unit: biomarkerResultsTable.unit,
       testDate: biomarkerResultsTable.testDate,
       recordId: biomarkerResultsTable.recordId,
+      isDerived: biomarkerResultsTable.isDerived,
       createdAt: biomarkerResultsTable.createdAt,
     })
     .from(biomarkerResultsTable)
-    .where(eq(biomarkerResultsTable.patientId, patientId));
+    // Exclude derived rows (Enhancement B): history must be raw lab values
+    // only, otherwise the lens's "history" block would contain ratios as if
+    // they were biomarkers, and a future ratio recompute could feed on
+    // prior ratio outputs (ratios on ratios).
+    .where(and(
+      eq(biomarkerResultsTable.patientId, patientId),
+      eq(biomarkerResultsTable.isDerived, false),
+    ));
 
   const grouped = new Map<string, BiomarkerHistoryEntry>();
   for (const r of rows) {
@@ -264,9 +300,31 @@ export async function runInterpretationPipeline(
   patientId: number,
   recordId: number,
   structuredData: Record<string, unknown>,
-  opts: { version?: number } = {},
+  opts: { version?: number; biomarkerWritePromise?: Promise<void> } = {},
 ): Promise<void> {
   const anonymised = stripPII(structuredData) as AnonymisedData;
+  // Enhancement B: compute derived biomarker ratios in-memory from the
+  // freshly-extracted panel and surface them inside the same JSON dump
+  // the lenses receive. Lenses see ratios alongside raw values without
+  // any prompt change — they're pure additive context. We keep the
+  // original `anonymised` for the idempotency key (so re-runs stay
+  // stable) but use the enriched payload for actual lens dispatch and
+  // for the audit hash (audit must reflect what was actually sent).
+  const derivedRatios = computeRatiosFromData(structuredData as Record<string, unknown>);
+  const anonymisedForLens: AnonymisedData = derivedRatios.length
+    ? { ...anonymised, derivedRatios: derivedRatios.map((r) => ({
+        name: r.spec.name,
+        slug: r.spec.slug,
+        category: r.spec.category,
+        ratio: Number(r.ratio.toFixed(3)),
+        status: r.status,
+        numerator: { name: r.spec.numerator, value: r.numeratorValue },
+        denominator: { name: r.spec.denominator, value: r.denominatorValue },
+        optimalRange: { low: r.spec.optimalLow, high: r.spec.optimalHigh },
+        clinicalRange: { low: r.spec.clinicalLow, high: r.spec.clinicalHigh },
+        interpretation: r.interpretation,
+      })) }
+    : anonymised;
   const version = opts.version ?? 1;
   const idempotencyKey = makeIdempotencyKey(recordId, anonymised, version);
 
@@ -365,39 +423,41 @@ export async function runInterpretationPipeline(
 
     const lensAPromise = (async () => {
       if (!allowAnthropic) throw new Error("consent_revoked:anthropic");
-      const out = await runLensA(anonymised, patientCtx, history);
+      const out = await runLensA(anonymisedForLens, patientCtx, history);
       await bumpCompletedAndPersist("lensAOutput", out);
       await db.insert(auditLogTable).values({
         patientId,
         actionType: "llm_interpretation",
         llmProvider: "anthropic",
-        dataSentHash: hashData(anonymised),
+        dataSentHash: hashData(anonymisedForLens),
       });
       return out;
     })();
 
     const lensBPromise = (async () => {
       if (!allowOpenAi) throw new Error("consent_revoked:openai");
-      const out = await runLensB(anonymised, patientCtx, history);
+      const out = await runLensB(anonymisedForLens, patientCtx, history);
       await bumpCompletedAndPersist("lensBOutput", out);
       await db.insert(auditLogTable).values({
         patientId,
         actionType: "llm_interpretation",
         llmProvider: "openai",
-        dataSentHash: hashData(anonymised),
+        dataSentHash: hashData(anonymisedForLens),
       });
       return out;
     })();
 
     const lensCPromise = (async () => {
       if (!allowGemini) throw new Error("consent_revoked:gemini");
-      const out = await runLensC(anonymised, patientCtx, history);
+      const out = await runLensC(anonymisedForLens, patientCtx, history);
       await bumpCompletedAndPersist("lensCOutput", out);
       await db.insert(auditLogTable).values({
         patientId,
         actionType: "llm_interpretation",
         llmProvider: "gemini",
-        dataSentHash: hashData(anonymised),
+        // Audit must reflect what was actually sent — the enriched payload
+        // (with derivedRatios) is what Lens C received. Mirrors lenses A/B.
+        dataSentHash: hashData(anonymisedForLens),
       });
       return out;
     })();
@@ -505,6 +565,28 @@ export async function runInterpretationPipeline(
           })),
       };
       const completedCount = [lensAOutput, lensBOutput, lensCOutput].filter(Boolean).length;
+
+      // ── Await deferred biomarker insert (Enhancement A2) ──────────────
+      // The biomarker batch insert was kicked off concurrently with lens
+      // dispatch in `processUploadedDocument`. Both paths (lenses and DB
+      // write) can finish in either order. We MUST await before the
+      // finalisation transaction because the baseline-snapshot branch
+      // (below) reads `biomarker_results` for this patient and would
+      // otherwise miss this record's rows on a brand-new account.
+      // Failure here is non-fatal for the interpretation itself — we log
+      // and continue so the user still sees their lens output, but the
+      // post-interpretation orchestrator will detect the missing rows
+      // and re-attempt downstream computations on the next upload.
+      if (opts.biomarkerWritePromise) {
+        try {
+          await opts.biomarkerWritePromise;
+        } catch (bwErr) {
+          logger.error(
+            { err: bwErr, patientId, recordId },
+            "Deferred biomarker write failed — continuing with interpretation",
+          );
+        }
+      }
 
       // ── Atomic finalisation: reconciled output + gauge upserts + alert
       // replacement + record-status flip happen as one tx. A crash mid-tx

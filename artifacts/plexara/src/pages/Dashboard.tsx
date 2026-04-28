@@ -10,6 +10,7 @@ import { RecordDetailModal } from "../components/dashboard/RecordDetailModal";
 import { UnifiedHealthScoreHero } from "../components/dashboard/UnifiedHealthScoreHero";
 import { IntelligenceSummary } from "../components/dashboard/IntelligenceSummary";
 import { SupplementImpactCard } from "../components/dashboard/SupplementImpactCard";
+import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard";
 import { AlertBanner, type AlertSeverity } from "../components/AlertBanner";
 import { ChevronRight, FileText, Activity } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -165,6 +166,9 @@ export default function Dashboard() {
 
       {/* ── Intelligence summary (auto-generated post-interpretation) ── */}
       {patientId && <IntelligenceSummary patientId={patientId} />}
+
+      {/* ── Derived biomarker ratios (Enhancement B) ── */}
+      {patientId && <BiomarkerRatiosCard patientId={patientId} />}
 
       {/* ── Supplement impact (closes the feedback loop) ── */}
       {patientId && <SupplementImpactCard patientId={patientId} />}

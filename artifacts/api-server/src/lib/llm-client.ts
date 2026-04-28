@@ -52,10 +52,15 @@ export const LLM_MODELS = {
   lensB: process.env.LLM_LENS_B_MODEL || "gpt-5.2",
   lensC: process.env.LLM_LENS_C_MODEL || "gemini-2.5-flash",
   reconciliation: process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
-  // Utility model — used for lighter Claude calls (extraction, narratives,
-  // gauge labels). Defaults to the reconciliation model so the pipeline
-  // stays internally consistent without extra config.
+  // Utility model — used for lighter Claude calls (narratives, gauge
+  // labels). Defaults to the reconciliation model so the pipeline stays
+  // internally consistent without extra config.
   utility: process.env.LLM_UTILITY_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
+  // Extraction model — structured data extraction from PDFs/images is a
+  // narrow shape-matching task that doesn't need the full reasoning power
+  // of the lens/reconciliation models. Defaulting to a faster/cheaper
+  // Haiku-class model cuts ~3-5s off every upload (Enhancement A1).
+  extraction: process.env.LLM_EXTRACTION_MODEL || "claude-haiku-4-5-20251001",
 } as const;
 
 /**

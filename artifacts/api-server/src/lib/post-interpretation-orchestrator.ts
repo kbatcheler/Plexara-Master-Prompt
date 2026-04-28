@@ -27,6 +27,7 @@ import {
 import { decryptJson, encryptText, encryptJson } from "./phi-crypto";
 import { isProviderAllowed } from "./consent";
 import { recomputeTrendsForPatient, detectChangeAlerts, detectTrajectoryAlerts } from "./trends";
+import { computeRatiosForPatient } from "./ratios";
 import { buildReportInputs } from "../routes/comprehensive-report";
 
 interface EligibilityRule {
@@ -60,6 +61,9 @@ interface OrchestratorReport {
   changeAlertsFired: number;
   trajectoryAlertsFired: number;
   imagingStudiesInterpreted: number;
+  // Enhancement B: number of derived biomarker rows persisted from the
+  // ratio engine after the latest panel was interpreted.
+  ratiosComputed: number;
   correlationGenerated: boolean;
   reportGenerated: boolean;
   supplementsGenerated: number;
@@ -92,6 +96,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     changeAlertsFired: 0,
     trajectoryAlertsFired: 0,
     imagingStudiesInterpreted: 0,
+    ratiosComputed: 0,
     correlationGenerated: false,
     reportGenerated: false,
     supplementsGenerated: 0,
@@ -151,6 +156,63 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     report.errors.trajectoryAlerts = (err as Error)?.message ?? "unknown";
   }
 
+  // ── Step 1c: Biomarker ratio engine (Enhancement B) ───────────────────
+  // Computes derived ratios (TG:HDL, ApoB:ApoA1, NLR, FT3:RT3, etc.) from
+  // the latest non-derived biomarker values and persists them as derived
+  // rows in `biomarker_results` (recordId=null, isDerived=true). Storing
+  // them in the same table — rather than a sidecar — means the existing
+  // trend engine, baseline engine, and dashboard all pick up ratio
+  // history for free on the next run, with no new code paths.
+  //
+  // Idempotency: we delete prior derived rows for this patient before
+  // inserting fresh ones. Re-running the orchestrator therefore replaces
+  // (not appends) ratio history. Today this is a clean wipe-and-replace;
+  // a future Enhancement L (longitudinal learning) may want to retain a
+  // ratio history snapshot — at that point we'd switch to upsert keyed
+  // on (patientId, biomarkerName, testDate).
+  try {
+    const ratios = await computeRatiosForPatient(patientId);
+    if (ratios.length > 0) {
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(biomarkerResultsTable)
+          .where(
+            and(
+              eq(biomarkerResultsTable.patientId, patientId),
+              eq(biomarkerResultsTable.isDerived, true),
+            ),
+          );
+        // Stamp each derived row with the most recent testDate of its two
+        // constituent biomarkers, NOT today's date. This keeps the ratio
+        // anchored to the correct point on trend/timeline surfaces — a
+        // panel uploaded today but drawn three months ago should produce
+        // ratios at the three-month-ago point, not now. Falls back to
+        // today only when the constituents have no testDate at all.
+        const today = new Date().toISOString().slice(0, 10);
+        await tx.insert(biomarkerResultsTable).values(
+          ratios.map((r) => ({
+            patientId,
+            recordId: null,
+            biomarkerName: r.spec.name,
+            category: r.spec.category,
+            value: r.ratio.toFixed(4),
+            unit: r.spec.unit,
+            labReferenceLow: null,
+            labReferenceHigh: null,
+            optimalRangeLow: r.spec.optimalLow !== null ? String(r.spec.optimalLow) : null,
+            optimalRangeHigh: r.spec.optimalHigh !== null ? String(r.spec.optimalHigh) : null,
+            testDate: r.latestSourceDate ?? today,
+            isDerived: true,
+          })),
+        );
+      });
+    }
+    report.ratiosComputed = ratios.length;
+  } catch (err) {
+    logger.error({ err, patientId, step: "ratios" }, "Orchestrator step failed");
+    report.errors.ratios = (err as Error)?.message ?? "unknown";
+  }
+
   // ── Step 1b: Imaging interpretation back-fill ─────────────────────────
   // Any imaging studies still missing an interpretation get one now, so the
   // comprehensive report (Step 3) can cross-reference imaging context with
@@ -197,10 +259,15 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
         biomarkers: Array<{ name: string; value: number | null; unit: string | null; category: string | null }>;
       }> = {};
       for (const b of allBiomarkers) {
-        if (!panelMap[b.recordId]) {
-          panelMap[b.recordId] = { testDate: b.testDate, biomarkers: [] };
+        // Skip derived rows (Enhancement B): recordId=null because they're
+        // computed across full history, not anchored to a single panel.
+        // Per-record correlation has no use for them here.
+        if (b.recordId === null) continue;
+        const rid = b.recordId;
+        if (!panelMap[rid]) {
+          panelMap[rid] = { testDate: b.testDate, biomarkers: [] };
         }
-        panelMap[b.recordId].biomarkers.push({
+        panelMap[rid].biomarkers.push({
           name: b.biomarkerName,
           value: b.value !== null ? Number(b.value) : null,
           unit: b.unit,

@@ -1,0 +1,54 @@
+# INSTRUCTION TO REPLIT AGENT
+
+You are about to implement a comprehensive set of 13 enhancements to the Plexara health intelligence platform. The full specification is in the attached file `plexara-intelligence-enhancements.md`. That document is your single source of truth — follow it exactly.
+
+## How to work
+
+1. **Read the ENTIRE enhancement document first.** Do not start coding until you understand the full scope and the dependency chain between enhancements.
+
+2. **Build in the EXACT order specified: A → B → C → D → E → F → G → H → I → J → K → L.** Each enhancement depends on or enriches the previous one. Do NOT skip ahead or parallelise.
+
+3. **After completing EACH enhancement (not at the end — after EACH one), run:**
+   ```
+   pnpm --filter @workspace/api-server test
+   pnpm tsc --noEmit
+   ```
+   Fix any failures before moving to the next enhancement. If tests fail, do not proceed.
+
+4. **After any enhancement that adds new API response fields consumed by the frontend, also run:**
+   ```
+   pnpm --filter @workspace/plexara build
+   ```
+
+## Rules you must follow for EVERY change
+
+- **Never modify the signature of an existing exported function** without first searching for ALL callers (`grep -rn "functionName" --include="*.ts" --include="*.tsx"`) and updating them.
+- **Never rename or drop a database column or table.** New columns are added via new Drizzle migration files only. After adding schema changes, run `pnpm --filter @workspace/db drizzle-kit generate` to create the migration.
+- **Never change the shape of an existing API response.** Add new fields alongside existing ones. Never remove or rename an existing field.
+- **Never remove an import that another file depends on.** When adding new modules, keep all existing barrel re-exports intact.
+- **Every new engine must integrate into the existing system** — feed into the three-lens prompts, the post-interpretation orchestrator, or both. New intelligence must not sit in isolation.
+- **Every new patient-facing output must respect the patient/clinician toggle.** Patient view gets plain English. Clinician view gets clinical detail.
+- **Make `recordId` nullable in `biomarkerResultsTable`** (if it isn't already) before Enhancement B, because derived biomarker ratios don't come from a specific record.
+- **Add an `isDerived` boolean column to `biomarkerResultsTable`** before Enhancement B, so derived ratios can be distinguished from lab-reported values.
+
+## What success looks like
+
+When all 13 enhancements are complete:
+- Blood panel interpretation is 30-40% faster than before (Enhancement A)
+- Every interpretation automatically computes 9 clinical ratios (B)
+- 6 multi-marker clinical patterns are detected automatically (C)
+- Medications are tracked and alter biomarker interpretation in every lens (D)
+- Blood draw time and season are factored into interpretation (E)
+- Genetic variants cross-reference biomarker results when DNA data exists (F)
+- Patients can log symptoms and see correlations with biomarkers (G)
+- Wearable data is cross-correlated with blood panel results (H)
+- Lab methodology differences are flagged when trending across labs (I)
+- Cross-panel divergent patterns are detected and analysed (J)
+- Protocols are safety-checked against the patient's full profile (K)
+- The system learns each patient's personal response patterns over time (L)
+- All existing tests still pass
+- Zero TypeScript errors
+- Frontend builds cleanly
+- Every existing feature still works exactly as before
+
+## Start now with Enhancement A (Performance). Report what you changed and confirm tests pass before moving to Enhancement B.

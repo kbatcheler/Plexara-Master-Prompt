@@ -1,0 +1,1023 @@
+# PLEXARA — Intelligence & Performance Enhancement Prompt
+## 13 enhancements to build the most comprehensive health interpretation engine on the market
+
+---
+
+## ⚠️ CRITICAL INSTRUCTIONS FOR REPLIT AGENT — READ BEFORE EVERY CHANGE
+
+This prompt adds significant new functionality to an existing 49,000-line production codebase. Every enhancement MUST follow these rules:
+
+### Backward Compatibility Rules
+1. **Never modify the signature of an existing exported function** without updating every caller. Before changing any function signature, run `grep -rn "functionName" --include="*.ts" --include="*.tsx"` to find all callers and update them.
+2. **Never rename a database column or table.** New columns are added via new migration files only. Existing columns are never dropped, renamed, or retyped.
+3. **Never change the shape of an API response** without adding a new field alongside the existing one. Existing fields must continue to work — the frontend depends on them.
+4. **Never remove an import that another file uses.** When splitting or refactoring a barrel export (like `ai.ts`), ensure backward compatibility by re-exporting from the original file.
+5. **Every new database table or column requires a Drizzle migration.** Run `pnpm --filter @workspace/db drizzle-kit generate` after schema changes and verify the generated SQL is correct.
+
+### Testing Rules
+6. **Run `pnpm --filter @workspace/api-server test` after EVERY enhancement** — not at the end, after each one.
+7. **Run `pnpm tsc --noEmit` after every enhancement** to catch type errors immediately.
+8. **Test the frontend build** (`pnpm --filter @workspace/plexara build`) after adding any new API response fields that the frontend consumes.
+
+### Integration Rules
+9. **Every new engine feeds INTO the existing three-lens pipeline, the post-interpretation orchestrator, or both.** New intelligence must flow through the system, not sit in isolation.
+10. **New data computed by one enhancement must be accessible to subsequent enhancements.** Design the data flow so later enhancements can read earlier ones' outputs.
+11. **New patient-facing data flows through the existing patient/clinician toggle.** Patient view gets plain English, clinician view gets clinical detail.
+
+### Build Order
+Work through the enhancements in the EXACT order listed. Each one depends on or enriches the previous. Do NOT skip ahead.
+
+---
+
+## ENHANCEMENT A: PERFORMANCE — Speed Up The Interpretation Pipeline
+
+**Problem:** Blood panel interpretation takes 40-60+ seconds (extraction ~10s → 3 lenses ~25s → reconciliation ~12s). Users are waiting too long.
+
+**The current pipeline is:**
+```
+Upload → Extraction (Claude, ~10s) → PII Strip → [wait]
+  → Lens A + B + C in parallel (~25s) → [wait]
+  → Reconciliation (Claude, ~12s) → [wait]
+  → DB Transaction → Mark complete
+  → setImmediate: Post-interpretation orchestrator (background)
+```
+
+### A1. Use a faster model for extraction
+
+Extraction is a structured data extraction task — it doesn't need the full reasoning power of the reconciliation model. Switch to a faster model.
+
+In `extraction.ts`, change every `anthropic.messages.create` call to use a dedicated extraction model:
+
+```typescript
+model: process.env.LLM_EXTRACTION_MODEL || "claude-haiku-4-5-20251001",
+```
+
+Add to `.env.example`:
+```bash
+# Extraction model — a faster, cheaper model is sufficient for structured
+# data extraction from PDFs/images. Saves ~3-5s per upload.
+LLM_EXTRACTION_MODEL=claude-haiku-4-5-20251001
+```
+
+This alone should cut extraction time from ~10s to ~3-5s.
+
+### A2. Overlap extraction DB writes with lens dispatch
+
+In `records-processing.ts`, the current flow is: extract → write biomarkers to DB → THEN start lenses. The biomarker DB write can overlap with lens dispatch because the lenses receive the extracted data directly (not from the DB).
+
+Restructure the pipeline so lens dispatch starts as soon as extraction completes, while the biomarker DB insert runs concurrently:
+
+```typescript
+// Start lenses immediately with the extracted data
+const lensesPromise = runLensesInParallel(anonymised, patientCtx, history);
+
+// Write biomarkers to DB concurrently (doesn't block lenses)
+const biomarkerWritePromise = writeBiomarkersToDb(patientId, recordId, structuredData);
+
+// Wait for both
+const [lensResults] = await Promise.all([lensesPromise, biomarkerWritePromise]);
+```
+
+This saves the biomarker write latency (~1-2s) from the critical path.
+
+### A3. Add a progress polling endpoint
+
+The frontend should poll for progress so the user sees live updates instead of a blank loading state. The `lensesCompleted` field already ticks 0→1→2→3 as lenses finish. Add a lightweight progress endpoint:
+
+```typescript
+// In records-query.ts or a new records-progress.ts
+router.get("/:recordId/progress", requireAuth, async (req, res) => {
+  const recordId = parseInt(req.params.recordId);
+  const [record] = await db.select({
+    status: recordsTable.status,
+  }).from(recordsTable).where(eq(recordsTable.id, recordId));
+  
+  if (!record) { res.status(404).json({ error: "Not found" }); return; }
+  
+  // If processing, also fetch the interpretation's lensesCompleted
+  let lensesCompleted = 0;
+  if (record.status === "processing") {
+    const [interp] = await db.select({ lensesCompleted: interpretationsTable.lensesCompleted })
+      .from(interpretationsTable)
+      .where(eq(interpretationsTable.triggerRecordId, recordId))
+      .orderBy(desc(interpretationsTable.createdAt))
+      .limit(1);
+    lensesCompleted = interp?.lensesCompleted ?? 0;
+  }
+  
+  res.json({
+    status: record.status,
+    lensesCompleted,
+    stages: {
+      extracted: record.status !== "pending",
+      lensA: lensesCompleted >= 1,
+      lensB: lensesCompleted >= 2,
+      lensC: lensesCompleted >= 3,
+      reconciled: record.status === "complete",
+    },
+  });
+});
+```
+
+In the frontend `UploadZone.tsx` or `RecordDetailModal.tsx`, poll this endpoint every 2 seconds while processing and show a multi-stage progress indicator:
+
+```tsx
+const STAGES = [
+  { key: "extracted", label: "Extracting data from document" },
+  { key: "lensA", label: "Clinical Synthesist analysing" },
+  { key: "lensB", label: "Evidence Checker validating" },
+  { key: "lensC", label: "Contrarian Analyst reviewing" },
+  { key: "reconciled", label: "Reconciling interpretations" },
+];
+```
+
+### A4. Cache biomarker reference data in memory
+
+The biomarker reference table is static seed data that doesn't change at runtime. Currently it's queried from the database on every interpretation. Load it once at boot and cache it:
+
+```typescript
+// lib/biomarker-cache.ts
+import { db, biomarkerReferenceTable } from "@workspace/db";
+
+let cache: Map<string, BiomarkerRef> | null = null;
+
+export async function getBiomarkerReference(name: string): Promise<BiomarkerRef | null> {
+  if (!cache) {
+    const all = await db.select().from(biomarkerReferenceTable);
+    cache = new Map(all.map(r => [r.biomarkerName.toLowerCase(), r]));
+  }
+  return cache.get(name.toLowerCase()) ?? null;
+}
+
+export async function getAllBiomarkerReferences(): Promise<Map<string, BiomarkerRef>> {
+  if (!cache) {
+    const all = await db.select().from(biomarkerReferenceTable);
+    cache = new Map(all.map(r => [r.biomarkerName.toLowerCase(), r]));
+  }
+  return cache;
+}
+
+export function invalidateBiomarkerCache() { cache = null; }
+```
+
+Replace all direct `biomarkerReferenceTable` queries in the interpretation pipeline with calls to this cache.
+
+---
+
+## ENHANCEMENT B: BIOMARKER RATIO ENGINE
+
+### B1. Define the ratio specifications
+
+Create `artifacts/api-server/src/lib/ratios.ts`:
+
+```typescript
+export interface RatioSpec {
+  slug: string;
+  name: string;
+  numerator: string;        // biomarker name (must match biomarkerReferenceTable)
+  denominator: string;      // biomarker name
+  category: string;
+  optimalLow: number | null;
+  optimalHigh: number | null;
+  clinicalLow: number | null;
+  clinicalHigh: number | null;
+  unit: string;
+  interpretation: {
+    low: string;   // what a low ratio means
+    optimal: string;
+    high: string;  // what a high ratio means
+  };
+  clinicalSignificance: string;
+}
+
+export const RATIO_SPECS: RatioSpec[] = [
+  {
+    slug: "tg-hdl",
+    name: "Triglycerides:HDL Ratio",
+    numerator: "Triglycerides",
+    denominator: "HDL",
+    category: "metabolic",
+    optimalLow: null,
+    optimalHigh: 1.5,
+    clinicalLow: null,
+    clinicalHigh: 3.5,
+    unit: "ratio",
+    interpretation: {
+      low: "Excellent insulin sensitivity and metabolic health",
+      optimal: "Good metabolic health with healthy insulin signalling",
+      high: "Suggests insulin resistance and atherogenic lipid profile. Strongly associated with small dense LDL particles even when total LDL appears normal.",
+    },
+    clinicalSignificance: "TG:HDL ratio is the best lipid-derived proxy for insulin resistance and small dense LDL particle count. More predictive of cardiovascular events than LDL alone in multiple large studies (McLaughlin et al., Circulation 2005).",
+  },
+  {
+    slug: "omega-6-3",
+    name: "Omega-6:Omega-3 Ratio",
+    numerator: "Omega-6",
+    denominator: "Omega-3",
+    category: "inflammatory",
+    optimalLow: null,
+    optimalHigh: 4.0,
+    clinicalLow: null,
+    clinicalHigh: 10.0,
+    unit: "ratio",
+    interpretation: {
+      low: "Excellent anti-inflammatory balance",
+      optimal: "Good inflammatory balance",
+      high: "Pro-inflammatory state. Modern Western diets often produce ratios of 15-20:1. Target <4:1 for optimal inflammatory signalling.",
+    },
+    clinicalSignificance: "Ancestral diets had ~1:1 ratio. Elevated ratios drive prostaglandin E2 and leukotriene B4 production, promoting chronic inflammation (Simopoulos, Biomed Pharmacother 2002).",
+  },
+  {
+    slug: "ft3-rt3",
+    name: "Free T3:Reverse T3 Ratio",
+    numerator: "Free T3",
+    denominator: "Reverse T3",
+    category: "hormonal",
+    optimalLow: 0.2,
+    optimalHigh: null,
+    clinicalLow: 0.15,
+    clinicalHigh: null,
+    unit: "ratio (pg/mL ÷ ng/dL)",
+    interpretation: {
+      low: "Impaired T4→T3 conversion. May indicate chronic stress, inflammation, or nutrient deficiency (selenium, zinc, iron). Often missed by standard thyroid screening.",
+      optimal: "Healthy thyroid conversion efficiency",
+      high: "Normal",
+    },
+    clinicalSignificance: "Low FT3:RT3 indicates preferential conversion of T4 to the inactive Reverse T3, bypassing the active Free T3 pathway. Common in chronic illness, caloric restriction, and high-stress states.",
+  },
+  {
+    slug: "cortisol-dhea",
+    name: "Cortisol:DHEA-S Ratio",
+    numerator: "Cortisol",
+    denominator: "DHEA-S",
+    category: "hormonal",
+    optimalLow: null,
+    optimalHigh: 0.05,
+    clinicalLow: null,
+    clinicalHigh: 0.10,
+    unit: "ratio (mcg/dL ÷ mcg/dL)",
+    interpretation: {
+      low: "Healthy adrenal balance with adequate DHEA buffering",
+      optimal: "Balanced stress response",
+      high: "Adrenal stress imbalance — cortisol dominant, DHEA protective buffer depleted. Associated with accelerated aging, immune suppression, and cognitive decline.",
+    },
+    clinicalSignificance: "DHEA-S buffers cortisol's catabolic effects. Rising ratio with age is a biomarker of biological aging itself (Phillips et al., Clin Endocrinol 1998).",
+  },
+  {
+    slug: "apob-apoa1",
+    name: "ApoB:ApoA1 Ratio",
+    numerator: "ApoB",
+    denominator: "ApoA1",
+    category: "cardiovascular",
+    optimalLow: null,
+    optimalHigh: 0.6,
+    clinicalLow: null,
+    clinicalHigh: 0.9,
+    unit: "ratio",
+    interpretation: {
+      low: "Favourable atherogenic particle balance",
+      optimal: "Good cardiovascular particle profile",
+      high: "Atherogenic particle dominance. ApoB:ApoA1 is the single strongest lipid predictor of myocardial infarction in the INTERHEART study.",
+    },
+    clinicalSignificance: "Each ApoB particle carries one LDL, VLDL, or Lp(a) particle. ApoA1 marks HDL particles. The ratio captures the balance between atherogenic and protective particles in a single number (Walldius et al., Lancet 2001).",
+  },
+  {
+    slug: "bun-creatinine",
+    name: "BUN:Creatinine Ratio",
+    numerator: "BUN",
+    denominator: "Creatinine",
+    category: "kidney",
+    optimalLow: 10,
+    optimalHigh: 20,
+    clinicalLow: 6,
+    clinicalHigh: 25,
+    unit: "ratio",
+    interpretation: {
+      low: "May indicate liver disease, malnutrition, or overhydration",
+      optimal: "Normal kidney perfusion and hydration",
+      high: "May indicate dehydration, high protein intake, GI bleeding, or pre-renal kidney insufficiency",
+    },
+    clinicalSignificance: "Helps differentiate pre-renal, renal, and post-renal causes of elevated BUN or creatinine. Ratio >20 with elevated BUN suggests dehydration or GI bleeding rather than intrinsic kidney disease.",
+  },
+  {
+    slug: "nlr",
+    name: "Neutrophil:Lymphocyte Ratio",
+    numerator: "Neutrophils",
+    denominator: "Lymphocytes",
+    category: "inflammatory",
+    optimalLow: null,
+    optimalHigh: 2.0,
+    clinicalLow: null,
+    clinicalHigh: 3.5,
+    unit: "ratio",
+    interpretation: {
+      low: "Low systemic inflammation",
+      optimal: "Normal immune balance",
+      high: "Elevated systemic inflammation. NLR is an independent prognostic marker for cardiovascular events, cancer outcomes, and all-cause mortality.",
+    },
+    clinicalSignificance: "Available from any standard CBC (no additional cost). NLR >3 is associated with increased 5-year mortality risk across multiple disease states (Forget et al., BMC Res Notes 2017).",
+  },
+  {
+    slug: "alt-ast",
+    name: "ALT:AST Ratio (De Ritis)",
+    numerator: "ALT",
+    denominator: "AST",
+    category: "liver",
+    optimalLow: 0.8,
+    optimalHigh: 1.2,
+    clinicalLow: null,
+    clinicalHigh: null,
+    unit: "ratio",
+    interpretation: {
+      low: "AST-dominant. If both elevated, pattern suggests alcoholic liver disease, cirrhosis, or cardiac/muscle damage (AST is not liver-specific).",
+      optimal: "Balanced aminotransferase profile",
+      high: "ALT-dominant. If both elevated, pattern suggests non-alcoholic fatty liver disease (NAFLD), hepatitis, or medication-induced hepatotoxicity.",
+    },
+    clinicalSignificance: "The De Ritis ratio differentiates causes of elevated transaminases. NAFLD (most common liver disease globally) typically shows ALT>AST, while alcoholic disease shows AST>ALT.",
+  },
+  {
+    slug: "testosterone-shbg",
+    name: "Total Testosterone:SHBG Ratio (Free Androgen Index)",
+    numerator: "Testosterone (Total)",
+    denominator: "SHBG",
+    category: "hormonal",
+    optimalLow: 30,
+    optimalHigh: 80,
+    clinicalLow: 20,
+    clinicalHigh: 100,
+    unit: "index",
+    interpretation: {
+      low: "Low free androgen availability despite potentially normal total testosterone. Common with elevated SHBG from oral contraceptives, aging, or hyperthyroidism.",
+      optimal: "Healthy free androgen availability",
+      high: "High free androgen availability. In females, may indicate PCOS. In males, may indicate low SHBG from insulin resistance or obesity.",
+    },
+    clinicalSignificance: "Total testosterone alone is misleading — SHBG binds testosterone making it unavailable. The Free Androgen Index is a better proxy for bioavailable androgens, especially in females where PCOS diagnosis depends on free androgen excess.",
+  },
+];
+```
+
+### B2. Build the ratio computation engine
+
+```typescript
+// ratios.ts (continued)
+
+import { db, biomarkerResultsTable } from "@workspace/db";
+import { eq, and, desc } from "drizzle-orm";
+
+export interface ComputedRatio {
+  spec: RatioSpec;
+  numeratorValue: number;
+  denominatorValue: number;
+  ratio: number;
+  status: "optimal" | "normal" | "watch" | "urgent";
+  interpretation: string;
+}
+
+export async function computeRatiosForPatient(patientId: number): Promise<ComputedRatio[]> {
+  // Get the latest value for each biomarker (deduplicated by name, most recent first)
+  const allResults = await db.select()
+    .from(biomarkerResultsTable)
+    .where(eq(biomarkerResultsTable.patientId, patientId))
+    .orderBy(desc(biomarkerResultsTable.createdAt));
+
+  const latestByName = new Map<string, { value: number; unit: string | null }>();
+  for (const r of allResults) {
+    const key = r.biomarkerName.toLowerCase();
+    if (!latestByName.has(key) && r.value) {
+      const v = parseFloat(r.value);
+      if (Number.isFinite(v) && v > 0) {
+        latestByName.set(key, { value: v, unit: r.unit });
+      }
+    }
+  }
+
+  const computed: ComputedRatio[] = [];
+
+  for (const spec of RATIO_SPECS) {
+    const num = latestByName.get(spec.numerator.toLowerCase());
+    const den = latestByName.get(spec.denominator.toLowerCase());
+    if (!num || !den || den.value === 0) continue;
+
+    const ratio = num.value / den.value;
+
+    let status: ComputedRatio["status"] = "normal";
+    let interpretation = spec.interpretation.optimal;
+
+    if (spec.clinicalHigh !== null && ratio > spec.clinicalHigh) {
+      status = "urgent";
+      interpretation = spec.interpretation.high;
+    } else if (spec.clinicalLow !== null && ratio < spec.clinicalLow) {
+      status = "urgent";
+      interpretation = spec.interpretation.low;
+    } else if (spec.optimalHigh !== null && ratio > spec.optimalHigh) {
+      status = "watch";
+      interpretation = spec.interpretation.high;
+    } else if (spec.optimalLow !== null && ratio < spec.optimalLow) {
+      status = "watch";
+      interpretation = spec.interpretation.low;
+    } else {
+      status = "optimal";
+    }
+
+    computed.push({ spec, numeratorValue: num.value, denominatorValue: den.value, ratio, status, interpretation });
+  }
+
+  return computed;
+}
+```
+
+### B3. Integrate into the post-interpretation orchestrator
+
+In `post-interpretation-orchestrator.ts`, add a new step after trends computation (Step 1) and before correlation (Step 2):
+
+```typescript
+// ── Step 1c: Biomarker ratios ────────────────────────────────────────────
+// Compute derived ratios and store them as derived biomarker results so
+// they appear in the timeline, trend engine, and all downstream surfaces.
+try {
+  const { computeRatiosForPatient } = await import("./ratios");
+  const ratios = await computeRatiosForPatient(patientId);
+  for (const r of ratios) {
+    // Upsert as a derived biomarker result so it trends over time
+    await db.insert(biomarkerResultsTable).values({
+      patientId,
+      recordId: null, // derived, not from a specific record
+      biomarkerName: r.spec.name,
+      value: r.ratio.toFixed(3),
+      unit: r.spec.unit,
+      optimalRangeLow: r.spec.optimalLow?.toString() ?? null,
+      optimalRangeHigh: r.spec.optimalHigh?.toString() ?? null,
+      labReferenceLow: r.spec.clinicalLow?.toString() ?? null,
+      labReferenceHigh: r.spec.clinicalHigh?.toString() ?? null,
+      testDate: new Date().toISOString().split("T")[0],
+      isDerived: true,
+    }).onConflictDoNothing(); // Don't duplicate if orchestrator re-runs
+  }
+  report.ratiosComputed = ratios.length;
+  logger.info({ patientId, ratios: ratios.length }, "Biomarker ratios computed");
+} catch (err) {
+  logger.error({ err, patientId, step: "ratios" }, "Orchestrator step failed");
+  report.errors.ratios = (err as Error)?.message ?? "unknown";
+}
+```
+
+**Important:** Add an `isDerived` boolean column to `biomarkerResultsTable` via a new migration so derived ratios can be distinguished from lab-reported values. Also make `recordId` nullable (if it isn't already) since derived values don't come from a specific record.
+
+### B4. Feed ratios into the three-lens prompts
+
+In `records-processing.ts`, after computing the anonymised data, compute ratios from the existing biomarker values and append them to the data payload sent to each lens:
+
+```typescript
+const { computeRatiosFromData } = await import("./ratios");
+const ratios = computeRatiosFromData(anonymised);
+const enrichedData = { ...anonymised, derivedRatios: ratios };
+```
+
+Add a `computeRatiosFromData` function to `ratios.ts` that works from an in-memory data object rather than the database (for use during the interpretation pipeline before DB writes).
+
+### B5. Add a ratios API endpoint and frontend display
+
+Create a route at `/patients/:patientId/ratios` that returns computed ratios. Display them in the Dashboard as a section below the gauges, or as a dedicated "Ratios" tab in the Timeline view.
+
+---
+
+## ENHANCEMENT C: FUNCTIONAL MEDICINE PATTERN RECOGNITION
+
+Create `artifacts/api-server/src/lib/patterns.ts`:
+
+### C1. Define pattern specifications
+
+```typescript
+export interface PatternSpec {
+  slug: string;
+  name: string;
+  category: string;
+  severity: "urgent" | "watch" | "info";
+  criteria: PatternCriterion[];
+  matchThreshold: number; // minimum criteria that must match (allows partial matches)
+  description: string;
+  patientExplanation: string;
+  clinicalExplanation: string;
+  differentialConsiderations: string[];
+  suggestedInvestigations: string[];
+}
+
+export interface PatternCriterion {
+  type: "biomarker" | "ratio" | "trend";
+  biomarker: string;
+  condition: "above_optimal" | "below_optimal" | "above_clinical" | "below_clinical" | "declining" | "elevated";
+  value?: number;
+}
+```
+
+### C2. Define the patterns
+
+Include at minimum these 6 patterns:
+
+1. **Metabolic Syndrome Cluster** — elevated fasting glucose + elevated triglycerides + low HDL + elevated fasting insulin + elevated hs-CRP. Match threshold: 3 of 5.
+
+2. **Thyroid Conversion Problem** — normal/low-normal TSH + normal T4 + low Free T3 + elevated Reverse T3. Match threshold: 3 of 4.
+
+3. **Iron Dysregulation / Inflammation-Masked Deficiency** — low ferritin + normal or high serum iron + elevated hs-CRP or ESR. Match threshold: 2 of 3.
+
+4. **Functional B12 Deficiency** — serum B12 in normal range + elevated homocysteine or elevated methylmalonic acid. Match threshold: 2 of 2.
+
+5. **Adrenal Stress Signature** — elevated cortisol (or flat cortisol curve) + low DHEA-S + elevated hs-CRP. Match threshold: 2 of 3.
+
+6. **Silent Inflammation Profile** — hs-CRP + IL-6 + homocysteine + ferritin all mildly elevated (each individually within clinical normal but trending toward or at the high end of normal). Match threshold: 3 of 4.
+
+### C3. Build the pattern scanner
+
+```typescript
+export async function scanPatternsForPatient(patientId: number): Promise<DetectedPattern[]> {
+  // Load latest biomarkers and computed ratios
+  // Check each pattern's criteria against the data
+  // Return matched patterns with confidence and matched/unmatched criteria detail
+}
+```
+
+### C4. Integrate into the post-interpretation orchestrator
+
+Add as a step after ratios. Detected patterns should:
+- Generate alerts (severity from the pattern spec)
+- Be included in the data payload sent to the comprehensive report generator
+- Be surfaced in the Safety page alongside lens disagreements
+
+### C5. Feed patterns into the three-lens prompts
+
+When running the lenses, append detected patterns from PREVIOUS interpretations as context: "Previous analysis detected the following multi-marker patterns: [list]. Evaluate whether the current data confirms, worsens, or resolves these patterns."
+
+---
+
+## ENHANCEMENT D: MEDICATION LIST AND DRUG-BIOMARKER INTERACTION INTELLIGENCE
+
+### D1. Add medications to the schema
+
+Add a `medicationsTable` to the schema (separate from `supplementsTable` because medications have different fields: prescriber, dosage schedule, start date, pharmacy, indication):
+
+```typescript
+export const medicationsTable = pgTable("medications", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  drugName: text("drug_name").notNull(),
+  genericName: text("generic_name"),
+  dosage: text("dosage"),
+  frequency: text("frequency"),
+  route: text("route").default("oral"),
+  indication: text("indication"),
+  prescribedBy: text("prescribed_by"),
+  dateStarted: text("date_started"),
+  dateEnded: text("date_ended"),
+  isActive: boolean("is_active").notNull().default(true),
+  rxNormCui: text("rxnorm_cui"),  // linked to RxNorm for drug interaction lookups
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+});
+```
+
+### D2. Create medication-biomarker interaction rules
+
+Create `artifacts/api-server/src/lib/medication-biomarker-rules.ts`:
+
+Define rules for how common medications alter biomarker interpretation:
+
+```typescript
+export interface MedicationBiomarkerRule {
+  medication: string;           // generic drug name or class
+  rxNormPatterns: string[];     // RxNorm term patterns to match
+  affectedBiomarkers: Array<{
+    biomarker: string;
+    effect: "elevates" | "lowers" | "alters_interpretation" | "depletes";
+    expectedChange: string;     // clinical description
+    adjustInterpretation: string; // how the lens should adjust
+  }>;
+}
+
+export const MEDICATION_BIOMARKER_RULES: MedicationBiomarkerRule[] = [
+  {
+    medication: "Statin",
+    rxNormPatterns: ["atorvastatin", "rosuvastatin", "simvastatin", "pravastatin", "lovastatin", "pitavastatin"],
+    affectedBiomarkers: [
+      { biomarker: "LDL", effect: "lowers", expectedChange: "30-50% reduction from baseline", adjustInterpretation: "LDL target on statin therapy is <70 mg/dL for high-risk patients, <100 for moderate risk. Achievement of target is the clinical focus." },
+      { biomarker: "ALT", effect: "elevates", expectedChange: "Mild elevation (1-3x ULN) is expected and monitored. >3x ULN requires clinical review.", adjustInterpretation: "Do NOT flag mild ALT elevation as concerning if patient is on a statin. Flag only if >3x ULN." },
+      { biomarker: "AST", effect: "elevates", expectedChange: "Same as ALT — mild elevation expected.", adjustInterpretation: "Same as ALT." },
+      { biomarker: "CoQ10", effect: "depletes", expectedChange: "Statins inhibit the mevalonate pathway which also produces CoQ10. Depletion can cause myalgia and fatigue.", adjustInterpretation: "If patient reports fatigue/muscle pain and CoQ10 is low, statin-induced depletion is the likely cause." },
+      { biomarker: "Creatine Kinase", effect: "elevates", expectedChange: "Can indicate statin myopathy. >5x ULN is clinically significant.", adjustInterpretation: "Statin users with elevated CK should be flagged for myopathy assessment." },
+    ],
+  },
+  {
+    medication: "Metformin",
+    rxNormPatterns: ["metformin"],
+    affectedBiomarkers: [
+      { biomarker: "Vitamin B12", effect: "depletes", expectedChange: "10-30% reduction in serum B12 over 2+ years of use", adjustInterpretation: "B12 deficiency on metformin is iatrogenic. Supplementation with methylcobalamin 1000mcg daily recommended." },
+      { biomarker: "Folate", effect: "depletes", expectedChange: "Mild depletion possible", adjustInterpretation: "Monitor folate alongside B12 in metformin users." },
+      { biomarker: "Fasting Glucose", effect: "lowers", expectedChange: "Expected therapeutic effect", adjustInterpretation: "Glucose levels reflect drug effect. Interpret trend in context of dosage changes." },
+      { biomarker: "HbA1c", effect: "lowers", expectedChange: "0.5-1.5% reduction expected", adjustInterpretation: "Same as glucose — therapeutic effect." },
+    ],
+  },
+  {
+    medication: "PPI",
+    rxNormPatterns: ["omeprazole", "esomeprazole", "lansoprazole", "pantoprazole", "rabeprazole"],
+    affectedBiomarkers: [
+      { biomarker: "Magnesium (RBC)", effect: "depletes", expectedChange: "Chronic PPI use (>1 year) reduces magnesium absorption", adjustInterpretation: "Low magnesium in PPI users is likely drug-induced. Consider supplementation." },
+      { biomarker: "Vitamin B12", effect: "depletes", expectedChange: "Reduced acid impairs B12 absorption from food", adjustInterpretation: "B12 deficiency in chronic PPI users requires sublingual or injectable supplementation (oral absorption is impaired)." },
+      { biomarker: "Iron", effect: "depletes", expectedChange: "Reduced acid impairs non-heme iron absorption", adjustInterpretation: "Low iron/ferritin in PPI users may be partially drug-induced." },
+      { biomarker: "Calcium", effect: "depletes", expectedChange: "Long-term PPI use associated with reduced calcium absorption and increased fracture risk", adjustInterpretation: "Monitor bone density markers in long-term PPI users." },
+    ],
+  },
+  {
+    medication: "Oral Contraceptive",
+    rxNormPatterns: ["ethinylestradiol", "levonorgestrel", "norethindrone", "drospirenone", "desogestrel"],
+    affectedBiomarkers: [
+      { biomarker: "SHBG", effect: "elevates", expectedChange: "2-4x increase in SHBG", adjustInterpretation: "Elevated SHBG on OCP is expected and lowers free testosterone. Do not flag SHBG as abnormal." },
+      { biomarker: "Testosterone (Total)", effect: "lowers", expectedChange: "May appear low due to SHBG binding", adjustInterpretation: "Total testosterone is unreliable on OCP. Free androgen index is more meaningful." },
+      { biomarker: "Vitamin B6", effect: "depletes", expectedChange: "OCP accelerates B6 metabolism", adjustInterpretation: "Low B6 in OCP users is common. Supplement with P-5-P 50mg." },
+      { biomarker: "Folate", effect: "depletes", expectedChange: "OCP interferes with folate metabolism", adjustInterpretation: "Critical concern if patient plans pregnancy. Ensure adequate folate (methylfolate preferred)." },
+      { biomarker: "Zinc", effect: "depletes", expectedChange: "OCP reduces zinc levels", adjustInterpretation: "Supplement zinc 15-30mg if low." },
+      { biomarker: "hs-CRP", effect: "elevates", expectedChange: "OCP-induced CRP elevation is hepatic, not systemic inflammatory", adjustInterpretation: "DO NOT interpret elevated hs-CRP as inflammatory in OCP users. It is a hepatic synthesis effect. Use IL-6 or ESR for inflammation assessment instead." },
+    ],
+  },
+  {
+    medication: "Beta-Blocker",
+    rxNormPatterns: ["metoprolol", "atenolol", "propranolol", "bisoprolol", "carvedilol", "nebivolol"],
+    affectedBiomarkers: [
+      { biomarker: "Resting Heart Rate", effect: "lowers", expectedChange: "10-20 bpm reduction", adjustInterpretation: "Low RHR on beta-blockers is drug effect, not fitness. Wearable-derived VO2max and fitness scores will be artificially lowered." },
+      { biomarker: "HRV", effect: "alters_interpretation", expectedChange: "HRV may increase due to reduced sympathetic drive", adjustInterpretation: "HRV on beta-blockers does not reflect autonomic health in the standard way. Do not use HRV as a stress/recovery marker." },
+    ],
+  },
+  {
+    medication: "Levothyroxine",
+    rxNormPatterns: ["levothyroxine", "synthroid", "euthyrox"],
+    affectedBiomarkers: [
+      { biomarker: "TSH", effect: "lowers", expectedChange: "Therapeutic suppression of TSH", adjustInterpretation: "TSH target on levothyroxine is typically 0.5-2.5 mIU/L. Low-normal TSH is the goal, not a concern." },
+      { biomarker: "Free T4", effect: "elevates", expectedChange: "Reflects exogenous thyroid hormone", adjustInterpretation: "Free T4 reflects dosing adequacy, not overproduction." },
+    ],
+  },
+  {
+    medication: "Thiazide Diuretic",
+    rxNormPatterns: ["hydrochlorothiazide", "chlorthalidone", "indapamide", "metolazone"],
+    affectedBiomarkers: [
+      { biomarker: "Potassium", effect: "depletes", expectedChange: "Hypokalemia is the most common adverse effect", adjustInterpretation: "Low potassium on thiazides requires monitoring and supplementation." },
+      { biomarker: "Magnesium (RBC)", effect: "depletes", expectedChange: "Renal magnesium wasting", adjustInterpretation: "Supplement magnesium 300-400mg daily in thiazide users." },
+      { biomarker: "Sodium", effect: "depletes", expectedChange: "Hyponatremia possible, especially in elderly", adjustInterpretation: "Monitor sodium in elderly thiazide users." },
+      { biomarker: "Zinc", effect: "depletes", expectedChange: "Increased urinary zinc excretion", adjustInterpretation: "Supplement zinc if low." },
+      { biomarker: "Fasting Glucose", effect: "elevates", expectedChange: "Thiazides impair insulin secretion", adjustInterpretation: "Mild glucose elevation on thiazides is drug-induced. Do not reclassify as pre-diabetic without considering this." },
+    ],
+  },
+  {
+    medication: "ACE Inhibitor",
+    rxNormPatterns: ["lisinopril", "enalapril", "ramipril", "perindopril", "captopril", "benazepril"],
+    affectedBiomarkers: [
+      { biomarker: "Potassium", effect: "elevates", expectedChange: "ACE inhibitors reduce aldosterone, which increases potassium retention", adjustInterpretation: "Hyperkalemia risk — monitor potassium regularly, especially with concurrent potassium-sparing diuretics or supplements." },
+      { biomarker: "Zinc", effect: "depletes", expectedChange: "ACE inhibitors chelate zinc", adjustInterpretation: "Supplement zinc 15-30mg if low." },
+      { biomarker: "Creatinine", effect: "elevates", expectedChange: "10-20% rise in creatinine is acceptable and expected within first 2 weeks", adjustInterpretation: "Mild creatinine rise on ACE initiation is hemodynamic, not nephrotoxic. >30% rise warrants investigation." },
+    ],
+  },
+];
+```
+
+### D3. Integrate medications into the lens prompts
+
+When building the patient context for lens prompts, include active medications and their known biomarker effects:
+
+```typescript
+// In patient-context.ts, add:
+export function buildMedicationBlock(medications: Medication[]): string {
+  if (medications.length === 0) return "";
+  
+  const medLines = medications.map(m => 
+    `- ${m.drugName} ${m.dosage ?? ""} ${m.frequency ?? ""} (since ${m.dateStarted ?? "unknown"})`
+  ).join("\n");
+  
+  // Look up known biomarker effects for each medication
+  const effects = getKnownMedicationEffects(medications);
+  const effectLines = effects.map(e =>
+    `- ${e.medication} affects ${e.biomarker}: ${e.adjustInterpretation}`
+  ).join("\n");
+  
+  return `\n\nActive medications:\n${medLines}\n\nKnown medication-biomarker interactions to consider:\n${effectLines}`;
+}
+```
+
+Then in each lens prompt, append the medication block after the demographics block.
+
+### D4. Create medications UI
+
+Add a "Medications" section to the Supplements page (or as a separate page), with add/edit/remove functionality mirroring the supplement stack. Include RxNorm lookup for drug identification (use the existing `medical-databases.ts` RxNorm integration).
+
+### D5. Drug-nutrient depletion alerts
+
+In the post-interpretation orchestrator, after medication-biomarker rules are checked:
+
+```typescript
+// For each active medication, check if any of its "depletes" effects
+// correspond to biomarkers that are actually low in the patient's data.
+// If yes → generate a "watch" alert.
+// If no depletion yet but the medication is known to deplete → generate
+// an "info" alert suggesting proactive monitoring.
+```
+
+---
+
+## ENHANCEMENT E: CIRCADIAN AND SEASONAL NORMALISATION
+
+### E1. Capture blood draw time
+
+Add a `drawTime` text field to `recordsTable` (HH:MM format). During extraction, instruct the LLM to extract the draw time if present in the document. Add a manual input field in the record detail view for patients to enter it if not on the report.
+
+### E2. Circadian adjustment logic
+
+Create `artifacts/api-server/src/lib/circadian.ts`:
+
+For key biomarkers with known circadian variation, calculate how the draw time affects interpretation:
+
+```typescript
+const CIRCADIAN_PROFILES: Record<string, { peakTime: number; troughTime: number; variationPercent: number; note: string }> = {
+  "Cortisol": { peakTime: 8, troughTime: 23, variationPercent: 80, note: "Morning cortisol (6-8am) is expected to be 3-5x higher than evening." },
+  "Testosterone (Total)": { peakTime: 7, troughTime: 19, variationPercent: 35, note: "Testosterone peaks in early morning. Afternoon draws may appear falsely low." },
+  "TSH": { peakTime: 2, troughTime: 14, variationPercent: 50, note: "TSH has a nocturnal surge. Morning draws show higher values than afternoon." },
+  "Iron": { peakTime: 10, troughTime: 22, variationPercent: 30, note: "Serum iron has significant diurnal variation. Morning draws preferred for consistency." },
+  "Growth Hormone": { peakTime: 0, troughTime: 12, variationPercent: 90, note: "GH is pulsatile and peaks during sleep. Random draws are poorly interpretable." },
+};
+```
+
+### E3. Seasonal adjustment
+
+For vitamin D specifically, include the test month in the interpretation context:
+
+```typescript
+function seasonalVitaminDAdjustment(value: number, testMonth: number, latitude: number): string {
+  const isSummer = (latitude > 0 && testMonth >= 5 && testMonth <= 9) || (latitude < 0 && (testMonth <= 3 || testMonth >= 11));
+  if (isSummer && value < 40) return "Value is below optimal even in peak sun season — suggests genuine deficiency, not seasonal.";
+  if (!isSummer && value >= 40) return "Maintaining good levels through winter suggests adequate supplementation or lifestyle.";
+  if (!isSummer && value < 30) return "Winter trough — common in UK/Northern Europe latitudes. Supplementation likely required.";
+  return "";
+}
+```
+
+### E4. Feed into lens prompts
+
+Append circadian and seasonal context to the patient data block sent to each lens. The lenses can then adjust their interpretation accordingly.
+
+---
+
+## ENHANCEMENT F: NUTRIGENOMICS CROSS-REFERENCE
+
+### F1. Define key SNP-biomarker interactions
+
+Create `artifacts/api-server/src/lib/nutrigenomics.ts`:
+
+```typescript
+export interface SNPBiomarkerRule {
+  gene: string;
+  variant: string;
+  rsid: string;
+  zygosity: "homozygous" | "heterozygous" | "any";
+  affectedBiomarkers: string[];
+  clinicalImpact: string;
+  supplementAdjustment: string;
+  interpretation: string;
+}
+
+export const SNP_RULES: SNPBiomarkerRule[] = [
+  {
+    gene: "MTHFR", variant: "C677T", rsid: "rs1801133", zygosity: "homozygous",
+    affectedBiomarkers: ["Homocysteine", "Folate"],
+    clinicalImpact: "60-70% reduction in MTHFR enzyme activity. Impaired folate→methylfolate conversion.",
+    supplementAdjustment: "Use methylfolate (5-MTHF), NOT folic acid. Folic acid may accumulate unmetabolised.",
+    interpretation: "If homocysteine is elevated, this is likely the primary cause. Standard folic acid supplementation will be ineffective.",
+  },
+  {
+    gene: "MTHFR", variant: "C677T", rsid: "rs1801133", zygosity: "heterozygous",
+    affectedBiomarkers: ["Homocysteine", "Folate"],
+    clinicalImpact: "30-35% reduction in MTHFR enzyme activity.",
+    supplementAdjustment: "Methylfolate preferred over folic acid. Lower doses may suffice (400mcg vs 800mcg for homozygous).",
+    interpretation: "Heterozygous carriers may have mildly impaired methylation. Monitor homocysteine.",
+  },
+  {
+    gene: "APOE", variant: "ε4", rsid: "rs429358", zygosity: "any",
+    affectedBiomarkers: ["LDL", "ApoB", "Total Cholesterol"],
+    clinicalImpact: "APOE4 carriers clear LDL particles less efficiently and have higher cardiovascular risk per LDL unit.",
+    supplementAdjustment: "Saturated fat restriction may be more important than for non-carriers. Prioritise ApoB monitoring over LDL-C.",
+    interpretation: "Standard lipid targets may be insufficient for APOE4 carriers. More aggressive ApoB targets (<80 mg/dL) recommended by some longevity clinicians.",
+  },
+  {
+    gene: "VDR", variant: "BsmI/TaqI/FokI", rsid: "rs1544410", zygosity: "any",
+    affectedBiomarkers: ["Vitamin D (25-OH)"],
+    clinicalImpact: "Reduced vitamin D receptor sensitivity — higher serum levels needed for equivalent biological effect.",
+    supplementAdjustment: "Target higher serum vitamin D (60-80 ng/mL vs standard 50-70). May require higher supplementation doses.",
+    interpretation: "If VDR polymorphism present and vitamin D is 'adequate' (40-50 ng/mL), the effective biological activity may be suboptimal.",
+  },
+  {
+    gene: "CYP1A2", variant: "slow metaboliser", rsid: "rs762551", zygosity: "homozygous",
+    affectedBiomarkers: ["Cortisol"],
+    clinicalImpact: "Slow caffeine metabolism — caffeine half-life extended to 6-8+ hours vs 3-4 hours in fast metabolisers.",
+    supplementAdjustment: "Caffeine cutoff should be 10am or earlier (not noon). Consider eliminating caffeine if cortisol or sleep is dysregulated.",
+    interpretation: "Elevated cortisol or poor sleep metrics in a slow CYP1A2 metaboliser should prompt caffeine intake assessment before other interventions.",
+  },
+  {
+    gene: "COMT", variant: "Val158Met", rsid: "rs4680", zygosity: "homozygous",
+    affectedBiomarkers: ["Cortisol", "Homocysteine"],
+    clinicalImpact: "Slow COMT = slower catecholamine clearance. More sensitive to stress, but also more sustained focus and pain sensitivity.",
+    supplementAdjustment: "Slow COMT: magnesium glycinate (calming), avoid high-dose methylfolate (can overshoot methylation and worsen anxiety). Fast COMT: may tolerate higher methylation support.",
+    interpretation: "Slow COMT with elevated homocysteine: use lower doses of methylfolate (200-400mcg) and add magnesium. Start low and titrate.",
+  },
+];
+```
+
+### F2. Cross-reference genetics with biomarkers
+
+When a patient has uploaded genetic data AND has biomarker results, scan the SNP rules and generate contextualised alerts. Feed genetic context into the lens prompts when available.
+
+---
+
+## ENHANCEMENT G: SYMPTOM-BIOMARKER CORRELATION
+
+### G1. Add symptom logging
+
+Create a `symptomsTable`:
+
+```typescript
+export const symptomsTable = pgTable("symptoms", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  symptomName: text("symptom_name").notNull(), // fatigue, brain_fog, joint_pain, mood, energy, digestion, sleep_quality, exercise_recovery
+  severity: integer("severity").notNull(), // 1-10 scale
+  loggedAt: timestamp("logged_at", { withTimezone: true }).notNull().defaultNow(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+```
+
+### G2. Create a simple symptom logger UI
+
+A dedicated card on the Dashboard or a separate "Symptom Log" page. Quick-tap severity rating (1-10) for common symptoms. Optional notes field.
+
+### G3. Temporal correlation engine
+
+After each interpretation, correlate symptom trends with biomarker trends:
+
+```typescript
+// For each symptom with 5+ logged entries, compute temporal correlation
+// with each biomarker that has 3+ data points. Use Pearson correlation
+// on time-aligned data (match symptom averages to the nearest biomarker
+// test date within a ±14 day window).
+```
+
+Surface strong correlations in the interpretation narrative: "Your reported fatigue scores correlate with your ferritin levels (r=0.82). When ferritin improved from 28 to 48, fatigue severity dropped from 7/10 to 3/10."
+
+---
+
+## ENHANCEMENT H: WEARABLE-BIOMARKER FUSION
+
+### H1. Cross-correlation engine
+
+Create `artifacts/api-server/src/lib/wearable-biomarker-fusion.ts`:
+
+Map wearable metrics to relevant biomarkers:
+
+```typescript
+const FUSION_RULES: Array<{ wearableMetric: string; biomarkers: string[]; hypothesis: string }> = [
+  { wearableMetric: "hrv_rmssd_ms", biomarkers: ["hs-CRP", "IL-6", "Cortisol"], hypothesis: "HRV depression correlates with systemic inflammation and stress" },
+  { wearableMetric: "rhr_bpm", biomarkers: ["TSH", "Free T3", "Free T4", "Hemoglobin"], hypothesis: "Resting heart rate elevation correlates with thyroid dysfunction or anemia" },
+  { wearableMetric: "sleep_minutes_total", biomarkers: ["Cortisol", "Fasting Glucose", "HbA1c", "hs-CRP"], hypothesis: "Reduced sleep correlates with metabolic and inflammatory markers" },
+  { wearableMetric: "vo2max", biomarkers: ["Hemoglobin", "Ferritin", "Iron"], hypothesis: "VO2max decline correlates with iron status and oxygen-carrying capacity" },
+];
+```
+
+### H2. Temporal alignment and correlation
+
+When both wearable data and biomarker data exist, compute temporal correlations. Look at the wearable metric trend in the 2-4 weeks preceding a blood draw and correlate with the biomarker values.
+
+### H3. Feed into lens prompts
+
+When wearable data exists, include a summary in the lens prompt: "Wearable data from the 14 days preceding this blood draw: average HRV 42ms (declining from 55ms over 30 days), RHR 72bpm (stable), sleep 6.2h average (down from 7.1h). Consider these contextual signals alongside the biomarker data."
+
+---
+
+## ENHANCEMENT I: LAB METHODOLOGY AWARENESS
+
+### I1. Capture lab methodology from extraction
+
+Update the extraction prompt to instruct the LLM to identify lab methodology when visible on the report:
+
+```typescript
+// Add to extraction prompt for blood panels:
+"methodology": "string or null (e.g. 'immunoassay', 'LC-MS/MS', 'calculated_friedewald', 'direct_measurement', 'enzymatic')"
+```
+
+### I2. Flag cross-lab comparisons
+
+When trending biomarkers over time, if consecutive values come from different labs or use different methodologies, flag it:
+
+```
+"Your testosterone was 450 ng/dL (Lab A, immunoassay) in January and 380 ng/dL (Lab B, LC-MS/MS) in April. Note: different labs and methodologies produce systematically different values. This 16% apparent decline may partly reflect methodology differences rather than a true biological change."
+```
+
+---
+
+## ENHANCEMENT J: MULTI-PANEL DELTA PATTERN ANALYSIS
+
+### J1. Cross-panel divergence detection
+
+In the post-interpretation orchestrator, after individual trends are computed, analyse the PATTERN of change across all biomarkers between the two most recent panels:
+
+```typescript
+// Group biomarkers by domain
+// For each domain, classify whether it improved, stable, or deteriorated
+// Look for divergent patterns where domains move in opposite directions
+// These divergent patterns are clinically meaningful
+```
+
+### J2. Feed divergence into the comprehensive report
+
+The comprehensive report prompt should receive the divergence analysis: "Between the last two panels, inflammatory markers improved significantly while metabolic markers deteriorated. Analyse this divergent pattern and suggest what might be driving it."
+
+---
+
+## ENHANCEMENT K: CONTRAINDICATION CROSS-CHECK
+
+### K1. Pre-protocol safety check
+
+Before recommending any protocol to a patient, cross-check against:
+
+- Active medications (drug-supplement interactions)
+- Genetic variants (MTHFR status affects folate form recommendation)
+- Current biomarker values (don't recommend iron if ferritin >150)
+- The patient's medication list (iodine is contraindicated with certain thyroid conditions)
+
+```typescript
+export function checkContraindications(
+  protocol: Protocol,
+  medications: Medication[],
+  genetics: GeneticVariant[],
+  biomarkers: BiomarkerResult[],
+): Contraindication[] {
+  // Return array of contraindications with severity and explanation
+}
+```
+
+### K2. Flag contraindicated protocols
+
+In the Protocols page, show a red "Contraindication detected" badge on any protocol that conflicts with the patient's profile. Expand the badge to show the specific conflict and recommendation.
+
+---
+
+## ENHANCEMENT L: LONGITUDINAL PATIENT-SPECIFIC LEARNING
+
+### L1. Track intervention→outcome pairs
+
+When a patient starts a supplement or protocol and subsequently shows a biomarker change, log the pair:
+
+```typescript
+export const interventionOutcomesTable = pgTable("intervention_outcomes", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patientsTable.id, { onDelete: "cascade" }),
+  interventionType: text("intervention_type").notNull(), // "supplement" | "protocol" | "medication"
+  interventionName: text("intervention_name").notNull(),
+  startDate: text("start_date").notNull(),
+  biomarkerName: text("biomarker_name").notNull(),
+  valueBefore: real("value_before"),
+  valueAfter: real("value_after"),
+  daysElapsed: integer("days_elapsed"),
+  changePercent: real("change_percent"),
+  direction: text("direction"), // "improved" | "worsened" | "stable"
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+```
+
+### L2. Build personal response profiles
+
+After 3+ intervention→outcome pairs for a given biomarker, compute the patient's typical response rate:
+
+"Based on your previous interventions, your CRP typically responds to omega-3 supplementation within 6-8 weeks, with an average reduction of 40%. Your current omega-3 protocol has been active for 4 weeks — based on your personal response pattern, the full effect should be visible in 2-4 more weeks."
+
+### L3. Feed into the lens prompts
+
+When running lenses on a patient with historical intervention→outcome data, include it as context: "This patient's personal response history shows: [list of response patterns]. Use this data to calibrate expected timelines and intervention recommendations."
+
+---
+
+## IMPLEMENTATION ORDER
+
+```
+A  → Performance (speeds up everything that follows)
+B  → Biomarker Ratios (used by C, D, and all subsequent)
+C  → Pattern Recognition (uses B, feeds into reports)
+D  → Medication Intelligence (alters interpretation context for all lenses)
+E  → Circadian/Seasonal (enriches interpretation context)
+F  → Nutrigenomics (enriches interpretation context if genetic data exists)
+G  → Symptom Correlation (adds subjective data layer)
+H  → Wearable Fusion (adds continuous data layer)
+I  → Lab Methodology (adds interpretation nuance)
+J  → Multi-Panel Delta (adds cross-panel intelligence)
+K  → Contraindication Check (safety layer for protocols)
+L  → Longitudinal Learning (patient-specific intelligence)
+```
+
+Test after EACH enhancement. Run `pnpm --filter @workspace/api-server test && pnpm tsc --noEmit` before moving to the next.
+
+---
+
+## BEGIN WITH ENHANCEMENT A (PERFORMANCE). VERIFY IT WORKS BEFORE PROCEEDING.
