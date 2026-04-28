@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMode } from "../../context/ModeContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Anchor, ArrowUp, ArrowDown, Minus } from "lucide-react";
+import { Anchor, ArrowUp, ArrowDown, Minus, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import AINarrative from "@/components/AINarrative";
 
@@ -227,6 +227,18 @@ export function UnifiedHealthScoreHero({
               </>
             ) : null}
           </div>
+
+          {/* Degraded-pipeline notice: shown when fewer than the full 3
+              analytical lenses contributed to this reconciliation. */}
+          {lensesCompleted !== null && lensesCompleted !== undefined && lensesCompleted < 3 ? (
+            <div
+              className="mt-3 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 rounded-lg px-3 py-2"
+              data-testid="lens-degraded-banner"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              {lensesCompleted} of 3 analytical lenses completed. Results may be less comprehensive.
+            </div>
+          ) : null}
 
           {/* Baseline row (active baseline + reset action) */}
           {baseline ? (
