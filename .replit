@@ -46,3 +46,6 @@ channel = "stable-25_05"
 
 [userenv.production]
 CORS_ORIGIN = "https://plexara.replit.app"
+
+[userenv.shared]
+LLM_EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
