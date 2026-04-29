@@ -256,7 +256,9 @@ export default function HealthProfile() {
                 <SelectContent>
                   <SelectItem value="never">Never</SelectItem>
                   <SelectItem value="former">Former</SelectItem>
-                  <SelectItem value="current">Current</SelectItem>
+                  <SelectItem value="occasional">Occasional</SelectItem>
+                  <SelectItem value="current">Current (daily)</SelectItem>
+                  <SelectItem value="vaping">Vaping / e-cigarettes</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
