@@ -280,6 +280,162 @@ export async function processUploadedDocument(opts: {
       return;
     }
 
+    // Universal evidence registry — one row per uploaded record, regardless
+    // of whether it produces biomarker rows. This is what makes DEXA / cancer
+    // screening / pharmacogenomics / specialized panels visible to the lens
+    // enrichment, comprehensive report and frontend evidence map. Wrapped in
+    // its own try/catch so a registry write failure never blocks the lens
+    // pipeline.
+    try {
+      const { evidenceRegistryTable } = await import("@workspace/db");
+      const sd = structuredData as Record<string, unknown>;
+      const docType = (sd.documentType as string | undefined) || recordType;
+      const keyFindings: string[] = Array.isArray(sd.keyFindings)
+        ? (sd.keyFindings as string[]).filter((s): s is string => typeof s === "string")
+        : [];
+
+      type EvidenceMetric = {
+        name: string;
+        value: string | number;
+        unit: string | null;
+        interpretation: string | null;
+        category: string | null;
+      };
+      const metrics: EvidenceMetric[] = [];
+
+      if (docType === "dexa_scan") {
+        const bd = (sd.boneDensity ?? {}) as {
+          tScore?: { spine?: number; hip?: number; forearm?: number; femoral_neck?: number };
+          classification?: string | null;
+        };
+        const bc = (sd.bodyComposition ?? {}) as {
+          totalBodyFatPercent?: number;
+          leanMassKg?: number;
+          visceralAdiposeTissueG?: number;
+        };
+        if (bd.tScore?.spine != null) metrics.push({ name: "T-Score (Spine)", value: bd.tScore.spine, unit: null, interpretation: bd.classification ?? null, category: "bone_density" });
+        if (bd.tScore?.hip != null) metrics.push({ name: "T-Score (Hip)", value: bd.tScore.hip, unit: null, interpretation: bd.classification ?? null, category: "bone_density" });
+        if (bc.totalBodyFatPercent != null) metrics.push({ name: "Body Fat %", value: bc.totalBodyFatPercent, unit: "%", interpretation: null, category: "body_composition" });
+        if (bc.leanMassKg != null) metrics.push({ name: "Lean Mass", value: bc.leanMassKg, unit: "kg", interpretation: null, category: "body_composition" });
+        if (bc.visceralAdiposeTissueG != null) metrics.push({ name: "Visceral Adipose Tissue", value: bc.visceralAdiposeTissueG, unit: "g", interpretation: null, category: "body_composition" });
+      } else if (docType === "cancer_screening") {
+        const r = (sd.results ?? {}) as {
+          overallResult?: string;
+          ctcCount?: number;
+          ctcThreshold?: string | null;
+        };
+        if (r.overallResult) metrics.push({ name: "Overall Result", value: r.overallResult, unit: null, interpretation: null, category: "cancer_screening" });
+        if (r.ctcCount != null) metrics.push({ name: "CTC Count", value: r.ctcCount, unit: "cells", interpretation: r.ctcThreshold ?? null, category: "cancer_screening" });
+      } else if (docType === "specialized_panel") {
+        const scores = (Array.isArray(sd.scores) ? sd.scores : []) as Array<{
+          scoreName?: string;
+          value?: string | number;
+          interpretation?: string | null;
+        }>;
+        for (const s of scores) {
+          if (!s?.scoreName || s.value == null) continue;
+          metrics.push({ name: s.scoreName, value: s.value, unit: null, interpretation: s.interpretation ?? null, category: "specialized" });
+        }
+      } else if (docType === "blood_panel") {
+        const biomarkers = (Array.isArray(sd.biomarkers) ? sd.biomarkers : []) as Array<{
+          name?: string;
+          flagged?: boolean;
+          status?: string;
+        }>;
+        const outOfRange = biomarkers.filter((b) => b?.flagged === true || b?.status === "high" || b?.status === "low" || b?.status === "abnormal");
+        if (outOfRange.length > 0) {
+          keyFindings.push(`${outOfRange.length} biomarkers outside reference range: ${outOfRange.map((b) => b.name).filter(Boolean).join(", ")}`);
+        }
+        keyFindings.push(`${biomarkers.length} biomarkers extracted`);
+      } else if (docType === "pharmacogenomics") {
+        const phen = (Array.isArray(sd.phenotypeTable) ? sd.phenotypeTable : []) as Array<{ gene?: string; phenotype?: string }>;
+        const seriousI = (Array.isArray(sd.medicationInteractions) ? sd.medicationInteractions : []) as Array<{ severity?: number; drugName?: string }>;
+        const sCount = seriousI.filter((i) => i?.severity === 3).length;
+        if (sCount > 0) keyFindings.push(`${sCount} serious drug-gene interactions flagged`);
+        if (phen.length > 0) keyFindings.push(`${phen.length} gene phenotypes characterised`);
+      }
+
+      // One-line summary for the evidence map UI.
+      let summary: string;
+      if (docType === "blood_panel") {
+        const bmCount = Array.isArray(sd.biomarkers) ? (sd.biomarkers as unknown[]).length : 0;
+        summary = `Blood panel with ${bmCount} biomarkers`;
+      } else if (docType === "dexa_scan") {
+        const cls = ((sd.boneDensity ?? {}) as { classification?: string }).classification;
+        summary = `DEXA scan${cls ? ` — ${cls}` : ""}`;
+      } else if (docType === "cancer_screening") {
+        const r = ((sd.results ?? {}) as { overallResult?: string }).overallResult;
+        summary = `Cancer screening — ${r ?? "result pending"}`;
+      } else if (docType === "pharmacogenomics") {
+        const phenCount = Array.isArray(sd.phenotypeTable) ? (sd.phenotypeTable as unknown[]).length : 0;
+        summary = `Pharmacogenomics — ${phenCount} gene phenotypes`;
+      } else if (docType === "imaging") {
+        summary = `Imaging report`;
+      } else if (docType === "genetics") {
+        summary = `Genetic / epigenomic data`;
+      } else if (docType === "wearable") {
+        summary = `Wearable summary`;
+      } else if (docType === "specialized_panel") {
+        const tn = (sd.testName as string | undefined) ?? "Specialized panel";
+        summary = `${tn} — ${metrics.length} score${metrics.length === 1 ? "" : "s"}`;
+      } else {
+        summary = `${recordType.replace(/_/g, " ")} record`;
+      }
+
+      const testDateForEvidence: string | null =
+        (sd.testDate as string | undefined) ??
+        (sd.scanDate as string | undefined) ??
+        ((sd.specimenDetails as { collected?: string } | undefined)?.collected ?? null) ??
+        testDate ??
+        null;
+
+      // Crude significance: surface "watch" if any finding mentions an
+      // attention-worthy keyword. Comprehensive report and lens layer can
+      // re-rank — this is just for chronological UI ordering colour.
+      const significance = keyFindings.some((f) =>
+        /urgent|abnormal|positive|osteoporo|elevated|severe/i.test(f),
+      )
+        ? "watch"
+        : "info";
+
+      // Idempotent — `record_id` is UNIQUE so reprocessing/retry/reanalysis
+      // updates the existing row instead of creating duplicates that would
+      // pollute the evidence map and report evidence base. Integration flags
+      // (`integratedIntoReport`, `lastReportId`) are intentionally NOT touched
+      // here so a new extraction pass keeps the existing report linkage.
+      await db
+        .insert(evidenceRegistryTable)
+        .values({
+          patientId,
+          recordId,
+          recordType,
+          documentType: docType,
+          testDate: testDateForEvidence,
+          keyFindings,
+          metrics,
+          summary,
+          significance,
+        })
+        .onConflictDoUpdate({
+          target: evidenceRegistryTable.recordId,
+          set: {
+            recordType,
+            documentType: docType,
+            testDate: testDateForEvidence,
+            keyFindings,
+            metrics,
+            summary,
+            significance,
+          },
+        });
+      logger.info(
+        { patientId, recordId, docType, findingsCount: keyFindings.length, metricsCount: metrics.length },
+        "Evidence registry entry created",
+      );
+    } catch (evidenceErr) {
+      logger.error({ evidenceErr, recordId }, "Failed to create evidence registry entry — non-blocking");
+    }
+
     await runInterpretationPipeline(patientId, recordId, structuredData, {
       biomarkerWritePromise,
     });

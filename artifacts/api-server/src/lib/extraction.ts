@@ -7,7 +7,22 @@ import { logger } from "./logger";
 
 export function buildExtractionPrompt(recordType: string): string {
   const t = (recordType || "blood_panel").toLowerCase();
-  if (t.includes("imaging") || t.includes("mri") || t.includes("scan") || t.includes("xray") || t.includes("ct") || t.includes("ultrasound")) {
+  // NOTE: the "scan" keyword is intentionally narrowed — recordType values
+  // like `dexa_scan` would otherwise match here and skip the dedicated DEXA
+  // branch below, losing all bone-density / body-composition structure. Same
+  // guard for `bone_density` / `body_comp` etc. for safety.
+  if (
+    (t.includes("imaging") ||
+      t.includes("mri") ||
+      t.includes("scan") ||
+      t.includes("xray") ||
+      t.includes("ct") ||
+      t.includes("ultrasound")) &&
+    !t.includes("dexa") &&
+    !t.includes("dxa") &&
+    !t.includes("bone_density") &&
+    !t.includes("body_comp")
+  ) {
     return `You are a medical imaging extraction specialist. Extract structured data from this imaging report. Anonymise patient name as [PATIENT], facility as [FACILITY], radiologist as [PHYSICIAN].
 
 Return valid JSON only:
@@ -107,6 +122,112 @@ Return valid JSON only:
   "biomarkers": [],
   "extractionNotes": "string"
 }`;
+  }
+  // DEXA / DXA / bone density / body composition scans. Matched BEFORE the
+  // generic imaging branch above is reached only because imaging matches
+  // first on "scan" — DEXA uploads should use the explicit `dexa_scan`
+  // record type so this branch fires.
+  if (t.includes("dexa") || t.includes("dxa") || t.includes("bone_density") || t.includes("body_comp")) {
+    return `You are a DEXA scan extraction specialist. Extract ALL measurable data from this bone density / body composition scan.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "dexa_scan",
+  "scanDate": "string date or null",
+  "scanType": "bone_density | body_composition | both",
+  "boneDensity": {
+    "tScore": { "spine": number|null, "hip": number|null, "forearm": number|null, "femoral_neck": number|null },
+    "zScore": { "spine": number|null, "hip": number|null, "forearm": number|null, "femoral_neck": number|null },
+    "bmd": { "spine": number|null, "hip": number|null, "forearm": number|null, "femoral_neck": number|null },
+    "classification": "normal | osteopenia | osteoporosis | null",
+    "fractureRisk": "string or null"
+  },
+  "bodyComposition": {
+    "totalBodyFatPercent": number|null,
+    "trunkFatPercent": number|null,
+    "leanMassKg": number|null,
+    "fatMassKg": number|null,
+    "boneMineralContentKg": number|null,
+    "visceralAdiposeTissueG": number|null,
+    "androidGynoidRatio": number|null,
+    "appendicularLeanMassIndex": number|null
+  },
+  "keyFindings": ["string array of the most important findings from the report"],
+  "clinicalImpressions": "string — any clinical notes or impressions from the reporting clinician",
+  "biomarkers": [],
+  "extractionNotes": "string"
+}
+
+Anonymise: [PATIENT] for name, [FACILITY] for clinic/hospital, [PHYSICIAN] for reporting doctor.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
+  // Cancer screening / liquid biopsy / circulating tumour cell tests
+  // (TruCheck, Galleri, etc.). These are screening reports, not imaging
+  // and not blood panels — the structure is signal/result-oriented.
+  if (t.includes("cancer") || t.includes("trucheck") || t.includes("galleri") || t.includes("ctc") || t.includes("liquid_biopsy") || t.includes("oncology") || t.includes("tumour") || t.includes("tumor")) {
+    return `You are a cancer screening extraction specialist. Extract ALL results from this cancer screening or liquid biopsy report.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "cancer_screening",
+  "testName": "string (e.g. TruCheck, Galleri, CTC count)",
+  "testDate": "string date or null",
+  "methodology": "string (e.g. circulating tumour cell count, multi-cancer early detection, cfDNA)",
+  "results": {
+    "overallResult": "string (e.g. negative, positive, indeterminate, elevated risk)",
+    "ctcCount": number|null,
+    "ctcThreshold": "string or null (the normal/abnormal threshold)",
+    "signalDetected": boolean|null,
+    "cancerTypesScreened": ["string array of cancer types tested"],
+    "cancerSignalsDetected": ["string array of any cancer signals found, or empty if none"],
+    "confidenceLevel": "string or null"
+  },
+  "keyFindings": ["string array of the most important findings"],
+  "recommendations": "string — any follow-up recommendations from the report",
+  "clinicalNotes": "string or null",
+  "biomarkers": [],
+  "extractionNotes": "string"
+}
+
+Anonymise: [PATIENT] for name, [FACILITY] for clinic, [PHYSICIAN] for doctor.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
+  // Specialized panels — non-standard scored panels (PAS, inflammation
+  // index, hormone panel as standalone, functional tests). Carries both
+  // a `biomarkers` array (so blood-panel-style values are still extracted
+  // and persisted) AND a `scores` array (for non-biomarker indices).
+  if (t.includes("pas_score") || t.includes("inflammation_panel") || t.includes("hormone_panel") || t.includes("specialized_panel") || t.includes("functional_test")) {
+    return `You are a specialized medical test extraction specialist. Extract ALL measurable values from this report. Treat it like a blood panel but be flexible — the format may be non-standard.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "specialized_panel",
+  "testName": "string",
+  "testDate": "string date or null",
+  "biomarkers": [
+    {
+      "name": "string",
+      "value": "string or number",
+      "unit": "string or null",
+      "referenceRange": "string or null",
+      "status": "normal | abnormal | high | low | null"
+    }
+  ],
+  "scores": [
+    {
+      "scoreName": "string (e.g. PAS Score, Inflammation Index, Hormonal Balance Score)",
+      "value": "string or number",
+      "interpretation": "string",
+      "scale": "string or null (e.g. 0-100, low/medium/high)"
+    }
+  ],
+  "keyFindings": ["string array of the most important findings"],
+  "clinicalNotes": "string or null",
+  "extractionNotes": "string"
+}
+
+Anonymise: [PATIENT] for name, [FACILITY] for clinic, [PHYSICIAN] for doctor.
+Return ONLY valid JSON. No markdown, no preamble.`;
   }
   if (t.includes("wearable") || t.includes("fitbit") || t.includes("oura") || t.includes("garmin") || t.includes("apple_health") || t.includes("whoop")) {
     return `You are a wearable data extraction specialist. Extract aggregated metrics from this wearable export. Anonymise device as [DEVICE].

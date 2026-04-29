@@ -78,6 +78,7 @@ router.post("/export-pdf", requireAuth, async (req, res): Promise<void> => {
       urgentFlags: string[];
       recommendedNextSteps: string[];
       followUpTesting: string[];
+      evidenceBase?: ComprehensiveReportOutput["evidenceBase"];
     }>(row.sectionsJson);
 
     const reportPayload: ComprehensiveReportOutput = {
@@ -92,6 +93,7 @@ router.post("/export-pdf", requireAuth, async (req, res): Promise<void> => {
       urgentFlags: sections?.urgentFlags ?? [],
       recommendedNextSteps: sections?.recommendedNextSteps ?? [],
       followUpTesting: sections?.followUpTesting ?? [],
+      evidenceBase: sections?.evidenceBase ?? [],
     };
 
     // Mint a fresh 30-day share link if the portal is enabled and the

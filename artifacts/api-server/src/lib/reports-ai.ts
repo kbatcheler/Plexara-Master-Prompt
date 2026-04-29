@@ -29,6 +29,22 @@ export interface ComprehensiveReportSection {
   recommendations: string[];
 }
 
+/**
+ * One row of the chronological evidence base displayed in the comprehensive
+ * report — a deterministic, non-LLM list of every record that informed the
+ * synthesis. Sourced from the evidence_registry table at build time.
+ */
+export interface ComprehensiveReportEvidenceEntry {
+  recordId: number;
+  date: string | null;
+  documentType: string;
+  recordType: string;
+  summary: string;
+  significance: string;
+  metricCount: number;
+  findingCount: number;
+}
+
 export interface ComprehensiveReportOutput {
   executiveSummary: string;
   patientNarrative: string; // long-form, plain English, 4-6 paragraphs
@@ -46,6 +62,12 @@ export interface ComprehensiveReportOutput {
   urgentFlags: string[];
   recommendedNextSteps: string[];
   followUpTesting: string[];
+  /**
+   * Additive — chronological list of every record that contributed to this
+   * report. Populated deterministically from the evidence registry, not from
+   * the LLM. Empty array when no evidence rows are available.
+   */
+  evidenceBase: ComprehensiveReportEvidenceEntry[];
 }
 
 const COMPREHENSIVE_REPORT_PROMPT = `You are the Chief Medical Synthesist — producing the patient's complete medical-grade health report by integrating EVERY blood panel, imaging report, genetics result, and wearable summary they have on file.
@@ -187,6 +209,31 @@ export interface ComprehensiveReportInput {
     classification: "responder" | "non-responder" | "adverse" | "mixed";
     narrative: string;
   }>;
+  /**
+   * Universal evidence registry rows for this patient (chronological).
+   * Drives BOTH (a) the EVIDENCE MAP block appended to the LLM prompt, so
+   * non-blood-panel records (DEXA, cancer screening, pharmacogenomics,
+   * specialized panels) are integrated into the narrative; AND (b) the
+   * deterministic `evidenceBase` field on the output, listing every
+   * record used to build the report.
+   */
+  evidenceMap?: Array<{
+    recordId: number;
+    recordType: string;
+    documentType: string;
+    testDate: string | null;
+    uploadDate: string;
+    summary: string | null;
+    significance: string | null;
+    keyFindings: string[];
+    metrics: Array<{
+      name: string;
+      value: string | number;
+      unit: string | null;
+      interpretation: string | null;
+      category: string | null;
+    }>;
+  }>;
 }
 
 export async function runComprehensiveReport(
@@ -264,7 +311,30 @@ export async function runComprehensiveReport(
         )}`
       : "";
 
-  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+  // Universal evidence map — surfaces every record on file (DEXA, cancer
+  // screening, pharmacogenomics, specialized panels, imaging, wearables) in
+  // chronological order, NOT just blood panels. Without this block the LLM
+  // synthesist only "sees" reconciled blood-panel interpretations and
+  // silently omits non-blood evidence from the narrative.
+  const evidenceMapBlock =
+    input.evidenceMap && input.evidenceMap.length > 0
+      ? `\n\nFull evidence map across all record types (chronological — INTEGRATE these into the narrative; do not silently ignore non-blood records):\n${JSON.stringify(
+          input.evidenceMap.map((e) => ({
+            recordId: e.recordId,
+            date: e.testDate ?? e.uploadDate,
+            documentType: e.documentType,
+            recordType: e.recordType,
+            summary: e.summary,
+            significance: e.significance,
+            keyFindings: e.keyFindings,
+            metrics: e.metrics,
+          })),
+          null,
+          2,
+        )}`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}${evidenceMapBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
 
   const parsed = await withLLMRetry("comprehensiveReport", async () => {
     const message = await anthropic.messages.create({
@@ -315,5 +385,24 @@ export async function runComprehensiveReport(
     urgentFlags: parsed.urgentFlags ?? [],
     recommendedNextSteps: parsed.recommendedNextSteps ?? [],
     followUpTesting: parsed.followUpTesting ?? [],
+    // Deterministic — never trust the LLM to enumerate the evidence base.
+    // Built directly from the registry rows passed in.
+    evidenceBase: (input.evidenceMap ?? [])
+      .slice()
+      .sort((a, b) => {
+        const ad = (a.testDate ?? a.uploadDate) ?? "";
+        const bd = (b.testDate ?? b.uploadDate) ?? "";
+        return ad.localeCompare(bd);
+      })
+      .map((e) => ({
+        recordId: e.recordId,
+        date: e.testDate ?? e.uploadDate ?? null,
+        documentType: e.documentType,
+        recordType: e.recordType,
+        summary: e.summary ?? "",
+        significance: e.significance ?? "info",
+        metricCount: e.metrics?.length ?? 0,
+        findingCount: e.keyFindings?.length ?? 0,
+      })),
   };
 }

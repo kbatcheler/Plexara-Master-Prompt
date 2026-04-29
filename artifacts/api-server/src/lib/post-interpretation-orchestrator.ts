@@ -5,6 +5,7 @@ import {
   patientsTable,
   correlationsTable,
   comprehensiveReportsTable,
+  evidenceRegistryTable,
   interpretationsTable,
   supplementsTable,
   supplementRecommendationsTable,
@@ -345,6 +346,10 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
           personalResponseProfiles: report.personalResponseProfiles.length > 0
             ? report.personalResponseProfiles
             : undefined,
+          // Universal evidence map across ALL record types (DEXA, cancer
+          // screening, pharmacogenomics, specialized panels, …) so the
+          // synthesist integrates non-blood evidence into the narrative.
+          evidenceMap: inputs.evidenceMap.length > 0 ? inputs.evidenceMap : undefined,
         });
         const sectionsPayload = {
           sections: reportOutput.sections,
@@ -354,20 +359,55 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
           urgentFlags: reportOutput.urgentFlags,
           recommendedNextSteps: reportOutput.recommendedNextSteps,
           followUpTesting: reportOutput.followUpTesting,
+          // Additive — deterministic chronological list of every record
+          // that contributed (DEXA, cancer screening, blood panels, …).
+          evidenceBase: reportOutput.evidenceBase,
         };
-        await db.insert(comprehensiveReportsTable).values({
-          patientId,
-          executiveSummary: encryptText(reportOutput.executiveSummary),
-          patientNarrative: encryptText(reportOutput.patientNarrative),
-          clinicalNarrative: encryptText(reportOutput.clinicalNarrative),
-          unifiedHealthScore: reportOutput.unifiedHealthScore.toString(),
-          sectionsJson: encryptJson(sectionsPayload) as object,
-          sourceRecordIds: inputs.sourceRecordIds,
-          panelCount: inputs.sourceRecordIds.length,
-          generationModel: "claude-sonnet-4-6",
-        });
+        const [insertedReport] = await db
+          .insert(comprehensiveReportsTable)
+          .values({
+            patientId,
+            executiveSummary: encryptText(reportOutput.executiveSummary),
+            patientNarrative: encryptText(reportOutput.patientNarrative),
+            clinicalNarrative: encryptText(reportOutput.clinicalNarrative),
+            unifiedHealthScore: reportOutput.unifiedHealthScore.toString(),
+            sectionsJson: encryptJson(sectionsPayload) as object,
+            sourceRecordIds: inputs.sourceRecordIds,
+            panelCount: inputs.sourceRecordIds.length,
+            generationModel: "claude-sonnet-4-6",
+          })
+          .returning();
         report.reportGenerated = true;
         latestReportSections = reportOutput;
+
+        // Mark ONLY the evidence rows that actually contributed to this
+        // report as integrated. We use the recordIds from `inputs.evidenceMap`
+        // (the snapshot loaded at report-input build time) so any evidence
+        // rows uploaded *after* the inputs were assembled or *during* the
+        // synthesis run remain in the "pending in next report" state for the
+        // frontend evidence map. Non-blocking — failure must not mask the
+        // success of report persistence.
+        try {
+          const integratedRecordIds = (inputs.evidenceMap ?? [])
+            .map((e) => e.recordId)
+            .filter((id): id is number => typeof id === "number");
+          if (insertedReport?.id && integratedRecordIds.length > 0) {
+            await db
+              .update(evidenceRegistryTable)
+              .set({ integratedIntoReport: true, lastReportId: insertedReport.id })
+              .where(
+                and(
+                  eq(evidenceRegistryTable.patientId, patientId),
+                  inArray(evidenceRegistryTable.recordId, integratedRecordIds),
+                ),
+              );
+          }
+        } catch (markErr) {
+          logger.warn(
+            { markErr, patientId, reportId: insertedReport?.id },
+            "Failed to mark evidence rows as integrated — non-blocking",
+          );
+        }
       }
     }
   } catch (err) {

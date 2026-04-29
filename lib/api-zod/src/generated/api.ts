@@ -781,6 +781,40 @@ export const DismissAlertResponse = zod.object({
 });
 
 /**
+ * @summary List the chronological evidence map for a patient
+ */
+export const ListEvidenceParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const ListEvidenceResponse = zod.object({
+  evidence: zod.array(
+    zod.object({
+      id: zod.number(),
+      recordId: zod.number(),
+      recordType: zod.string(),
+      documentType: zod.string(),
+      testDate: zod.string().nullish(),
+      uploadDate: zod.coerce.date(),
+      summary: zod.string().nullish(),
+      significance: zod.string().nullish(),
+      keyFindings: zod.array(zod.string()),
+      metrics: zod.array(
+        zod.object({
+          name: zod.string(),
+          value: zod.union([zod.string(), zod.number()]),
+          unit: zod.string().nullish(),
+          interpretation: zod.string().nullish(),
+          category: zod.string().nullish(),
+        }),
+      ),
+      integratedIntoReport: zod.boolean(),
+      lastReportId: zod.number().nullish(),
+    }),
+  ),
+});
+
+/**
  * @summary Get dashboard summary for a patient
  */
 export const GetDashboardParams = zod.object({

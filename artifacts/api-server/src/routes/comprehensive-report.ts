@@ -9,6 +9,7 @@ import {
   supplementsTable,
   imagingStudiesTable,
   interventionOutcomesTable,
+  evidenceRegistryTable,
 } from "@workspace/db";
 import { buildPersonalResponseProfiles, type OutcomePair } from "../lib/longitudinal-learning";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
@@ -235,6 +236,62 @@ export async function buildReportInputs(patientId: number) {
   }));
   const personalResponseProfiles = buildPersonalResponseProfiles(outcomePairs);
 
+  // Universal evidence map — every record on file regardless of type. Sorted
+  // chronologically; passed to the synthesist so non-blood-panel evidence
+  // (DEXA, cancer screening, pharmacogenomics, specialized panels) is woven
+  // into the narrative AND surfaces deterministically as the report's
+  // Evidence Base list.
+  let evidenceMap: Array<{
+    recordId: number;
+    recordType: string;
+    documentType: string;
+    testDate: string | null;
+    uploadDate: string;
+    summary: string | null;
+    significance: string | null;
+    keyFindings: string[];
+    metrics: Array<{
+      name: string;
+      value: string | number;
+      unit: string | null;
+      interpretation: string | null;
+      category: string | null;
+    }>;
+  }> = [];
+  try {
+    const evRows = await db
+      .select()
+      .from(evidenceRegistryTable)
+      .where(eq(evidenceRegistryTable.patientId, patientId));
+    evidenceMap = evRows
+      .map((r) => ({
+        recordId: r.recordId,
+        recordType: r.recordType,
+        documentType: r.documentType,
+        testDate: r.testDate,
+        uploadDate: r.uploadDate.toISOString(),
+        summary: r.summary,
+        significance: r.significance,
+        keyFindings: Array.isArray(r.keyFindings) ? r.keyFindings : [],
+        metrics: Array.isArray(r.metrics)
+          ? (r.metrics as Array<{
+              name: string;
+              value: string | number;
+              unit: string | null;
+              interpretation: string | null;
+              category: string | null;
+            }>)
+          : [],
+      }))
+      .sort((a, b) => {
+        const ad = a.testDate ?? a.uploadDate;
+        const bd = b.testDate ?? b.uploadDate;
+        return ad.localeCompare(bd);
+      });
+  } catch (err) {
+    logger.warn({ err, patientId }, "Failed to load evidence registry for comprehensive report — continuing without");
+  }
+
   return {
     panelReconciled,
     biomarkerHistory,
@@ -244,6 +301,7 @@ export async function buildReportInputs(patientId: number) {
     symptomCorrelations,
     domainDeltaReport,
     personalResponseProfiles,
+    evidenceMap,
     sourceRecordIds: records.map((r) => r.id),
   };
 }
@@ -295,6 +353,9 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       personalResponseProfiles: inputs.personalResponseProfiles && inputs.personalResponseProfiles.length > 0
         ? inputs.personalResponseProfiles
         : undefined,
+      // Universal evidence map across ALL record types so DEXA / cancer
+      // screening / pharmacogenomics / specialized panels are integrated.
+      evidenceMap: inputs.evidenceMap.length > 0 ? inputs.evidenceMap : undefined,
     });
 
     // Persist (PHI-encrypted): narratives in *_narrative text columns,
@@ -307,6 +368,11 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       urgentFlags: report.urgentFlags,
       recommendedNextSteps: report.recommendedNextSteps,
       followUpTesting: report.followUpTesting,
+      // Additive — deterministic chronological list of every record that
+      // contributed to this report (DEXA, cancer screening, blood panels,
+      // …). Persisted alongside sections so GET /latest can surface it
+      // without re-querying the registry.
+      evidenceBase: report.evidenceBase,
     };
 
     const [row] = await db
@@ -375,6 +441,7 @@ router.get("/latest", requireAuth, async (req, res): Promise<void> => {
       urgentFlags: string[];
       recommendedNextSteps: string[];
       followUpTesting: string[];
+      evidenceBase?: ComprehensiveReportOutput["evidenceBase"];
     }>(row.sectionsJson);
 
     res.json({
@@ -393,6 +460,7 @@ router.get("/latest", requireAuth, async (req, res): Promise<void> => {
       urgentFlags: sections?.urgentFlags ?? [],
       recommendedNextSteps: sections?.recommendedNextSteps ?? [],
       followUpTesting: sections?.followUpTesting ?? [],
+      evidenceBase: sections?.evidenceBase ?? [],
       patient: {
         displayName: patient.displayName,
         sex: patient.sex,

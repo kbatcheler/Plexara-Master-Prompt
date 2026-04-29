@@ -6,8 +6,9 @@ import {
   geneticProfilesTable,
   geneticVariantsTable,
   wearableMetricsTable,
+  evidenceRegistryTable,
 } from "@workspace/db";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql, inArray, ne, desc } from "drizzle-orm";
 import { logger } from "./logger";
 import { computeRatiosFromData } from "./ratios";
 import { buildMedicationBlock, type MedicationContext } from "./medication-biomarker-rules";
@@ -287,6 +288,60 @@ export async function buildEnrichedLensPayload(
     logger.warn({ err, patientId, recordId }, "Wearable fusion scan failed (continuing without)");
   }
 
+  // Universal evidence registry — surface non-blood-panel records
+  // (DEXA, cancer screening, pharmacogenomics, specialized panels,
+  // imaging, wearables) to the lens prompts so e.g. the metabolic lens
+  // can reason about a recent osteoporosis finding alongside today's
+  // fasting glucose. We exclude the current record (it's already the
+  // primary subject of the lens) and exclude blood_panel rows (their
+  // structured biomarkers are handled via reconciliation/history).
+  let additionalEvidence: Array<{
+    recordId: number;
+    documentType: string;
+    recordType: string;
+    date: string | null;
+    summary: string | null;
+    significance: string | null;
+    keyFindings: string[];
+    metrics: unknown[];
+  }> = [];
+  try {
+    const evRows = await db
+      .select({
+        recordId: evidenceRegistryTable.recordId,
+        documentType: evidenceRegistryTable.documentType,
+        recordType: evidenceRegistryTable.recordType,
+        testDate: evidenceRegistryTable.testDate,
+        uploadDate: evidenceRegistryTable.uploadDate,
+        summary: evidenceRegistryTable.summary,
+        significance: evidenceRegistryTable.significance,
+        keyFindings: evidenceRegistryTable.keyFindings,
+        metrics: evidenceRegistryTable.metrics,
+      })
+      .from(evidenceRegistryTable)
+      .where(
+        and(
+          eq(evidenceRegistryTable.patientId, patientId),
+          ne(evidenceRegistryTable.recordId, recordId),
+          ne(evidenceRegistryTable.documentType, "blood_panel"),
+        ),
+      )
+      .orderBy(desc(evidenceRegistryTable.uploadDate))
+      .limit(20);
+    additionalEvidence = evRows.map((r) => ({
+      recordId: r.recordId,
+      documentType: r.documentType,
+      recordType: r.recordType,
+      date: r.testDate ?? r.uploadDate.toISOString(),
+      summary: r.summary,
+      significance: r.significance,
+      keyFindings: Array.isArray(r.keyFindings) ? r.keyFindings : [],
+      metrics: Array.isArray(r.metrics) ? r.metrics : [],
+    }));
+  } catch (err) {
+    logger.warn({ err, patientId, recordId }, "Failed to load additional evidence for lens enrichment (continuing without)");
+  }
+
   // Compose the lens-facing payload — keys are only attached when present
   // so prompt JSON stays clean for fresh patients with no history.
   const hasEnrichment =
@@ -296,7 +351,8 @@ export async function buildEnrichedLensPayload(
     circadianFindings ||
     seasonalVitD ||
     nutrigenomicFindings.length > 0 ||
-    fusionFindings.length > 0;
+    fusionFindings.length > 0 ||
+    additionalEvidence.length > 0;
 
   const anonymisedForLens: AnonymisedData = hasEnrichment
     ? {
@@ -308,6 +364,7 @@ export async function buildEnrichedLensPayload(
         ...(seasonalVitD ? { seasonalAdjustment: seasonalVitD } : {}),
         ...(nutrigenomicFindings.length > 0 ? { nutrigenomicContext: nutrigenomicFindings } : {}),
         ...(fusionFindings.length > 0 ? { wearableBiomarkerFusion: fusionFindings } : {}),
+        ...(additionalEvidence.length > 0 ? { additionalEvidence } : {}),
       }
     : anonymised;
 

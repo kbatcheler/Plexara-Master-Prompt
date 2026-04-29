@@ -530,6 +530,36 @@ export interface DismissAlertBody {
   reason?: string | null;
 }
 
+export interface EvidenceMetric {
+  name: string;
+  value: string | number;
+  /** @nullable */
+  unit?: string | null;
+  /** @nullable */
+  interpretation?: string | null;
+  /** @nullable */
+  category?: string | null;
+}
+
+export interface EvidenceMapEntry {
+  id: number;
+  recordId: number;
+  recordType: string;
+  documentType: string;
+  /** @nullable */
+  testDate?: string | null;
+  uploadDate: string;
+  /** @nullable */
+  summary?: string | null;
+  /** @nullable */
+  significance?: string | null;
+  keyFindings: string[];
+  metrics: EvidenceMetric[];
+  integratedIntoReport: boolean;
+  /** @nullable */
+  lastReportId?: number | null;
+}
+
 export interface Dashboard {
   patient: Patient;
   /** @nullable */
@@ -629,3 +659,7 @@ export const ListAlertsStatus = {
   dismissed: "dismissed",
   resolved: "resolved",
 } as const;
+
+export type ListEvidence200 = {
+  evidence: EvidenceMapEntry[];
+};

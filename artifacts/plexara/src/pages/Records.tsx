@@ -185,6 +185,9 @@ export default function Records() {
                 <SelectItem value="epigenomics">Epigenomics</SelectItem>
                 <SelectItem value="wearable_data">Wearable Data</SelectItem>
                 <SelectItem value="pathology_report">Pathology Report</SelectItem>
+                <SelectItem value="dexa_scan">DEXA Scan</SelectItem>
+                <SelectItem value="cancer_screening">Cancer Screening</SelectItem>
+                <SelectItem value="specialized_panel">Specialized Panel</SelectItem>
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>

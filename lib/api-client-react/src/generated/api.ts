@@ -30,6 +30,7 @@ import type {
   ListAlertsParams,
   ListBiomarkerReferenceParams,
   ListBiomarkerResultsParams,
+  ListEvidence200,
   ListRecordsParams,
   Patient,
   Record,
@@ -1818,6 +1819,93 @@ export const useDismissAlert = <
 > => {
   return useMutation(getDismissAlertMutationOptions(options));
 };
+
+/**
+ * @summary List the chronological evidence map for a patient
+ */
+export const getListEvidenceUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/evidence`;
+};
+
+export const listEvidence = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<ListEvidence200> => {
+  return customFetch<ListEvidence200>(getListEvidenceUrl(patientId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListEvidenceQueryKey = (patientId: number) => {
+  return [`/api/patients/${patientId}/evidence`] as const;
+};
+
+export const getListEvidenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEvidence>>,
+  TError = ErrorType<unknown>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listEvidence>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListEvidenceQueryKey(patientId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listEvidence>>> = ({
+    signal,
+  }) => listEvidence(patientId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!patientId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEvidence>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListEvidenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEvidence>>
+>;
+export type ListEvidenceQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List the chronological evidence map for a patient
+ */
+
+export function useListEvidence<
+  TData = Awaited<ReturnType<typeof listEvidence>>,
+  TError = ErrorType<unknown>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listEvidence>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListEvidenceQueryOptions(patientId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Get dashboard summary for a patient

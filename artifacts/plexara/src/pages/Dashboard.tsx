@@ -12,6 +12,7 @@ import { IntelligenceSummary } from "../components/dashboard/IntelligenceSummary
 import { SupplementImpactCard } from "../components/dashboard/SupplementImpactCard";
 import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard";
 import { SymptomLoggerCard } from "../components/dashboard/SymptomLoggerCard";
+import { EvidenceMap } from "../components/dashboard/EvidenceMap";
 import { AlertBanner, type AlertSeverity } from "../components/AlertBanner";
 import { ChevronRight, FileText, Activity } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -176,6 +177,19 @@ export default function Dashboard() {
 
       {/* ── Symptom logger + correlation engine (Enhancement G) ── */}
       {patientId && <SymptomLoggerCard patientId={patientId} />}
+
+      {/* ── Evidence map (chronological timeline of every record) ── */}
+      <section aria-labelledby="evidence-heading" className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 id="evidence-heading" className="font-heading text-xl font-semibold tracking-tight">
+            Evidence map
+          </h3>
+          <span className="text-xs text-muted-foreground">
+            Every record on file — DEXA, screening, panels, wearables
+          </span>
+        </div>
+        <EvidenceMap patientId={patientId!} />
+      </section>
 
       {/* ── Recent records (card-list) ── */}
       <section aria-labelledby="recent-heading" className="space-y-4">

@@ -529,6 +529,36 @@ paths:
         "404":
           description: Not found
 
+  # Universal evidence map — chronological list of every record on file
+  # (DEXA scans, cancer screening, blood panels, pharmacogenomics,
+  # specialized panels, …). Drives the frontend Evidence Map timeline.
+  /patients/{patientId}/evidence:
+    get:
+      operationId: listEvidence
+      tags: [evidence]
+      summary: List the chronological evidence map for a patient
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Patient evidence map (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [evidence]
+                properties:
+                  evidence:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvidenceMapEntry"
+
   # Dashboard summary
   /patients/{patientId}/dashboard:
     get:
@@ -1066,6 +1096,65 @@ components:
       properties:
         reason:
           type: ["string", "null"]
+
+    EvidenceMetric:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          oneOf:
+            - type: string
+            - type: number
+        unit:
+          type: ["string", "null"]
+        interpretation:
+          type: ["string", "null"]
+        category:
+          type: ["string", "null"]
+
+    EvidenceMapEntry:
+      type: object
+      required:
+        - id
+        - recordId
+        - recordType
+        - documentType
+        - uploadDate
+        - keyFindings
+        - metrics
+        - integratedIntoReport
+      properties:
+        id:
+          type: integer
+        recordId:
+          type: integer
+        recordType:
+          type: string
+        documentType:
+          type: string
+        testDate:
+          type: ["string", "null"]
+        uploadDate:
+          type: string
+          format: date-time
+        summary:
+          type: ["string", "null"]
+        significance:
+          type: ["string", "null"]
+        keyFindings:
+          type: array
+          items:
+            type: string
+        metrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceMetric"
+        integratedIntoReport:
+          type: boolean
+        lastReportId:
+          type: ["integer", "null"]
 
     Dashboard:
       type: object

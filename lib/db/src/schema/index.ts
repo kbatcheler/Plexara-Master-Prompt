@@ -16,3 +16,4 @@ export * from "./phase5b";
 export * from "./phase6";
 export * from "./symptoms";
 export * from "./intervention-outcomes";
+export * from "./evidence";

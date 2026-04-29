@@ -243,6 +243,9 @@ export function UploadZone() {
           <option value="epigenomics">Epigenomics / Methylation</option>
           <option value="wearable_data">Wearable Export</option>
           <option value="pathology_report">Pathology Report</option>
+          <option value="dexa_scan">DEXA Scan (Bone Density / Body Composition)</option>
+          <option value="cancer_screening">Cancer Screening (TruCheck / Galleri / CTC)</option>
+          <option value="specialized_panel">Specialized Test / Score</option>
           <option value="other">Other</option>
         </select>
         <span className="text-[11px] text-muted-foreground ml-auto">
