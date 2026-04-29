@@ -245,6 +245,244 @@ Return valid JSON only:
   "extractionNotes": "string"
 }`;
   }
+  // ── Organic Acid Test (OAT) / Metabolomic Analysis ──────────────────
+  // Urinary organic acid panels reflect METABOLIC PATHWAY function (Krebs
+  // cycle, beta-oxidation, methylation, neurotransmitter turnover, gut
+  // dysbiosis, detoxification). Extracted as pathway-grouped marker arrays
+  // plus a top-level pathwayAssessment summary that downstream evidence
+  // registry / orchestrator / report layers consume.
+  if (
+    t.includes("organic_acid") ||
+    t.includes("oat") ||
+    t.includes("metabolomic") ||
+    t.includes("mosaic") ||
+    t.includes("genova") ||
+    t.includes("great_plains") ||
+    t.includes("us_biotek")
+  ) {
+    return `You are an organic acid test (OAT) extraction specialist with deep knowledge of metabolomic medicine. Extract ALL organic acid markers from this report.
+
+CRITICAL: This is NOT a blood panel. This is a urinary organic acid test. The markers are metabolic intermediates measured in mmol/mol creatinine (or similar urinary units). They reflect the functioning of metabolic PATHWAYS, not individual nutrient levels.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "organic_acid_test",
+  "testName": "string (e.g. Organic Acids Test, Metabolomic Analysis, OAT)",
+  "labName": "[FACILITY]",
+  "testDate": "string date or null",
+  "sampleType": "urine",
+
+  "krebsCycleMarkers": [
+    {
+      "name": "string (e.g. Citric, Isocitric, Aconitic, alpha-Ketoglutaric, Succinic, Fumaric, Malic, Hydroxymethylglutaric)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "fattyAcidOxidationMarkers": [
+    {
+      "name": "string (e.g. Adipic, Suberic, Ethylmalonic, Methylsuccinic)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "carbohydrateMetabolismMarkers": [
+    {
+      "name": "string (e.g. Pyruvic, Lactic, 2-Hydroxybutyric)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "neurotransmitterMetabolites": [
+    {
+      "name": "string (e.g. Homovanillic/HVA, Vanillylmandelic/VMA, 5-Hydroxyindoleacetic/5-HIAA, Quinolinic, Kynurenic, Picolinic)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "dysbiosis_markers": [
+    {
+      "name": "string (e.g. D-Arabinitol, Arabinose, DHPPA, Benzoic, Hippuric, p-Cresol, Indican, Tricarballylic, 4-Hydroxyphenylacetic, 3-Indoleacetic, p-Hydroxybenzoic)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical",
+      "organism": "string or null (e.g. yeast/candida, clostridia, bacterial_general)"
+    }
+  ],
+
+  "oxalateMarkers": [
+    {
+      "name": "string (e.g. Glyceric, Glycolic, Oxalic)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "nutritionalMarkers": [
+    {
+      "name": "string (e.g. Methylmalonic, Xanthurenate, Formiminoglutamic/FIGLU, 3-Hydroxypropionic, Ascorbic, Methylcitric, Pyroglutamic, 2-Methylhippuric, Orotate)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical",
+      "nutrientAssociation": "string or null (e.g. B12, B6, folate, vitamin_C, biotin, CoQ10, NAD, glutathione)"
+    }
+  ],
+
+  "detoxificationMarkers": [
+    {
+      "name": "string (e.g. Pyroglutamic, 2-Hydroxyhippuric, 2-Methylhippuric, Orotic, Glucaric, alpha-Hydroxybutyric)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "ketoneBodies": [
+    {
+      "name": "string (e.g. 3-Hydroxybutyric, Acetoacetic)",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "aminoAcidMetabolites": [
+    {
+      "name": "string",
+      "value": number,
+      "unit": "string",
+      "referenceRangeLow": number|null,
+      "referenceRangeHigh": number|null,
+      "status": "normal | high | low | critical"
+    }
+  ],
+
+  "keyFindings": ["string array — the most clinically significant patterns, NOT individual markers"],
+  "pathwayAssessment": {
+    "mitochondrialFunction": "normal | impaired | severely_impaired | insufficient_data",
+    "fattyAcidOxidation": "normal | impaired | severely_impaired | insufficient_data",
+    "methylation": "normal | impaired | severely_impaired | insufficient_data",
+    "neurotransmitterBalance": "normal | imbalanced | severely_imbalanced | insufficient_data",
+    "dysbiosis": "none | mild | moderate | severe | insufficient_data",
+    "oxalateStatus": "normal | elevated | high | insufficient_data",
+    "detoxification": "normal | impaired | severely_impaired | insufficient_data",
+    "glycolysis": "normal | impaired | severely_impaired | insufficient_data"
+  }
+}
+
+INTERPRETATION GUIDANCE:
+- Read this as a METABOLIC STORY, not individual values. Multiple elevated Krebs cycle markers together indicate mitochondrial dysfunction. Multiple dysbiosis markers together indicate gut overgrowth.
+- Elevated citric, isocitric, aconitic = early Krebs cycle block (often NAD+, iron, or thiamin deficiency)
+- Elevated succinic, fumaric, malic = late Krebs cycle block (often CoQ10, riboflavin, or iron deficiency)
+- Elevated pyruvic + lactic = glycolysis overflow / impaired PDH complex (thiamin, lipoic acid)
+- Elevated adipic + suberic = fatty acid beta-oxidation impairment (carnitine, riboflavin deficiency)
+- Elevated methylmalonic = functional B12 deficiency (even if serum B12 appears normal)
+- Elevated xanthurenate = functional B6 deficiency (the most sensitive B6 marker available)
+- Elevated FIGLU = functional folate deficiency
+- Elevated pyroglutamic = glutathione depletion (impaired detoxification)
+- Elevated D-arabinitol/arabinose = yeast/candida overgrowth
+- Elevated DHPPA = beneficial clostridia (positive marker)
+- Elevated 4-hydroxyphenylacetic, p-cresol = pathogenic bacterial overgrowth
+- Elevated HVA = dopamine overproduction or impaired clearance
+- Elevated VMA = norepinephrine overproduction or impaired clearance
+- Elevated quinolinic = neuroinflammation via kynurenine pathway (often gut-driven)
+- Elevated quinolinic:kynurenic ratio = excitotoxic imbalance (linked to neuroinflammation)
+
+Anonymise: [PATIENT] for name, [FACILITY] for lab, [PHYSICIAN] for doctor.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
+
+  // ── Fatty Acid Profile ──────────────────────────────────────────────
+  // Individual fatty acid measurements (saturated / mono / omega-3 / -6 / -9
+  // / trans) plus calculated ratios (omega-6:3, AA:EPA, omega-3 index, etc.)
+  // that drive inflammatory-balance and membrane-health interpretation.
+  if (
+    t.includes("fatty_acid") ||
+    t.includes("lipid_profile_advanced") ||
+    t.includes("omega_profile") ||
+    t.includes("fatty_acid_profile") ||
+    t.includes("fa_profile")
+  ) {
+    return `You are a fatty acid profiling specialist. Extract ALL individual fatty acid measurements from this report.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "fatty_acid_profile",
+  "testDate": "string date or null",
+  "sampleType": "serum | plasma | red_blood_cell | whole_blood",
+
+  "saturatedFattyAcids": [
+    { "name": "string (e.g. Palmitic C16:0, Stearic C18:0, Myristic C14:0, Lauric C12:0)", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "monounsaturatedFattyAcids": [
+    { "name": "string (e.g. Oleic C18:1n9, Palmitoleic C16:1n7, Vaccenic C18:1n7)", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "omega3FattyAcids": [
+    { "name": "string (e.g. EPA C20:5n3, DHA C22:6n3, ALA C18:3n3, DPA C22:5n3)", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "omega6FattyAcids": [
+    { "name": "string (e.g. Linoleic/LA C18:2n6, Arachidonic/AA C20:4n6, DGLA C20:3n6, GLA C18:3n6)", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "omega9FattyAcids": [
+    { "name": "string", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "transFattyAcids": [
+    { "name": "string", "value": number, "unit": "string", "referenceRangeLow": number|null, "referenceRangeHigh": number|null, "status": "normal | high | low" }
+  ],
+
+  "calculatedRatios": {
+    "omega6_omega3": number|null,
+    "AA_EPA": number|null,
+    "omega3Index": number|null,
+    "LA_ALA": number|null,
+    "DGLA_AA": number|null,
+    "stearic_oleic": number|null,
+    "totalSaturated": number|null,
+    "totalMonounsaturated": number|null,
+    "totalPolyunsaturated": number|null
+  },
+
+  "keyFindings": ["string array"],
+  "inflammatoryBalance": "anti_inflammatory | balanced | pro_inflammatory | severely_pro_inflammatory",
+  "membraneHealth": "optimal | adequate | suboptimal | poor"
+}
+
+Anonymise: [PATIENT] for name, [FACILITY] for lab.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
+
   return `You are a medical document extraction specialist. Extract ALL data points from this blood panel into structured JSON. Anonymise lab name as [LAB], physician as [PHYSICIAN], patient name as [PATIENT].
 
 Return valid JSON only:

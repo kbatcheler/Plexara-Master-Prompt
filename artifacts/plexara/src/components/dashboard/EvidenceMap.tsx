@@ -41,6 +41,9 @@ function iconForDocumentType(documentType: string) {
       return Watch;
     case "specialized_panel":
       return Microscope;
+    case "organic_acid_test":
+    case "fatty_acid_profile":
+      return FlaskConical;
     default:
       return Activity;
   }

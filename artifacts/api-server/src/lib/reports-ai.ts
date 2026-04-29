@@ -234,6 +234,29 @@ export interface ComprehensiveReportInput {
       category: string | null;
     }>;
   }>;
+  /**
+   * Metabolomic-medicine cross-correlations computed by Step 1h of the
+   * post-interpretation orchestrator (only when an Organic Acid Test is on
+   * file). Each entry maps an impaired metabolic pathway detected in the
+   * OAT to the patient's relevant blood biomarkers and a supporting
+   * interpretation. When present, surfaced verbatim in the LLM payload via
+   * `metabolomicBlock` so the synthesist explains WHY blood biomarkers are
+   * abnormal at the cellular-pathway level — Plexara's deepest layer of
+   * health intelligence.
+   */
+  metabolomicCorrelations?: Array<{
+    pathway: string;
+    pathwayName: string;
+    oatFindings: string[];
+    relatedBloodBiomarkers: Array<{
+      biomarker: string;
+      patientValue: string | null;
+      relationship: string;
+      correlationStrength: "strong" | "moderate" | "suggestive";
+    }>;
+    integratedInterpretation: string;
+    suggestedInterventions: string[];
+  }>;
 }
 
 export async function runComprehensiveReport(
@@ -334,7 +357,18 @@ export async function runComprehensiveReport(
         )}`
       : "";
 
-  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}${evidenceMapBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+  // Metabolomic pathway analysis — when Step 1h of the orchestrator
+  // produced cross-correlations between an OAT and the patient's blood
+  // biomarkers, hand them to the synthesist with explicit guidance to
+  // explain WHY blood findings are abnormal at the cellular-pathway level.
+  // This is the deepest layer of health intelligence we surface and the
+  // primary differentiator of metabolomic interpretation.
+  const metabolomicBlock =
+    input.metabolomicCorrelations && input.metabolomicCorrelations.length > 0
+      ? `\n\nMETABOLOMIC PATHWAY ANALYSIS (from Organic Acid Test cross-correlated with bloodwork):\n${JSON.stringify(input.metabolomicCorrelations, null, 2)}\n\nIMPORTANT: This metabolomic data reveals the CELLULAR-LEVEL functioning that standard blood panels cannot see. When interpreting, explain what each impaired pathway MEANS for the patient's symptoms and health trajectory. Connect the dots between OAT findings, blood panel findings, and the patient's clinical picture. This is the deepest level of health intelligence Plexara provides.`
+      : "";
+
+  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}${evidenceMapBlock}${metabolomicBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
 
   const parsed = await withLLMRetry("comprehensiveReport", async () => {
     const message = await anthropic.messages.create({

@@ -246,6 +246,8 @@ export function UploadZone() {
           <option value="dexa_scan">DEXA Scan (Bone Density / Body Composition)</option>
           <option value="cancer_screening">Cancer Screening (TruCheck / Galleri / CTC)</option>
           <option value="specialized_panel">Specialized Test / Score</option>
+          <option value="organic_acid_test">Organic Acid Test (OAT / Metabolomic Analysis)</option>
+          <option value="fatty_acid_profile">Fatty Acid Profile</option>
           <option value="other">Other</option>
         </select>
         <span className="text-[11px] text-muted-foreground ml-auto">

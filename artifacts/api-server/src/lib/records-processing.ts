@@ -353,6 +353,52 @@ export async function processUploadedDocument(opts: {
         const sCount = seriousI.filter((i) => i?.severity === 3).length;
         if (sCount > 0) keyFindings.push(`${sCount} serious drug-gene interactions flagged`);
         if (phen.length > 0) keyFindings.push(`${phen.length} gene phenotypes characterised`);
+      } else if (docType === "organic_acid_test") {
+        // Surface pathway-level summary as evidence metrics so the
+        // evidence map / report / lens enrichment see the metabolomic
+        // story without having to load and decrypt the full OAT JSON.
+        // Only emit metrics for pathways flagged as abnormal (skip
+        // "normal" / "insufficient_data" to keep the evidence map clean).
+        const pa = (sd.pathwayAssessment ?? {}) as Record<string, string | undefined>;
+        const PATHWAY_METRIC_DEFS: Array<{ field: string; label: string; abnormalValues: string[] }> = [
+          { field: "mitochondrialFunction", label: "Mitochondrial Function", abnormalValues: ["impaired", "severely_impaired"] },
+          { field: "fattyAcidOxidation", label: "Fatty Acid Oxidation", abnormalValues: ["impaired", "severely_impaired"] },
+          { field: "methylation", label: "Methylation Status", abnormalValues: ["impaired", "severely_impaired"] },
+          { field: "neurotransmitterBalance", label: "Neurotransmitter Balance", abnormalValues: ["imbalanced", "severely_imbalanced"] },
+          { field: "dysbiosis", label: "Gut Dysbiosis", abnormalValues: ["mild", "moderate", "severe"] },
+          { field: "oxalateStatus", label: "Oxalate Status", abnormalValues: ["elevated", "high"] },
+          { field: "detoxification", label: "Detoxification Capacity", abnormalValues: ["impaired", "severely_impaired"] },
+          { field: "glycolysis", label: "Glycolysis", abnormalValues: ["impaired", "severely_impaired"] },
+        ];
+        for (const def of PATHWAY_METRIC_DEFS) {
+          const val = pa[def.field];
+          if (val && def.abnormalValues.includes(val)) {
+            metrics.push({ name: def.label, value: val, unit: null, interpretation: null, category: "metabolomic" });
+          }
+        }
+        // Total markers across all pathway-grouped arrays — useful as a
+        // rough indicator of OAT comprehensiveness in the evidence map.
+        const oatCategories = [
+          "krebsCycleMarkers", "fattyAcidOxidationMarkers", "carbohydrateMetabolismMarkers",
+          "neurotransmitterMetabolites", "dysbiosis_markers", "oxalateMarkers",
+          "nutritionalMarkers", "detoxificationMarkers", "ketoneBodies", "aminoAcidMetabolites",
+        ] as const;
+        const totalOatMarkers = oatCategories.reduce((acc, cat) => {
+          const arr = (sd as Record<string, unknown>)[cat];
+          return acc + (Array.isArray(arr) ? arr.length : 0);
+        }, 0);
+        if (totalOatMarkers > 0) keyFindings.push(`${totalOatMarkers} organic acid markers extracted`);
+      } else if (docType === "fatty_acid_profile") {
+        const ratios = (sd.calculatedRatios ?? {}) as Record<string, number | null | undefined>;
+        if (ratios.omega6_omega3 != null) metrics.push({ name: "Omega-6:3 Ratio", value: ratios.omega6_omega3, unit: "ratio", interpretation: null, category: "fatty_acids" });
+        if (ratios.AA_EPA != null) metrics.push({ name: "AA:EPA Ratio", value: ratios.AA_EPA, unit: "ratio", interpretation: null, category: "fatty_acids" });
+        if (ratios.omega3Index != null) metrics.push({ name: "Omega-3 Index", value: ratios.omega3Index, unit: "%", interpretation: null, category: "fatty_acids" });
+        if (ratios.LA_ALA != null) metrics.push({ name: "LA:ALA Ratio", value: ratios.LA_ALA, unit: "ratio", interpretation: null, category: "fatty_acids" });
+        if (ratios.DGLA_AA != null) metrics.push({ name: "DGLA:AA Ratio", value: ratios.DGLA_AA, unit: "ratio", interpretation: null, category: "fatty_acids" });
+        const balance = sd.inflammatoryBalance as string | undefined;
+        if (balance) metrics.push({ name: "Inflammatory Balance", value: balance, unit: null, interpretation: null, category: "fatty_acids" });
+        const membrane = sd.membraneHealth as string | undefined;
+        if (membrane) metrics.push({ name: "Membrane Health", value: membrane, unit: null, interpretation: null, category: "fatty_acids" });
       }
 
       // One-line summary for the evidence map UI.
@@ -378,6 +424,17 @@ export async function processUploadedDocument(opts: {
       } else if (docType === "specialized_panel") {
         const tn = (sd.testName as string | undefined) ?? "Specialized panel";
         summary = `${tn} — ${metrics.length} score${metrics.length === 1 ? "" : "s"}`;
+      } else if (docType === "organic_acid_test") {
+        const tn = (sd.testName as string | undefined) ?? "Organic Acid Test";
+        const flaggedPathways = metrics.filter((m) => m.category === "metabolomic").length;
+        summary = flaggedPathways > 0
+          ? `${tn} — ${flaggedPathways} pathway${flaggedPathways === 1 ? "" : "s"} flagged`
+          : `${tn} — pathway assessment normal`;
+      } else if (docType === "fatty_acid_profile") {
+        const balance = (sd.inflammatoryBalance as string | undefined) ?? null;
+        summary = balance
+          ? `Fatty acid profile — ${balance.replace(/_/g, " ")}`
+          : `Fatty acid profile`;
       } else {
         summary = `${recordType.replace(/_/g, " ")} record`;
       }

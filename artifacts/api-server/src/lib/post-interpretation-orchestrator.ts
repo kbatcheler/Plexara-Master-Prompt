@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import {
   recordsTable,
+  extractedDataTable,
   biomarkerResultsTable,
   patientsTable,
   correlationsTable,
@@ -25,7 +26,11 @@ import {
   type ReconciledOutput,
   type ComprehensiveReportOutput,
 } from "./ai";
-import { decryptJson, encryptText, encryptJson } from "./phi-crypto";
+import { decryptJson, decryptStructuredJson, encryptText, encryptJson } from "./phi-crypto";
+import {
+  correlateMetabolomicWithBloodwork,
+  type MetabolomicCorrelation,
+} from "./metabolomic-correlation";
 import { isProviderAllowed } from "./consent";
 import { recomputeTrendsForPatient, detectChangeAlerts, detectTrajectoryAlerts } from "./trends";
 import type { DomainDeltaReport } from "./multi-panel-delta";
@@ -81,6 +86,11 @@ interface OrchestratorReport {
   personalResponseProfiles: PersonalResponseProfile[];
   correlationGenerated: boolean;
   reportGenerated: boolean;
+  // Metabolomic Medicine: number of impaired metabolic pathways
+  // cross-correlated with the patient's blood biomarkers in Step 1h.
+  // Zero when no Organic Acid Test is on file or no abnormal pathway
+  // markers were detected.
+  metabolomicCorrelations: number;
   supplementsGenerated: number;
   protocolsMatched: number;
   protocolsSuggested: number;
@@ -119,6 +129,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     personalResponseProfiles: [],
     correlationGenerated: false,
     reportGenerated: false,
+    metabolomicCorrelations: 0,
     supplementsGenerated: 0,
     protocolsMatched: 0,
     protocolsSuggested: 0,
@@ -321,6 +332,101 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     report.errors.correlation = (err as Error)?.message ?? "unknown";
   }
 
+  // ── Step 1h: Metabolomic Medicine — OAT × bloodwork cross-correlation ─
+  // When the patient has an Organic Acid Test on file, load the most
+  // recent OAT extraction, gather the patient's latest blood biomarkers,
+  // and run the metabolic-pathway correlator. Result rides into Step 3
+  // via `metabolomicCorrelations` on the comprehensive report input so
+  // the synthesist can explain WHY blood findings are abnormal at the
+  // cellular-pathway level. Independently try/catched — failure must not
+  // block the comprehensive report.
+  let metabolomicCorrelations: MetabolomicCorrelation[] = [];
+  try {
+    const oatEvidence = await db
+      .select({
+        recordId: evidenceRegistryTable.recordId,
+        testDate: evidenceRegistryTable.testDate,
+        uploadDate: evidenceRegistryTable.uploadDate,
+      })
+      .from(evidenceRegistryTable)
+      .where(
+        and(
+          eq(evidenceRegistryTable.patientId, patientId),
+          eq(evidenceRegistryTable.documentType, "organic_acid_test"),
+        ),
+      )
+      .orderBy(desc(evidenceRegistryTable.testDate), desc(evidenceRegistryTable.uploadDate))
+      .limit(1);
+
+    if (oatEvidence.length > 0 && oatEvidence[0].recordId != null) {
+      const oatRecordId = oatEvidence[0].recordId;
+      const [extractedRow] = await db
+        .select({ structuredJson: extractedDataTable.structuredJson })
+        .from(extractedDataTable)
+        .where(
+          and(
+            eq(extractedDataTable.recordId, oatRecordId),
+            eq(extractedDataTable.dataType, "organic_acid_test"),
+          ),
+        )
+        .orderBy(desc(extractedDataTable.createdAt))
+        .limit(1);
+
+      const oatData = extractedRow
+        ? decryptStructuredJson<Record<string, unknown>>(extractedRow.structuredJson)
+        : null;
+
+      if (oatData) {
+        // Latest blood biomarker value per name — ordered ASC by testDate
+        // so the later overwrite in the dedup map keeps the most recent
+        // measurement (matches how we report "current" values elsewhere).
+        const allBiomarkers = await db
+          .select({
+            biomarkerName: biomarkerResultsTable.biomarkerName,
+            value: biomarkerResultsTable.value,
+            unit: biomarkerResultsTable.unit,
+            testDate: biomarkerResultsTable.testDate,
+          })
+          .from(biomarkerResultsTable)
+          .where(
+            and(
+              eq(biomarkerResultsTable.patientId, patientId),
+              isNotNull(biomarkerResultsTable.value),
+            ),
+          )
+          .orderBy(asc(biomarkerResultsTable.testDate));
+
+        const latestByName = new Map<string, { name: string; value: string; unit: string }>();
+        for (const b of allBiomarkers) {
+          if (!b.biomarkerName || b.value == null) continue;
+          latestByName.set(b.biomarkerName, {
+            name: b.biomarkerName,
+            value: String(b.value),
+            unit: b.unit ?? "",
+          });
+        }
+
+        metabolomicCorrelations = correlateMetabolomicWithBloodwork(
+          oatData,
+          Array.from(latestByName.values()),
+        );
+        report.metabolomicCorrelations = metabolomicCorrelations.length;
+        logger.info(
+          {
+            patientId,
+            oatRecordId,
+            pathwaysCorrelated: metabolomicCorrelations.length,
+            biomarkersConsidered: latestByName.size,
+          },
+          "Metabolomic correlation completed",
+        );
+      }
+    }
+  } catch (err) {
+    logger.error({ err, patientId, step: "metabolomicCorrelation" }, "Orchestrator step failed");
+    report.errors.metabolomicCorrelation = (err as Error)?.message ?? "unknown";
+  }
+
   // ── Step 3: Comprehensive report ──────────────────────────────────────
   // Reuses buildReportInputs() from the comprehensive-report route module
   // so we don't duplicate the per-record reconciliation join logic.
@@ -336,6 +442,11 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
           biomarkerHistory: inputs.biomarkerHistory,
           currentSupplements: inputs.currentSupplements,
           imagingInterpretations: inputs.imagingInterpretations,
+          // Metabolomic Medicine — surface OAT × bloodwork pathway
+          // correlations from Step 1h so the synthesist explains the
+          // cellular-level mechanism behind blood biomarker findings.
+          metabolomicCorrelations:
+            metabolomicCorrelations.length > 0 ? metabolomicCorrelations : undefined,
           // Enhancement J: pass the freshly computed cross-panel delta so
           // the synthesist can address divergent system trajectories
           // explicitly when present.
@@ -579,6 +690,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       imagingStudiesInterpreted: report.imagingStudiesInterpreted,
       correlationGenerated: report.correlationGenerated,
       reportGenerated: report.reportGenerated,
+      metabolomicCorrelations: report.metabolomicCorrelations,
       supplementsGenerated: report.supplementsGenerated,
       protocolsMatched: report.protocolsMatched,
       protocolsSuggested: report.protocolsSuggested,

@@ -188,6 +188,8 @@ export default function Records() {
                 <SelectItem value="dexa_scan">DEXA Scan</SelectItem>
                 <SelectItem value="cancer_screening">Cancer Screening</SelectItem>
                 <SelectItem value="specialized_panel">Specialized Panel</SelectItem>
+                <SelectItem value="organic_acid_test">Organic Acid Test (OAT)</SelectItem>
+                <SelectItem value="fatty_acid_profile">Fatty Acid Profile</SelectItem>
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
