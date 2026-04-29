@@ -815,6 +815,41 @@ export const ListEvidenceResponse = zod.object({
 });
 
 /**
+ * @summary Search the RxNorm drug-name corpus for typeahead suggestions
+ */
+export const lookupMedicationsQueryQMin = 2;
+export const lookupMedicationsQueryQMax = 80;
+
+export const lookupMedicationsQueryLimitDefault = 15;
+export const lookupMedicationsQueryLimitMax = 50;
+
+export const LookupMedicationsQueryParams = zod.object({
+  q: zod.coerce
+    .string()
+    .min(lookupMedicationsQueryQMin)
+    .max(lookupMedicationsQueryQMax)
+    .describe(
+      'Search query (min 2 chars, e.g. \"statin\", \"lisinopril\", \"Lipitor\")',
+    ),
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(lookupMedicationsQueryLimitMax)
+    .default(lookupMedicationsQueryLimitDefault)
+    .describe("Max suggestions to return"),
+});
+
+export const LookupMedicationsResponse = zod.object({
+  query: zod.string(),
+  count: zod.number(),
+  results: zod.array(
+    zod.object({
+      name: zod.string().describe("RxNorm display name (brand or generic)"),
+    }),
+  ),
+});
+
+/**
  * @summary Get dashboard summary for a patient
  */
 export const GetDashboardParams = zod.object({

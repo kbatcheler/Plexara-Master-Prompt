@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TagListEditor, type TagItem } from "../components/TagListEditor";
+import { MedicationAutocomplete } from "../components/MedicationAutocomplete";
 
 type Step = 1 | 2 | 3;
 
@@ -240,7 +241,7 @@ export default function Onboarding() {
                 </Field>
 
                 <Field label="Current medications" hint="Include supplements you take daily — not one-off doses.">
-                  <TagListEditor data-testid="editor-medications" items={medications} onChange={setMedications} placeholder="Add a medication" />
+                  <MedicationAutocomplete data-testid="editor-medications" items={medications} onChange={setMedications} />
                 </Field>
 
                 <Field label="Diagnosed conditions" hint="Active or chronic conditions only.">

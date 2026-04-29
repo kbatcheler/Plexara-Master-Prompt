@@ -32,6 +32,9 @@ import type {
   ListBiomarkerResultsParams,
   ListEvidence200,
   ListRecordsParams,
+  LookupMedications503,
+  LookupMedicationsParams,
+  MedicationLookupResponse,
   Patient,
   Record,
   RecordDetail,
@@ -1899,6 +1902,106 @@ export function useListEvidence<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListEvidenceQueryOptions(patientId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Search the RxNorm drug-name corpus for typeahead suggestions
+ */
+export const getLookupMedicationsUrl = (params: LookupMedicationsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/medications/lookup?${stringifiedParams}`
+    : `/api/medications/lookup`;
+};
+
+export const lookupMedications = async (
+  params: LookupMedicationsParams,
+  options?: RequestInit,
+): Promise<MedicationLookupResponse> => {
+  return customFetch<MedicationLookupResponse>(
+    getLookupMedicationsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getLookupMedicationsQueryKey = (
+  params?: LookupMedicationsParams,
+) => {
+  return [`/api/medications/lookup`, ...(params ? [params] : [])] as const;
+};
+
+export const getLookupMedicationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof lookupMedications>>,
+  TError = ErrorType<LookupMedications503>,
+>(
+  params: LookupMedicationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof lookupMedications>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getLookupMedicationsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof lookupMedications>>
+  > = ({ signal }) => lookupMedications(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof lookupMedications>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type LookupMedicationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof lookupMedications>>
+>;
+export type LookupMedicationsQueryError = ErrorType<LookupMedications503>;
+
+/**
+ * @summary Search the RxNorm drug-name corpus for typeahead suggestions
+ */
+
+export function useLookupMedications<
+  TData = Awaited<ReturnType<typeof lookupMedications>>,
+  TError = ErrorType<LookupMedications503>,
+>(
+  params: LookupMedicationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof lookupMedications>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getLookupMedicationsQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

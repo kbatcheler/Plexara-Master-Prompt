@@ -559,6 +559,50 @@ paths:
                     items:
                       $ref: "#/components/schemas/EvidenceMapEntry"
 
+  # RxNorm typeahead lookup (auth-required, patient-agnostic).
+  # Backed by an in-memory cache of the U.S. National Library of
+  # Medicine's RxNorm display-name corpus.
+  /medications/lookup:
+    get:
+      operationId: lookupMedications
+      tags: [medications]
+      summary: Search the RxNorm drug-name corpus for typeahead suggestions
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query (min 2 chars, e.g. "statin", "lisinopril", "Lipitor")
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 80
+        - name: limit
+          in: query
+          required: false
+          description: Max suggestions to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 15
+      responses:
+        "200":
+          description: Ranked typeahead suggestions (exact > prefix > substring)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MedicationLookupResponse"
+        "503":
+          description: RxNorm corpus could not be loaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+
   # Dashboard summary
   /patients/{patientId}/dashboard:
     get:
@@ -1096,6 +1140,27 @@ components:
       properties:
         reason:
           type: ["string", "null"]
+
+    MedicationLookupResult:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: RxNorm display name (brand or generic)
+
+    MedicationLookupResponse:
+      type: object
+      required: [query, count, results]
+      properties:
+        query:
+          type: string
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MedicationLookupResult"
 
     EvidenceMetric:
       type: object

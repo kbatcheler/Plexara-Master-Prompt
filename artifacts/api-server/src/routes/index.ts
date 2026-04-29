@@ -15,6 +15,7 @@ import evidenceRouter from "./evidence";
 import ratiosRouter from "./ratios";
 import patternsRouter from "./patterns";
 import medicationsRouter from "./medications";
+import medicationsLookupRouter from "./medications-lookup";
 import symptomsRouter from "./symptoms";
 import notesRouter from "./notes";
 import alertPrefsRouter from "./alert-prefs";
@@ -127,6 +128,10 @@ router.use("/patients/:patientId/comprehensive-report", comprehensiveReportRoute
 router.use("/patients/:patientId/report-export", reportExportRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
 router.use("/protocols", protocolsGlobalRouter);
+// Public-ish (auth-required) RxNorm typeahead. Mounted GLOBALLY rather
+// than under `/patients/:patientId/medications` because the lookup is
+// patient-agnostic — the same drug name list applies to every user.
+router.use("/medications", medicationsLookupRouter);
 router.use("/me", accountRouter);
 router.use("/me", complianceRouter);
 router.use("/admin", adminRouter);

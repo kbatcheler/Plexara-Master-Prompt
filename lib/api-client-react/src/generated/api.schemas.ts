@@ -530,6 +530,17 @@ export interface DismissAlertBody {
   reason?: string | null;
 }
 
+export interface MedicationLookupResult {
+  /** RxNorm display name (brand or generic) */
+  name: string;
+}
+
+export interface MedicationLookupResponse {
+  query: string;
+  count: number;
+  results: MedicationLookupResult[];
+}
+
 export interface EvidenceMetric {
   name: string;
   value: string | number;
@@ -662,4 +673,23 @@ export const ListAlertsStatus = {
 
 export type ListEvidence200 = {
   evidence: EvidenceMapEntry[];
+};
+
+export type LookupMedicationsParams = {
+  /**
+   * Search query (min 2 chars, e.g. "statin", "lisinopril", "Lipitor")
+   * @minLength 2
+   * @maxLength 80
+   */
+  q: string;
+  /**
+   * Max suggestions to return
+   * @minimum 1
+   * @maximum 50
+   */
+  limit?: number;
+};
+
+export type LookupMedications503 = {
+  error?: string;
 };

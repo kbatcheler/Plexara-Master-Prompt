@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Save, ShieldCheck, AlertTriangle } from "lucide-react";
 import { TagListEditor, type TagItem } from "../components/TagListEditor";
+import { MedicationAutocomplete } from "../components/MedicationAutocomplete";
 
 type DraftState = {
   displayName: string;
@@ -244,7 +245,7 @@ export default function HealthProfile() {
             <TagListEditor data-testid="editor-allergies" items={draft.allergies} onChange={(v) => set("allergies", v)} placeholder="Add an allergy" />
           </Field>
           <Field label="Current medications">
-            <TagListEditor data-testid="editor-medications" items={draft.medications} onChange={(v) => set("medications", v)} placeholder="Add a medication" />
+            <MedicationAutocomplete data-testid="editor-medications" items={draft.medications} onChange={(v) => set("medications", v)} />
           </Field>
           <Field label="Diagnosed conditions">
             <TagListEditor data-testid="editor-conditions" items={draft.conditions} onChange={(v) => set("conditions", v)} placeholder="Add a condition" />
