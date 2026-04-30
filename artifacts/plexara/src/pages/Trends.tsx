@@ -43,7 +43,7 @@ export default function Trends() {
   });
 
   const recomputeMut = useMutation({
-    mutationFn: () => api(`/patients/${patientId}/trends/recompute`, { method: "POST" }),
+    mutationFn: () => api<{ trendsComputed: number; changeAlertsFired: number }>(`/patients/${patientId}/trends/recompute`, { method: "POST" }),
     onSuccess: (data) => {
       toast({ title: "Recomputed", description: `${data.trendsComputed} trends, ${data.changeAlertsFired} new change alerts.` });
       qc.invalidateQueries({ queryKey: ["trends"] });

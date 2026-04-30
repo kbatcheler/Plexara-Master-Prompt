@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCurrentPatient } from "../hooks/use-current-patient";
-import { useListRecords } from "@workspace/api-client-react";
+import { useListRecords, getListRecordsQueryKey } from "@workspace/api-client-react";
 import { api } from "../lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,8 +40,10 @@ export default function BiologicalAge() {
     enabled: !!patientId,
   });
 
-  const recordsQuery = useListRecords(patientId!, {}, { query: { enabled: !!patientId } });
-  const records = (recordsQuery.data ?? []) as Array<{ id: number; fileName: string; processingStatus: string; createdAt: string }>;
+  const recordsQuery = useListRecords(patientId!, {}, {
+    query: { enabled: !!patientId, queryKey: getListRecordsQueryKey(patientId!) },
+  });
+  const records = (recordsQuery.data ?? []) as unknown as Array<{ id: number; fileName: string; processingStatus: string; createdAt: string }>;
   const computedRecordIds = new Set((baQuery.data?.history ?? []).map((h) => h.recordId));
 
   const computeMutation = useMutation({

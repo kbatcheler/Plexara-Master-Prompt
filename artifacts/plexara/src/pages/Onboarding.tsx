@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useUser } from "@clerk/react";
-import { useCreatePatient, useUpdatePatient } from "@workspace/api-client-react";
+import { useCreatePatient, useUpdatePatient, type HealthListItem } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowRight, ArrowLeft, Shield, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -113,9 +113,9 @@ export default function Onboarding() {
       await updatePatient.mutateAsync({
         patientId,
         data: {
-          allergies: allergies.length ? allergies : null,
-          medications: medications.length ? medications : null,
-          conditions: conditions.length ? conditions : null,
+          allergies: allergies.length ? (allergies as unknown as HealthListItem[]) : null,
+          medications: medications.length ? (medications as unknown as HealthListItem[]) : null,
+          conditions: conditions.length ? (conditions as unknown as HealthListItem[]) : null,
           smokingStatus: smokingStatus || null,
           alcoholStatus: alcoholStatus || null,
         },

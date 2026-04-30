@@ -67,7 +67,7 @@ export default function Wearables() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await api(`/me/wearables/apple/import/${patientId}`, { method: "POST", body: fd });
+      const res = await api<{ inserted: number; parsed: number }>(`/me/wearables/apple/import/${patientId}`, { method: "POST", body: fd });
       toast({ title: "Apple Health import complete", description: `${res.inserted} records ingested (parsed ${res.parsed}).` });
       qc.invalidateQueries({ queryKey: ["wearables"] });
     } catch (err) {

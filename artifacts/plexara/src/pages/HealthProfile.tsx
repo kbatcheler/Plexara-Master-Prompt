@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useUpdatePatient } from "@workspace/api-client-react";
+import { useUpdatePatient, type HealthListItem } from "@workspace/api-client-react";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -143,9 +143,9 @@ export default function HealthProfile() {
           ethnicity: draft.ethnicity || null,
           heightCm: draft.heightCm ? parseInt(draft.heightCm, 10) : null,
           weightKg: draft.weightKg || null,
-          allergies: draft.allergies.length ? draft.allergies : null,
-          medications: draft.medications.length ? draft.medications : null,
-          conditions: draft.conditions.length ? draft.conditions : null,
+          allergies: draft.allergies.length ? (draft.allergies as unknown as HealthListItem[]) : null,
+          medications: draft.medications.length ? (draft.medications as unknown as HealthListItem[]) : null,
+          conditions: draft.conditions.length ? (draft.conditions as unknown as HealthListItem[]) : null,
           smokingStatus: draft.smokingStatus || null,
           alcoholStatus: draft.alcoholStatus || null,
           priorSurgeries: draft.priorSurgeries || null,

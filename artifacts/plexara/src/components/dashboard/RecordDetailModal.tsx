@@ -264,9 +264,9 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                             
                             let statusClass = "bg-muted";
                             if (val !== null && val !== undefined) {
-                              if (optLow !== null && optHigh !== null && val >= optLow && val <= optHigh) {
+                              if (optLow !== null && optLow !== undefined && optHigh !== null && optHigh !== undefined && val >= optLow && val <= optHigh) {
                                 statusClass = "bg-status-optimal";
-                              } else if (clinLow !== null && clinHigh !== null && val >= clinLow && val <= clinHigh) {
+                              } else if (clinLow !== null && clinLow !== undefined && clinHigh !== null && clinHigh !== undefined && val >= clinLow && val <= clinHigh) {
                                 statusClass = "bg-status-watch";
                               } else {
                                 statusClass = "bg-status-urgent";

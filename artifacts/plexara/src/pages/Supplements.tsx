@@ -212,7 +212,7 @@ export default function Supplements() {
         </TabsList>
 
         <TabsContent value="medications" className="space-y-4">
-          <MedicationsPanel patientId={patientId} />
+          <MedicationsPanel patientId={patientId!} />
         </TabsContent>
 
         <TabsContent value="stack" className="space-y-4">
