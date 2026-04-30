@@ -104,6 +104,50 @@ CRITICAL INSTRUCTIONS:
 - Anonymise: replace patient name with [PATIENT], DOB with [DOB], facility with [FACILITY].
 - Return ONLY valid JSON. No markdown, no preamble.`;
   }
+  // Pathology / histopathology / biopsy / cytology reports.
+  // Placed BEFORE the genetics branch and AFTER the imaging branch so
+  // `scan_report` still routes to imaging, but `pathology_report` (a
+  // first-class option in the upload dropdown) gets a tailored prompt
+  // instead of falling through to the blood-panel default and producing
+  // garbage biomarker values from histology narrative.
+  // The `!liquid_biopsy` guard prevents this branch from intercepting
+  // multi-cancer early-detection screens (TruCheck, Galleri, etc.) — those
+  // contain the substring "biopsy" but are routed to the cancer-screening
+  // branch further down, which has its own targeted prompt.
+  if (
+    (t.includes("pathology") || t.includes("histol") || t.includes("biopsy") || t.includes("cytol")) &&
+    !t.includes("liquid_biopsy")
+  ) {
+    return `You are a pathology report extraction specialist. Extract ALL clinically significant findings from this histopathology, cytology, or biopsy report.
+
+Return ONLY valid JSON in this structure:
+{
+  "documentType": "pathology_report",
+  "reportDate": "string date or null",
+  "specimenType": "string (e.g. skin biopsy, lymph node excision, endoscopy biopsy, cervical smear)",
+  "specimenSite": "string or null",
+  "clinicalIndication": "string or null",
+  "macroscopicDescription": "string or null",
+  "microscopicDescription": "string or null",
+  "diagnosis": "string — the pathologist's final diagnosis",
+  "grade": "string or null (e.g. Gleason 3+4, Grade II, well-differentiated)",
+  "stage": "string or null (TNM or other staging if present)",
+  "margins": "string or null (e.g. clear, involved, close — for excision specimens)",
+  "immunohistochemistry": [
+    { "marker": "string", "result": "string (positive/negative/equivocal)", "intensity": "string or null" }
+  ],
+  "molecularMarkers": [
+    { "marker": "string", "result": "string", "interpretation": "string or null" }
+  ],
+  "keyFindings": ["string array — the most clinically significant findings"],
+  "malignancyDetected": true | false | null,
+  "followUpRecommendations": "string or null",
+  "clinicalNotes": "string or null"
+}
+
+Anonymise: [PATIENT] for name, [FACILITY] for lab, [PATHOLOGIST] for reporting pathologist.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
   if (t.includes("genetic") || t.includes("dna") || t.includes("epigen") || t.includes("methylation")) {
     return `You are a genetics/epigenomics extraction specialist. Extract structured data from this report. Do not include patient name.
 

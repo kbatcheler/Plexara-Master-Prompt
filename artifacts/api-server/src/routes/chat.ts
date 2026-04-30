@@ -103,6 +103,17 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
       .limit(50);
     const gauges = await db.select().from(gaugesTable).where(eq(gaugesTable.patientId, patientId));
 
+    // If the patient has not uploaded anything yet, the LLM must be told
+    // explicitly — otherwise it sees an empty payload and either
+    // hallucinates findings or gives a generic "I'm a chatbot" response,
+    // neither of which is the experience Plexara promises. We compute
+    // this BEFORE building the system prompt so the preamble can be
+    // conditionally injected.
+    const hasHealthData = !!(latest?.reconciledOutput) || biomarkers.length > 0;
+    const noDataPreamble = hasHealthData
+      ? ""
+      : `\n\nIMPORTANT: This patient has NOT uploaded any health records yet. You have NO health data, NO biomarker values, NO interpretation results to reference. Do NOT fabricate or assume any health information.\n\nInstead:\n- Welcome them to Plexara and explain what the platform can do for them.\n- Suggest they upload their blood panel, DEXA scan, or other health records as a first step.\n- Let them know that once data is uploaded, you'll be able to provide personalised health insights, biomarker interpretations, and trajectory predictions.\n- Keep it brief and warm — this is a first-contact moment, not a clinical consultation.`;
+
     // ── Subject-specific enrichment ──────────────────────────────────────
     // When the user asks about a specific biomarker / gauge / supplement,
     // pull richer targeted data so the LLM can ground its answer in actual
@@ -231,7 +242,7 @@ Rules:
 Formatting:
 - Reply in flowing prose paragraphs. NO inline markdown decoration: no \`**bold**\`, no \`### headers\`.
 - Use a short markdown bullet list ONLY if the answer is genuinely a list of discrete items (e.g. "three things to ask your doctor"). Otherwise stay in prose.
-- The frontend renders your reply through a typographic component, so emphasis and structure should come from sentence craft, not from \`**\`/\`###\`.
+- The frontend renders your reply through a typographic component, so emphasis and structure should come from sentence craft, not from \`**\`/\`###\`.${noDataPreamble}
 
 Patient data payload:
 ${contextBlock}`;

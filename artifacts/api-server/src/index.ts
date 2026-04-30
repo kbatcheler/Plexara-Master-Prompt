@@ -81,6 +81,53 @@ if (process.env.ENABLE_DEV_AUTH === "true") {
   }
 }
 
+// ── AI provider key validation ──────────────────────────────────────────
+// Anthropic is required — it powers extraction, Lens A, reconciliation,
+// chat, and report generation. Without it the platform cannot function,
+// so refuse to start rather than letting users upload records that will
+// silently get stuck at "processing" forever when extraction fails.
+//
+// GPT and Gemini are optional — if missing, 2-of-3 lens degradation
+// applies and the degraded-lens banner surfaces it in the UI. If both
+// are missing, interpretations fail (cross-validation requires ≥2
+// providers) — surface that loudly at boot so it's visible BEFORE a
+// patient uploads anything.
+{
+  const anthropicKey = process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+  if (!anthropicKey || anthropicKey.trim().length === 0) {
+    logger.fatal(
+      "AI_INTEGRATIONS_ANTHROPIC_API_KEY is missing or empty. Plexara cannot extract or interpret health records without it. Exiting.",
+    );
+    process.exit(1);
+  }
+
+  const openaiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+  const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+
+  const missingProviders: string[] = [];
+  if (!openaiKey || openaiKey.trim().length === 0) {
+    missingProviders.push("OpenAI (GPT — Lens B: Evidence Checker)");
+  }
+  if (!geminiKey || geminiKey.trim().length === 0) {
+    missingProviders.push("Google AI (Gemini — Lens C: Contrarian Analyst)");
+  }
+
+  if (missingProviders.length === 2) {
+    logger.warn("╔══════════════════════════════════════════════════════════════╗");
+    logger.warn("║  ⚠️  ONLY ANTHROPIC API KEY CONFIGURED                      ║");
+    logger.warn("║  Both OpenAI and Gemini keys are missing.                    ║");
+    logger.warn("║  Interpretations require at least 2 of 3 providers.          ║");
+    logger.warn("║  All interpretations will fail until a second key is added.  ║");
+    logger.warn("╚══════════════════════════════════════════════════════════════╝");
+  } else if (missingProviders.length === 1) {
+    logger.info(
+      `AI provider note: ${missingProviders[0]} is not configured. 2-of-3 lens degradation will apply for interpretations.`,
+    );
+  } else {
+    logger.info("All 3 AI providers configured (Anthropic, OpenAI, Google AI).");
+  }
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
