@@ -7,6 +7,8 @@ import {
   geneticVariantsTable,
   wearableMetricsTable,
   evidenceRegistryTable,
+  supplementsTable,
+  medicationsTable,
 } from "@workspace/db";
 import { eq, and, sql, inArray, ne, desc } from "drizzle-orm";
 import { logger } from "./logger";
@@ -150,6 +152,28 @@ export async function loadPreviousPatterns(patientId: number): Promise<Array<{
 }
 
 /**
+ * Enhancement: load the patient's active supplement stack so the lens prompts
+ * can identify supplement-driven biomarker patterns (e.g. selenium at 162 µg/L
+ * with selenium supplementation on file → over-supplementation confirmed).
+ * Mirrors `loadActiveMedications`. Empty when the patient has no active rows.
+ */
+export async function loadActiveSupplements(patientId: number): Promise<Array<{
+  name: string;
+  dosage: string | null;
+  frequency: string | null;
+}>> {
+  const rows = await db
+    .select({
+      name: supplementsTable.name,
+      dosage: supplementsTable.dosage,
+      frequency: supplementsTable.frequency,
+    })
+    .from(supplementsTable)
+    .where(and(eq(supplementsTable.patientId, patientId), eq(supplementsTable.active, true)));
+  return rows.map((r) => ({ name: r.name, dosage: r.dosage, frequency: r.frequency }));
+}
+
+/**
  * Compose the fully enriched lens payload.
  *
  * Pipeline (additive — each step layers context onto `anonymisedForLens`):
@@ -208,6 +232,16 @@ export async function buildEnrichedLensPayload(
     : null;
   if (activeMedications.length > 0) {
     logger.info({ patientId, recordId, medications: activeMedications.length }, "Loaded active medications for lens prompts");
+  }
+
+  // 4b. Stack Intelligence: active supplements. Without this, lenses can
+  // only reason about medications + biomarkers and miss supplement-driven
+  // patterns like over-supplementation (selenium, iron, D3) or
+  // missing-cofactor patterns (D3 without K2). Empty array when the
+  // patient has no active supplement rows.
+  const activeSupplements = await loadActiveSupplements(patientId);
+  if (activeSupplements.length > 0) {
+    logger.info({ patientId, recordId, supplements: activeSupplements.length }, "Loaded active supplements for lens prompts");
   }
 
   // 5. Enhancement E: circadian + seasonal — pure functions over already-loaded data.
@@ -381,6 +415,7 @@ export async function buildEnrichedLensPayload(
     ratiosBlock ||
     previousPatterns.length > 0 ||
     medicationBlock ||
+    activeSupplements.length > 0 ||
     circadianFindings ||
     seasonalVitD ||
     nutrigenomicFindings.length > 0 ||
@@ -394,6 +429,7 @@ export async function buildEnrichedLensPayload(
         ...(ratiosBlock ? { derivedRatios: ratiosBlock } : {}),
         ...(previousPatterns.length > 0 ? { previousPatterns } : {}),
         ...(medicationBlock ? { activeMedicationsContext: medicationBlock, activeMedications } : {}),
+        ...(activeSupplements.length > 0 ? { currentSupplements: activeSupplements } : {}),
         ...(circadianFindings ? { circadianContext: circadianFindings } : {}),
         ...(seasonalVitD ? { seasonalAdjustment: seasonalVitD } : {}),
         ...(nutrigenomicFindings.length > 0 ? { nutrigenomicContext: nutrigenomicFindings } : {}),

@@ -362,6 +362,106 @@ export type RecordDetail = Record & {
   biomarkerResults?: BiomarkerResult[];
 };
 
+export type StackAnalysisOutputItemAnalysesItemCategory =
+  (typeof StackAnalysisOutputItemAnalysesItemCategory)[keyof typeof StackAnalysisOutputItemAnalysesItemCategory];
+
+export const StackAnalysisOutputItemAnalysesItemCategory = {
+  supplement: "supplement",
+  medication: "medication",
+} as const;
+
+export type StackAnalysisOutputItemAnalysesItemVerdict =
+  (typeof StackAnalysisOutputItemAnalysesItemVerdict)[keyof typeof StackAnalysisOutputItemAnalysesItemVerdict];
+
+export const StackAnalysisOutputItemAnalysesItemVerdict = {
+  optimal: "optimal",
+  adjust_dose: "adjust_dose",
+  change_form: "change_form",
+  add_cofactor: "add_cofactor",
+  consider_removing: "consider_removing",
+  timing_issue: "timing_issue",
+  interaction_warning: "interaction_warning",
+} as const;
+
+export type StackAnalysisOutputItemAnalysesItemPriority =
+  (typeof StackAnalysisOutputItemAnalysesItemPriority)[keyof typeof StackAnalysisOutputItemAnalysesItemPriority];
+
+export const StackAnalysisOutputItemAnalysesItemPriority = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+export type StackAnalysisOutputItemAnalysesItem = {
+  name: string;
+  /** @nullable */
+  currentDosage: string | null;
+  category: StackAnalysisOutputItemAnalysesItemCategory;
+  verdict: StackAnalysisOutputItemAnalysesItemVerdict;
+  analysis: string;
+  recommendation: string;
+  relatedBiomarkers: string[];
+  relatedGenetics: string[];
+  priority: StackAnalysisOutputItemAnalysesItemPriority;
+};
+
+export type StackAnalysisOutputGapsItemPriority =
+  (typeof StackAnalysisOutputGapsItemPriority)[keyof typeof StackAnalysisOutputGapsItemPriority];
+
+export const StackAnalysisOutputGapsItemPriority = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+export type StackAnalysisOutputGapsItem = {
+  nutrient: string;
+  reason: string;
+  suggestedForm: string;
+  suggestedDose: string;
+  evidenceBasis: string;
+  priority: StackAnalysisOutputGapsItemPriority;
+};
+
+export type StackAnalysisOutputInteractionsItemType =
+  (typeof StackAnalysisOutputInteractionsItemType)[keyof typeof StackAnalysisOutputInteractionsItemType];
+
+export const StackAnalysisOutputInteractionsItemType = {
+  absorption_conflict: "absorption_conflict",
+  timing_conflict: "timing_conflict",
+  synergy: "synergy",
+  redundancy: "redundancy",
+  drug_supplement_interaction: "drug_supplement_interaction",
+} as const;
+
+export type StackAnalysisOutputInteractionsItem = {
+  items: string[];
+  type: StackAnalysisOutputInteractionsItemType;
+  description: string;
+  recommendation: string;
+};
+
+export type StackAnalysisOutputTimingSchedule = {
+  morning: string[];
+  withBreakfast: string[];
+  midday: string[];
+  withDinner: string[];
+  evening: string[];
+  bedtime: string[];
+  notes: string[];
+};
+
+export interface StackAnalysisOutput {
+  overallAssessment: string;
+  itemAnalyses: StackAnalysisOutputItemAnalysesItem[];
+  gaps: StackAnalysisOutputGapsItem[];
+  interactions: StackAnalysisOutputInteractionsItem[];
+  timingSchedule: StackAnalysisOutputTimingSchedule;
+  totalDailyPillBurden: number;
+  /** @nullable */
+  estimatedMonthlyCost: string | null;
+}
+
 export interface InterpretationSummary {
   id: number;
   patientId: number;

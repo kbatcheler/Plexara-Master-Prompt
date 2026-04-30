@@ -441,6 +441,9 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
           panelReconciled: inputs.panelReconciled,
           biomarkerHistory: inputs.biomarkerHistory,
           currentSupplements: inputs.currentSupplements,
+          // Stack Intelligence — pass active medications so the
+          // synthesist can include a Current Care Plan Assessment.
+          currentMedications: inputs.currentMedications,
           imagingInterpretations: inputs.imagingInterpretations,
           // Metabolomic Medicine — surface OAT × bloodwork pathway
           // correlations from Step 1h so the synthesist explains the

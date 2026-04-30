@@ -41,6 +41,7 @@ import type {
   RegenerateInterpretation202,
   RegenerateInterpretation429,
   ReprocessStuckRecords200,
+  StackAnalysisOutput,
   UpdatePatientBody,
   UploadRecordBody,
 } from "./api.schemas";
@@ -1110,6 +1111,100 @@ export function useListInterpretations<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Generates a synchronous Stack Intelligence analysis of the patient's
+CURRENT supplement and medication stack against their reconciled
+biomarker findings, genetic profile, and active prescriptions.
+Distinct from the recommendation endpoint — this is a critique of
+what is already on file (form, dose, timing, interactions, gaps,
+redundancies), not a recommendation of new supplements.
+
+ * @summary Analyse the patient's current supplement and medication stack
+ */
+export const getAnalyseSupplementStackUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/supplements/stack-analysis`;
+};
+
+export const analyseSupplementStack = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<StackAnalysisOutput> => {
+  return customFetch<StackAnalysisOutput>(
+    getAnalyseSupplementStackUrl(patientId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getAnalyseSupplementStackMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyseSupplementStack>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof analyseSupplementStack>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  const mutationKey = ["analyseSupplementStack"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof analyseSupplementStack>>,
+    { patientId: number }
+  > = (props) => {
+    const { patientId } = props ?? {};
+
+    return analyseSupplementStack(patientId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AnalyseSupplementStackMutationResult = NonNullable<
+  Awaited<ReturnType<typeof analyseSupplementStack>>
+>;
+
+export type AnalyseSupplementStackMutationError = ErrorType<void>;
+
+/**
+ * @summary Analyse the patient's current supplement and medication stack
+ */
+export const useAnalyseSupplementStack = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyseSupplementStack>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof analyseSupplementStack>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  return useMutation(getAnalyseSupplementStackMutationOptions(options));
+};
 
 /**
  * Triggers a fresh lens interpretation against the most recent record's

@@ -165,6 +165,20 @@ export interface ComprehensiveReportInput {
   }>;
   biomarkerHistory: BiomarkerHistoryEntry[];
   currentSupplements?: Array<{ name: string; dosage: string | null }>;
+  /**
+   * Stack Intelligence — active medications passed alongside supplements so
+   * the synthesist can produce a "Current Care Plan Assessment" that
+   * evaluates appropriateness, gaps (e.g. statin without CoQ10), form
+   * issues (folic acid for an MTHFR carrier), and dosage concerns. Optional
+   * — when omitted, the report behaves exactly as before this field was
+   * added (additive contract).
+   */
+  currentMedications?: Array<{
+    name: string;
+    dosage: string | null;
+    frequency: string | null;
+    drugClass: string | null;
+  }>;
   imagingInterpretations?: Array<{
     studyId: number;
     modality: string | null;
@@ -284,10 +298,18 @@ export async function runComprehensiveReport(
       score: p.reconciledOutput?.unifiedHealthScore ?? null,
     }));
 
-  const supplementsBlock =
-    input.currentSupplements && input.currentSupplements.length > 0
-      ? `\n\nCurrent supplement stack (consider for context, do not re-recommend duplicates):\n${JSON.stringify(input.currentSupplements, null, 2)}`
-      : "";
+  // Stack Intelligence — when EITHER supplements or medications are on
+  // file, surface BOTH in a unified "Current Care Plan" block and instruct
+  // the synthesist to add a Care Plan Assessment to the narrative. Builds
+  // on the original supplements-only block (back-compat: when only
+  // supplements are passed, behaviour matches the prior contract — same
+  // header text + JSON shape, plus the new instruction).
+  const supplementsList = input.currentSupplements ?? [];
+  const medicationsList = input.currentMedications ?? [];
+  const hasCarePlan = supplementsList.length > 0 || medicationsList.length > 0;
+  const supplementsBlock = hasCarePlan
+    ? `\n\nCurrent supplement stack (consider for context, do not re-recommend duplicates):\n${JSON.stringify(supplementsList, null, 2)}\n\nActive medications (with drug class for depletion-rule context):\n${JSON.stringify(medicationsList, null, 2)}\n\nCURRENT CARE PLAN ASSESSMENT — include a section in the report that evaluates whether the patient's current medications and supplements are appropriate for their biomarker profile. Flag: gaps (e.g. on a statin but no CoQ10; on metformin but no B12), form issues (folic acid for an MTHFR carrier; magnesium oxide), dosage concerns (too high or too low for their actual biomarker levels), and interactions (drug-supplement, supplement-supplement). Do NOT prescribe — phrase as suggestions for the patient to discuss with their clinician.`
+    : "";
 
   const imagingBlock =
     input.imagingInterpretations && input.imagingInterpretations.length > 0

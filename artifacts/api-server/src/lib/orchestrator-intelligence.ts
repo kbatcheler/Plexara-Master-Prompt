@@ -201,6 +201,19 @@ export async function runIntelligenceSteps(patientId: number): Promise<Intellige
   // We deliberately load active meds + biomarkers freshly here rather
   // than threading them through from earlier steps — this step is opt-
   // in (no meds = no alerts) and the cost is two indexed queries.
+  //
+  // NOTE on data flow: the depletion rules engine reads ONLY the
+  // structured `medicationsTable` rows because each rule keys off
+  // `drugClass` (a controlled vocabulary that doesn't exist on the
+  // free-text `patientsTable.medications` jsonb captured during the
+  // Health Profile flow). A patient who only filled the profile and
+  // never added structured rows in the Medications page will therefore
+  // get NO depletion alerts here — by design. Their free-text meds
+  // still reach the lens enrichment via PatientContext.medications, and
+  // they are merged into the synchronous /supplements/stack-analysis
+  // route (which uses the LLM and tolerates missing drugClass). If we
+  // ever want this engine to consider profile meds, we'd need an
+  // intermediate name→drugClass classifier.
   try {
     const activeMeds = await db
       .select()

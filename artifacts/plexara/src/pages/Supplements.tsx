@@ -8,11 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity, RefreshCw } from "lucide-react";
+import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity, RefreshCw, FlaskConical, AlertTriangle, Clock, Layers, DollarSign } from "lucide-react";
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
 import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
 import { useToast } from "../hooks/use-toast";
-import { getListEvidenceQueryKey } from "@workspace/api-client-react";
+import {
+  getListEvidenceQueryKey,
+  useAnalyseSupplementStack,
+  type StackAnalysisOutput,
+  type StackAnalysisOutputItemAnalysesItem,
+  type StackAnalysisOutputGapsItem,
+  type StackAnalysisOutputInteractionsItem,
+  type StackAnalysisOutputTimingSchedule,
+} from "@workspace/api-client-react";
 
 /**
  * Drug-class → example medications fallback for the medication
@@ -164,12 +172,16 @@ export default function Supplements() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["supplements", patientId] });
       setNewSupp({ name: "", dosage: "", frequency: "" });
+      setStackChanged(true);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api<void>(`/patients/${patientId}/supplements/${id}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["supplements", patientId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["supplements", patientId] });
+      setStackChanged(true);
+    },
   });
 
   const generateMutation = useMutation({
@@ -251,6 +263,37 @@ export default function Supplements() {
     },
   });
 
+  // Stack Intelligence (Stack Analysis) — synchronous mutation that returns the
+  // full analysis JSON. We hold the result in component state so the user can
+  // tab away and come back without re-running it. `stackChanged` is flipped on
+  // by every supplement add/delete and propagates from MedicationsPanel via a
+  // callback prop, so the user gets a banner prompting them to re-analyse
+  // after editing their stack.
+  const [stackAnalysis, setStackAnalysis] = useState<StackAnalysisOutput | null>(null);
+  const [stackChanged, setStackChanged] = useState(false);
+
+  const stackAnalysisMutation = useAnalyseSupplementStack({
+    mutation: {
+      onSuccess: (data) => {
+        setStackAnalysis(data);
+        setStackChanged(false);
+        toast({ title: "Stack analysis ready", description: "Review the assessment below." });
+      },
+      onError: (err: Error & { detail?: { error?: string } }) => {
+        toast({
+          title: "Stack analysis failed",
+          description: err.detail?.error ?? "Please try again in a moment.",
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const runStackAnalysis = (): void => {
+    if (!patientId) return;
+    stackAnalysisMutation.mutate({ patientId });
+  };
+
   if (patientLoading || stackQuery.isLoading) {
     return <Skeleton className="h-96 w-full rounded-2xl" />;
   }
@@ -306,6 +349,79 @@ export default function Supplements() {
         </CardHeader>
       </Card>
 
+      {/*
+        Stack Intelligence — analyses the patient's CURRENT supplement +
+        medication stack against their reconciled biomarkers, genetics, and
+        active prescriptions. Distinct from "Generate recommendations" (which
+        proposes NEW supplements) — this critiques what is already on file:
+        form, dose, timing, interactions, gaps, redundancies.
+      */}
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-base flex items-center gap-2">
+                <FlaskConical className="h-4 w-4" />
+                Stack analysis
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">
+                Get a personalised review of your current supplement and medication stack —
+                form, dose, timing, interactions, gaps, and redundancies — checked against
+                your latest biomarker findings and genetic profile (if uploaded).
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={runStackAnalysis}
+              disabled={stackAnalysisMutation.isPending}
+              data-testid="button-analyse-stack"
+            >
+              {stackAnalysisMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  Analysing…
+                </>
+              ) : (
+                <>
+                  <FlaskConical className="mr-2 h-3.5 w-3.5" />
+                  {stackAnalysis ? "Re-analyse" : "Analyse my stack"}
+                </>
+              )}
+            </Button>
+          </div>
+        </CardHeader>
+        {/* Auto re-analyse banner — appears after any add/edit/delete to
+            either supplements or medications, until the user re-runs the
+            analysis (or runs it for the first time). */}
+        {stackAnalysis && stackChanged && !stackAnalysisMutation.isPending && (
+          <CardContent className="pt-0">
+            <div
+              className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2"
+              data-testid="banner-stack-changed"
+            >
+              <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Your stack changed since the last analysis. Re-run to refresh the assessment.
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={runStackAnalysis}
+                data-testid="button-rerun-stack-analysis"
+              >
+                <RefreshCw className="mr-1.5 h-3 w-3" />
+                Re-analyse
+              </Button>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {stackAnalysis && (
+        <StackAnalysisPanel data={stackAnalysis} />
+      )}
+
       <Tabs defaultValue="stack" className="space-y-4">
         <TabsList>
           <TabsTrigger value="stack" data-testid="tab-stack">My Stack ({stack.filter((s) => s.active).length})</TabsTrigger>
@@ -314,7 +430,7 @@ export default function Supplements() {
         </TabsList>
 
         <TabsContent value="medications" className="space-y-4">
-          <MedicationsPanel patientId={patientId!} />
+          <MedicationsPanel patientId={patientId!} onStackChange={() => setStackChanged(true)} />
         </TabsContent>
 
         <TabsContent value="stack" className="space-y-4">
@@ -513,7 +629,200 @@ interface DepletionFinding {
   patientNarrative: string; mechanism: string; suggestedAction: string | null;
 }
 
-function MedicationsPanel({ patientId }: { patientId: number }) {
+// ─────────────────────────────────────────────────────────────────────
+// StackAnalysisPanel — renders the structured Stack Intelligence output:
+// overall assessment, per-item verdicts, gaps, interactions, timing
+// schedule, and pill-burden / cost summary. Pure presentational; the
+// mutation lives in the parent so the result survives tab switches.
+// ─────────────────────────────────────────────────────────────────────
+function verdictColor(v: StackAnalysisOutputItemAnalysesItem["verdict"]): string {
+  switch (v) {
+    case "optimal":
+      return "border-emerald-500/40 text-emerald-400 bg-emerald-500/5";
+    case "interaction_warning":
+    case "consider_removing":
+      return "border-destructive/40 text-destructive bg-destructive/5";
+    case "adjust_dose":
+    case "change_form":
+    case "timing_issue":
+      return "border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/5";
+    case "add_cofactor":
+    default:
+      return "border-primary/40 text-primary bg-primary/5";
+  }
+}
+function priorityVariant(p: "high" | "medium" | "low"): "destructive" | "default" | "secondary" {
+  return p === "high" ? "destructive" : p === "medium" ? "default" : "secondary";
+}
+function verdictLabel(v: string): string {
+  return v.replace(/_/g, " ");
+}
+function StackAnalysisPanel({ data }: { data: StackAnalysisOutput }) {
+  const { overallAssessment, itemAnalyses, gaps, interactions, timingSchedule, totalDailyPillBurden, estimatedMonthlyCost } = data;
+  return (
+    <div className="space-y-4" data-testid="stack-analysis-panel">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <FlaskConical className="h-4 w-4 text-primary" />
+            Overall assessment
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{overallAssessment}</p>
+          <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <Layers className="h-3.5 w-3.5" />
+              <span className="font-mono text-foreground/80">{totalDailyPillBurden}</span> pills/day
+            </span>
+            {estimatedMonthlyCost && (
+              <span className="inline-flex items-center gap-1.5">
+                <DollarSign className="h-3.5 w-3.5" />
+                <span className="font-mono text-foreground/80">{estimatedMonthlyCost}</span> /month
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {itemAnalyses.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Item-by-item review</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {itemAnalyses.map((item: StackAnalysisOutputItemAnalysesItem, i: number) => (
+              <div key={`${item.name}-${i}`} className="rounded-md border p-3" data-testid={`stack-item-${i}`}>
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <span className="font-medium capitalize">{item.name}</span>
+                    {item.currentDosage && <span className="text-xs text-muted-foreground font-mono">{item.currentDosage}</span>}
+                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{item.category}</Badge>
+                    <Badge variant="outline" className={`text-[10px] uppercase tracking-wide ${verdictColor(item.verdict)}`}>
+                      {verdictLabel(item.verdict)}
+                    </Badge>
+                  </div>
+                  <Badge variant={priorityVariant(item.priority)} className="text-[10px] uppercase">{item.priority}</Badge>
+                </div>
+                <p className="text-sm mt-2 leading-relaxed">{item.analysis}</p>
+                <p className="text-sm mt-1.5 leading-relaxed"><span className="font-medium">Recommendation:</span> {item.recommendation}</p>
+                {(item.relatedBiomarkers.length > 0 || item.relatedGenetics.length > 0) && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {item.relatedBiomarkers.map((b) => (
+                      <Badge key={`b-${b}`} variant="outline" className="text-[10px]">{b}</Badge>
+                    ))}
+                    {item.relatedGenetics.map((g) => (
+                      <Badge key={`g-${g}`} variant="outline" className="text-[10px] border-primary/40 text-primary">{g}</Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {gaps.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Suggested gaps to fill
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {gaps.map((g: StackAnalysisOutputGapsItem, i: number) => (
+              <div key={`${g.nutrient}-${i}`} className="rounded-md border p-3" data-testid={`stack-gap-${i}`}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium capitalize">{g.nutrient}</span>
+                  <Badge variant={priorityVariant(g.priority)} className="text-[10px] uppercase">{g.priority}</Badge>
+                  <span className="text-xs text-muted-foreground font-mono">{g.suggestedForm} · {g.suggestedDose}</span>
+                </div>
+                <p className="text-sm mt-1.5">{g.reason}</p>
+                <p className="text-xs text-muted-foreground italic mt-1 border-l-2 border-border/40 pl-2">{g.evidenceBasis}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {interactions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Interactions & conflicts
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {interactions.map((it: StackAnalysisOutputInteractionsItem, i: number) => (
+              <div key={`int-${i}`} className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3" data-testid={`stack-interaction-${i}`}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="text-[10px] uppercase tracking-wide border-amber-500/50 text-amber-700 dark:text-amber-300">
+                    {verdictLabel(it.type)}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">{it.items.join(" + ")}</span>
+                </div>
+                <p className="text-sm mt-1.5">{it.description}</p>
+                <p className="text-sm mt-1"><span className="font-medium">Recommendation:</span> {it.recommendation}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            Suggested timing schedule
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Optimal times to take each item to maximise absorption and minimise interactions.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <TimingScheduleGrid schedule={timingSchedule} />
+          {timingSchedule.notes.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-muted-foreground list-disc pl-5">
+              {timingSchedule.notes.map((n, i) => <li key={i}>{n}</li>)}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+function TimingScheduleGrid({ schedule }: { schedule: StackAnalysisOutputTimingSchedule }) {
+  const slots: Array<{ key: keyof StackAnalysisOutputTimingSchedule; label: string }> = [
+    { key: "morning", label: "Morning (empty stomach)" },
+    { key: "withBreakfast", label: "With breakfast" },
+    { key: "midday", label: "Midday" },
+    { key: "withDinner", label: "With dinner" },
+    { key: "evening", label: "Evening" },
+    { key: "bedtime", label: "Bedtime" },
+  ];
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+      {slots.map(({ key, label }) => {
+        const items = schedule[key] as string[];
+        if (!items || items.length === 0) return null;
+        return (
+          <div key={key} className="rounded-md border p-2.5" data-testid={`timing-${key}`}>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">{label}</div>
+            <ul className="mt-1.5 space-y-0.5">
+              {items.map((it, i) => (
+                <li key={i} className="text-sm capitalize">{it}</li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MedicationsPanel({ patientId, onStackChange }: { patientId: number; onStackChange?: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<{ name: string; drugClass: string; dosage: string; startedAt: string; rxNormCui: string | null }>({
     name: "", drugClass: "", dosage: "", startedAt: "", rxNormCui: null,
@@ -553,16 +862,23 @@ function MedicationsPanel({ patientId }: { patientId: number }) {
     onSuccess: () => {
       setForm({ name: "", drugClass: "", dosage: "", startedAt: "", rxNormCui: null });
       qc.invalidateQueries({ queryKey: ["medications"] });
+      onStackChange?.();
     },
   });
   const toggleMut = useMutation({
     mutationFn: ({ id, active }: { id: number; active: boolean }) =>
       api(`/patients/${patientId}/medications/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["medications"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["medications"] });
+      onStackChange?.();
+    },
   });
   const delMut = useMutation({
     mutationFn: (id: number) => api(`/patients/${patientId}/medications/${id}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["medications"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["medications"] });
+      onStackChange?.();
+    },
   });
 
   const meds = medsQ.data ?? [];

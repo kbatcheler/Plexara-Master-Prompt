@@ -7,6 +7,7 @@ import {
   interpretationsTable,
   biomarkerResultsTable,
   supplementsTable,
+  medicationsTable,
   imagingStudiesTable,
   interventionOutcomesTable,
   evidenceRegistryTable,
@@ -122,6 +123,27 @@ export async function buildReportInputs(patientId: number) {
     .from(supplementsTable)
     .where(eq(supplementsTable.patientId, patientId));
   const currentSupplements = stack.map((s) => ({ name: s.name, dosage: s.dosage }));
+
+  // Stack Intelligence — load active medications alongside the supplement
+  // stack so the synthesist can produce a "Current Care Plan Assessment"
+  // (statin without CoQ10 gap, MTHFR + folic acid form issue, etc).
+  // Filtered to currently-active prescriptions; ended/historical meds are
+  // excluded since we want the snapshot the patient is on right now.
+  const activeMeds = await db
+    .select({
+      name: medicationsTable.name,
+      dosage: medicationsTable.dosage,
+      frequency: medicationsTable.frequency,
+      drugClass: medicationsTable.drugClass,
+    })
+    .from(medicationsTable)
+    .where(and(eq(medicationsTable.patientId, patientId), eq(medicationsTable.active, true)));
+  const currentMedications = activeMeds.map((m) => ({
+    name: m.name,
+    dosage: m.dosage,
+    frequency: m.frequency,
+    drugClass: m.drugClass,
+  }));
 
   // Imaging studies with a completed three-lens interpretation. We pass a
   // compact summary (narratives + concerns) rather than the full lens
@@ -296,6 +318,7 @@ export async function buildReportInputs(patientId: number) {
     panelReconciled,
     biomarkerHistory,
     currentSupplements,
+    currentMedications,
     imagingInterpretations,
     detectedPatterns,
     symptomCorrelations,
@@ -342,6 +365,12 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
       panelReconciled: inputs.panelReconciled,
       biomarkerHistory: inputs.biomarkerHistory,
       currentSupplements: inputs.currentSupplements,
+      // Care-plan assessment: pass active medications too so the report
+      // can reason about expected drug effects on biomarkers, contra-
+      // indications, and depletion risks. Mirrors the orchestrator path
+      // (post-interpretation-orchestrator.ts) so both report-generation
+      // entry points produce the same Current Care Plan section.
+      currentMedications: inputs.currentMedications.length > 0 ? inputs.currentMedications : undefined,
       imagingInterpretations: inputs.imagingInterpretations,
       // Enhancement J: ad-hoc /report calls also benefit from the
       // multi-panel delta. Computed inline here from the patient's full

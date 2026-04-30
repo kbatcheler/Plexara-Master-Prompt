@@ -581,6 +581,80 @@ export const ListInterpretationsResponse = zod.array(
 );
 
 /**
+ * Generates a synchronous Stack Intelligence analysis of the patient's
+CURRENT supplement and medication stack against their reconciled
+biomarker findings, genetic profile, and active prescriptions.
+Distinct from the recommendation endpoint — this is a critique of
+what is already on file (form, dose, timing, interactions, gaps,
+redundancies), not a recommendation of new supplements.
+
+ * @summary Analyse the patient's current supplement and medication stack
+ */
+export const AnalyseSupplementStackParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const AnalyseSupplementStackResponse = zod.object({
+  overallAssessment: zod.string(),
+  itemAnalyses: zod.array(
+    zod.object({
+      name: zod.string(),
+      currentDosage: zod.string().nullable(),
+      category: zod.enum(["supplement", "medication"]),
+      verdict: zod.enum([
+        "optimal",
+        "adjust_dose",
+        "change_form",
+        "add_cofactor",
+        "consider_removing",
+        "timing_issue",
+        "interaction_warning",
+      ]),
+      analysis: zod.string(),
+      recommendation: zod.string(),
+      relatedBiomarkers: zod.array(zod.string()),
+      relatedGenetics: zod.array(zod.string()),
+      priority: zod.enum(["high", "medium", "low"]),
+    }),
+  ),
+  gaps: zod.array(
+    zod.object({
+      nutrient: zod.string(),
+      reason: zod.string(),
+      suggestedForm: zod.string(),
+      suggestedDose: zod.string(),
+      evidenceBasis: zod.string(),
+      priority: zod.enum(["high", "medium", "low"]),
+    }),
+  ),
+  interactions: zod.array(
+    zod.object({
+      items: zod.array(zod.string()),
+      type: zod.enum([
+        "absorption_conflict",
+        "timing_conflict",
+        "synergy",
+        "redundancy",
+        "drug_supplement_interaction",
+      ]),
+      description: zod.string(),
+      recommendation: zod.string(),
+    }),
+  ),
+  timingSchedule: zod.object({
+    morning: zod.array(zod.string()),
+    withBreakfast: zod.array(zod.string()),
+    midday: zod.array(zod.string()),
+    withDinner: zod.array(zod.string()),
+    evening: zod.array(zod.string()),
+    bedtime: zod.array(zod.string()),
+    notes: zod.array(zod.string()),
+  }),
+  totalDailyPillBurden: zod.number(),
+  estimatedMonthlyCost: zod.string().nullable(),
+});
+
+/**
  * Triggers a fresh lens interpretation against the most recent record's
 cached extraction, picking up any care-plan changes (e.g. newly added
 medications) without requiring a re-upload. Rate-limited per patient.

@@ -7,8 +7,10 @@ import {
   interpretationsTable,
   biomarkerResultsTable,
   stackChangesTable,
+  medicationsTable,
+  evidenceRegistryTable,
 } from "@workspace/db";
-import { eq, and, desc, isNotNull, gte, lte } from "drizzle-orm";
+import { eq, and, desc, isNotNull, isNull, or, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
 import { pickAllowed } from "../lib/pickAllowed";
@@ -19,6 +21,13 @@ import {
   type ReconciledOutput,
   type PatientContext,
 } from "../lib/ai";
+import {
+  runStackAnalysis,
+  type StackAnalysisItemInput,
+  type StackAnalysisMedicationInput,
+  type StackAnalysisGeneticInput,
+  type StackAnalysisBiomarkerInput,
+} from "../lib/stack-analysis-ai";
 import { validate } from "../middlewares/validate";
 import { supplementCreateBody, supplementUpdateBody, supplementRecommendationStatusBody } from "../lib/validators";
 import { z } from "zod";
@@ -569,5 +578,224 @@ router.patch(
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Stack Intelligence — POST /supplements/stack-analysis
+//
+// Generates a comprehensive analysis of the patient's CURRENT supplement
+// and medication stack against their reconciled biomarker findings,
+// genetic profile (when available), and active prescriptions. Distinct
+// from /recommendations/generate (which proposes NEW supplements): this
+// is a critique of what is already on file — form, dose, timing,
+// interactions, gaps, and redundancies.
+//
+// Returns the full analysis JSON synchronously (one Claude utility call,
+// ~10-25s). Stateless — the result is rendered by the frontend and not
+// persisted, so the user can re-run any time after editing the stack.
+//
+// Errors:
+//  - 400 { error } when both supplements and medications are empty
+//  - 404 when patient is not accessible
+//  - 500 on LLM/DB failures (logged via req.log)
+// ─────────────────────────────────────────────────────────────────────
+router.post("/stack-analysis", requireAuth, async (req, res): Promise<void> => {
+  const patientId = parseInt(req.params.patientId as string);
+  const { userId } = req as AuthenticatedRequest;
+
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+
+  try {
+    // Parallel-load everything the analysis needs.
+    const [supplements, activeMeds, latestInterpRows, biomarkers, geneticEvidence] = await Promise.all([
+      db
+        .select()
+        .from(supplementsTable)
+        .where(and(eq(supplementsTable.patientId, patientId), eq(supplementsTable.active, true))),
+      db
+        .select({
+          name: medicationsTable.name,
+          dosage: medicationsTable.dosage,
+          frequency: medicationsTable.frequency,
+          drugClass: medicationsTable.drugClass,
+        })
+        .from(medicationsTable)
+        .where(and(eq(medicationsTable.patientId, patientId), eq(medicationsTable.active, true))),
+      db
+        .select()
+        .from(interpretationsTable)
+        .where(and(eq(interpretationsTable.patientId, patientId), isNotNull(interpretationsTable.reconciledOutput)))
+        .orderBy(desc(interpretationsTable.createdAt))
+        .limit(1),
+      // Latest biomarker values (excluding derived ratios — those are
+      // contextualised separately and would distort form/dose advice).
+      db
+        .select()
+        .from(biomarkerResultsTable)
+        .where(
+          and(
+            eq(biomarkerResultsTable.patientId, patientId),
+            or(eq(biomarkerResultsTable.isDerived, false), isNull(biomarkerResultsTable.isDerived)),
+          ),
+        )
+        .orderBy(desc(biomarkerResultsTable.createdAt)),
+      // Pharmacogenomics evidence (if uploaded). One row carries the gene/
+      // variant table in its `metrics` jsonb. Falls back to empty profile
+      // if none on file.
+      db
+        .select()
+        .from(evidenceRegistryTable)
+        .where(
+          and(
+            eq(evidenceRegistryTable.patientId, patientId),
+            eq(evidenceRegistryTable.documentType, "pharmacogenomics"),
+          ),
+        )
+        .orderBy(desc(evidenceRegistryTable.uploadDate))
+        .limit(1),
+    ]);
+
+    // Enhancement 4 — Health Profile data flow merge:
+    // If the user filled the Health Profile (patient.medications jsonb)
+    // but never added structured rows to the Medications page, fall back
+    // to the profile jsonb so the analysis still considers their meds.
+    // When BOTH sources have data we prefer the structured table (it
+    // carries drugClass) and ignore the jsonb to avoid duplicates.
+    const [patient] = await db
+      .select()
+      .from(patientsTable)
+      .where(eq(patientsTable.id, patientId));
+
+    let medicationsForAnalysis: StackAnalysisMedicationInput[] = activeMeds.map((m) => ({
+      name: m.name,
+      dosage: m.dosage,
+      drugClass: m.drugClass,
+    }));
+    let medicationsAsStackItems: StackAnalysisItemInput[] = activeMeds.map((m) => ({
+      name: m.name,
+      dosage: m.dosage,
+      frequency: m.frequency,
+      category: "medication",
+    }));
+
+    if (medicationsForAnalysis.length === 0 && Array.isArray(patient?.medications) && patient.medications.length > 0) {
+      const profileMeds = patient.medications as Array<Record<string, string | undefined>>;
+      medicationsForAnalysis = profileMeds
+        .filter((m) => typeof m?.name === "string" && m.name.trim().length > 0)
+        .map((m) => ({
+          name: m.name as string,
+          dosage: (m.dose ?? m.dosage ?? null) as string | null,
+          drugClass: null,
+        }));
+      medicationsAsStackItems = profileMeds
+        .filter((m) => typeof m?.name === "string" && m.name.trim().length > 0)
+        .map((m) => ({
+          name: m.name as string,
+          dosage: (m.dose ?? m.dosage ?? null) as string | null,
+          frequency: (m.frequency ?? null) as string | null,
+          category: "medication",
+        }));
+    }
+
+    if (supplements.length === 0 && medicationsForAnalysis.length === 0) {
+      res.status(400).json({
+        error: "No supplements or medications on file. Add your current stack first.",
+      });
+      return;
+    }
+
+    const currentStack: StackAnalysisItemInput[] = [
+      ...supplements.map<StackAnalysisItemInput>((s) => ({
+        name: s.name,
+        dosage: s.dosage,
+        frequency: s.frequency,
+        category: "supplement",
+      })),
+      ...medicationsAsStackItems,
+    ];
+
+    const ctx: PatientContext | undefined = patient ? buildPatientContext(patient) : undefined;
+
+    const reconciled = latestInterpRows[0]?.reconciledOutput
+      ? (decryptJson(latestInterpRows[0].reconciledOutput) as ReconciledOutput)
+      : null;
+
+    // Deduplicate biomarkers — keep latest value per name (already
+    // ordered DESC by createdAt above). Cap at 40 so the prompt stays
+    // well inside token limits even for patients with hundreds of rows.
+    const seenBiomarkers = new Set<string>();
+    const biomarkerHighlights: StackAnalysisBiomarkerInput[] = [];
+    for (const b of biomarkers) {
+      const key = b.biomarkerName.toLowerCase();
+      if (seenBiomarkers.has(key)) continue;
+      seenBiomarkers.add(key);
+      biomarkerHighlights.push({
+        name: b.biomarkerName,
+        value: b.value ?? "",
+        unit: b.unit ?? "",
+        optimalLow: b.optimalRangeLow,
+        optimalHigh: b.optimalRangeHigh,
+        // Lightweight status tag the LLM can use to prioritise. We don't
+        // duplicate the optimal-range comparison logic here — the LLM
+        // sees the raw value + range and infers context.
+        status: classifyBiomarkerForStack(b.value, b.optimalRangeLow, b.optimalRangeHigh),
+      });
+      if (biomarkerHighlights.length >= 40) break;
+    }
+
+    // Pharmacogenomics — extract gene/variant rows from the evidence's
+    // metrics jsonb. Each metric typically has { name (gene), value
+    // (variant or phenotype), interpretation (phenotype text) }.
+    type EvidenceMetric = { name: string; value: string | number; interpretation: string | null };
+    const geneticProfile: StackAnalysisGeneticInput[] = (() => {
+      const ev = geneticEvidence[0];
+      if (!ev || !Array.isArray(ev.metrics)) return [];
+      return (ev.metrics as EvidenceMetric[])
+        .filter((m) => typeof m?.name === "string" && m.name.trim().length > 0)
+        .map((m) => ({
+          gene: m.name,
+          variant: String(m.value ?? ""),
+          phenotype: m.interpretation ?? String(m.value ?? ""),
+        }));
+    })();
+
+    const analysis = await runStackAnalysis(
+      currentStack,
+      reconciled,
+      ctx,
+      geneticProfile,
+      medicationsForAnalysis,
+      biomarkerHighlights,
+    );
+
+    res.json(analysis);
+  } catch (err) {
+    req.log.error({ err, patientId }, "Stack analysis failed");
+    res.status(500).json({ error: "Failed to analyse stack" });
+  }
+});
+
+/**
+ * Lightweight status classifier for stack-analysis biomarker context.
+ * Returns "low" | "high" | "in_range" | "unknown". The LLM reads the raw
+ * value + optimal range and re-evaluates anyway — this is just a hint.
+ */
+function classifyBiomarkerForStack(
+  value: string | null,
+  optimalLow: string | null,
+  optimalHigh: string | null,
+): string {
+  if (value == null || value === "") return "unknown";
+  const v = Number(value);
+  if (!Number.isFinite(v)) return "unknown";
+  const lo = optimalLow != null ? Number(optimalLow) : null;
+  const hi = optimalHigh != null ? Number(optimalHigh) : null;
+  if (lo != null && Number.isFinite(lo) && v < lo) return "low";
+  if (hi != null && Number.isFinite(hi) && v > hi) return "high";
+  if (lo != null || hi != null) return "in_range";
+  return "unknown";
+}
 
 export default router;

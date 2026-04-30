@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronRight, Pill, FileBarChart2, Layers, Activity, ScanLine } from "lucide-react";
+import { ChevronRight, Pill, FileBarChart2, Layers, Activity, ScanLine, FlaskConical } from "lucide-react";
 import { Link } from "wouter";
 import { api } from "../../lib/api";
 
@@ -15,6 +15,7 @@ interface ComprehensiveReportLatest {
   id: number;
   panelCount: number;
   generatedAt: string;
+  followUpTesting?: string[];
 }
 
 interface EligibleProtocol {
@@ -85,6 +86,7 @@ export function IntelligenceSummary({ patientId }: { patientId: number }) {
 
   const recCount = recsQuery.data?.length ?? 0;
   const report = reportQuery.data ?? null;
+  const followUpTests = (report?.followUpTesting ?? []).filter((t) => typeof t === "string" && t.trim().length > 0);
   const matchedProtocols = (protocolsQuery.data ?? []).filter((p) => !p.alreadyAdopted);
   const trajectoryAlerts = (alertsQuery.data ?? []).filter(
     (a) => a.triggerType === "trajectory" || a.triggerType === "change",
@@ -112,6 +114,20 @@ export function IntelligenceSummary({ patientId }: { patientId: number }) {
           icon: FileBarChart2,
           title: `Comprehensive report across ${report.panelCount} panel${report.panelCount === 1 ? "" : "s"}`,
           subtitle: `Updated ${new Date(report.generatedAt).toLocaleDateString()}`,
+          href: "/report",
+        }
+      : null,
+    // Recommended next tests — surfaces follow-up testing recommendations from
+    // the latest comprehensive report. Only renders when the report has at
+    // least one item, so the card stays out of the way for new users with no
+    // report yet.
+    followUpTests.length > 0
+      ? {
+          key: "next-tests",
+          icon: FlaskConical,
+          title: `${followUpTests.length} recommended next test${followUpTests.length === 1 ? "" : "s"}`,
+          subtitle:
+            followUpTests.slice(0, 2).join(" · ") + (followUpTests.length > 2 ? " +more" : ""),
           href: "/report",
         }
       : null,

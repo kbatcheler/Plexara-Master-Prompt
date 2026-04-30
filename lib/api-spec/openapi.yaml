@@ -339,6 +339,40 @@ paths:
                 items:
                   $ref: "#/components/schemas/InterpretationSummary"
 
+  /patients/{patientId}/supplements/stack-analysis:
+    post:
+      operationId: analyseSupplementStack
+      tags: [supplements]
+      summary: Analyse the patient's current supplement and medication stack
+      description: |
+        Generates a synchronous Stack Intelligence analysis of the patient's
+        CURRENT supplement and medication stack against their reconciled
+        biomarker findings, genetic profile, and active prescriptions.
+        Distinct from the recommendation endpoint — this is a critique of
+        what is already on file (form, dose, timing, interactions, gaps,
+        redundancies), not a recommendation of new supplements.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Stack analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackAnalysisOutput"
+        "400":
+          description: No supplements or medications on file
+        "404":
+          description: Patient not found
+        "500":
+          description: Analysis failed
+
   /patients/{patientId}/interpretations/regenerate:
     post:
       operationId: regenerateInterpretation
@@ -981,6 +1015,123 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/BiomarkerResult"
+
+    StackAnalysisOutput:
+      type: object
+      required:
+        - overallAssessment
+        - itemAnalyses
+        - gaps
+        - interactions
+        - timingSchedule
+        - totalDailyPillBurden
+        - estimatedMonthlyCost
+      properties:
+        overallAssessment:
+          type: string
+        itemAnalyses:
+          type: array
+          items:
+            type: object
+            required: [name, currentDosage, category, verdict, analysis, recommendation, relatedBiomarkers, relatedGenetics, priority]
+            properties:
+              name:
+                type: string
+              currentDosage:
+                type: ["string", "null"]
+              category:
+                type: string
+                enum: [supplement, medication]
+              verdict:
+                type: string
+                enum: [optimal, adjust_dose, change_form, add_cofactor, consider_removing, timing_issue, interaction_warning]
+              analysis:
+                type: string
+              recommendation:
+                type: string
+              relatedBiomarkers:
+                type: array
+                items:
+                  type: string
+              relatedGenetics:
+                type: array
+                items:
+                  type: string
+              priority:
+                type: string
+                enum: [high, medium, low]
+        gaps:
+          type: array
+          items:
+            type: object
+            required: [nutrient, reason, suggestedForm, suggestedDose, evidenceBasis, priority]
+            properties:
+              nutrient:
+                type: string
+              reason:
+                type: string
+              suggestedForm:
+                type: string
+              suggestedDose:
+                type: string
+              evidenceBasis:
+                type: string
+              priority:
+                type: string
+                enum: [high, medium, low]
+        interactions:
+          type: array
+          items:
+            type: object
+            required: [items, type, description, recommendation]
+            properties:
+              items:
+                type: array
+                items:
+                  type: string
+              type:
+                type: string
+                enum: [absorption_conflict, timing_conflict, synergy, redundancy, drug_supplement_interaction]
+              description:
+                type: string
+              recommendation:
+                type: string
+        timingSchedule:
+          type: object
+          required: [morning, withBreakfast, midday, withDinner, evening, bedtime, notes]
+          properties:
+            morning:
+              type: array
+              items:
+                type: string
+            withBreakfast:
+              type: array
+              items:
+                type: string
+            midday:
+              type: array
+              items:
+                type: string
+            withDinner:
+              type: array
+              items:
+                type: string
+            evening:
+              type: array
+              items:
+                type: string
+            bedtime:
+              type: array
+              items:
+                type: string
+            notes:
+              type: array
+              items:
+                type: string
+        totalDailyPillBurden:
+          type: number
+        estimatedMonthlyCost:
+          type: ["string", "null"]
 
     InterpretationSummary:
       type: object
