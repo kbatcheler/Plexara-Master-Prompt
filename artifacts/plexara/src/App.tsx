@@ -47,6 +47,7 @@ import { isDevSignedIn } from "./lib/dev-auth";
 import { Layout } from "./components/layout/Layout";
 import { useCurrentPatient } from "./hooks/use-current-patient";
 import { ActivePatientProvider } from "./context/ActivePatientContext";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -178,6 +179,7 @@ function ClerkProviderWithRoutes() {
         <ModeProvider>
           <ActivePatientProvider>
             <TooltipProvider>
+              <ErrorBoundary>
               <Switch>
                 <Route path="/" component={HomeRedirect} />
                 <Route path="/share/:token" component={SharedView} />
@@ -228,6 +230,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/safety"><ProtectedRoute component={Safety} /></Route>
                 <Route component={NotFound} />
               </Switch>
+              </ErrorBoundary>
               <Toaster />
             </TooltipProvider>
           </ActivePatientProvider>

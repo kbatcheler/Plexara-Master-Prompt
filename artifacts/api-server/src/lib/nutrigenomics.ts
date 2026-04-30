@@ -4,7 +4,7 @@
  * When a patient has uploaded a genetic profile (23andMe / Ancestry /
  * VCF), specific SNPs can amplify or attenuate biomarker findings.
  * This module:
- *   1. Defines a curated, conservative SNP_RULES catalogue (5 rules)
+ *   1. Defines a curated, conservative SNP_RULES catalogue (7 rules)
  *      with mechanism, dependent biomarkers, and clinical narrative.
  *   2. scanNutrigenomicCrossReferences(genotypes, biomarkerMap) — pure
  *      function that returns NutrigenomicFinding[] for the lens prompt.
@@ -120,6 +120,31 @@ export const SNP_RULES: SnpRule[] = [
     mechanism: "CYP1A2 *1F (C allele) reduces caffeine clearance ~40%. Slow metabolisers retain caffeine longer, with documented elevations in blood pressure and inflammatory markers from habitual high intake.",
     patientNarrative: "You carry the CYP1A2 slow-caffeine-metaboliser variant. If you regularly drink more than 200mg caffeine/day (~2 cups coffee), it may be worth observing whether reducing intake affects your blood pressure or inflammatory markers.",
     suggestedAction: "If habitual intake exceeds 200mg/day, consider a 4-week reduction trial and recheck BP + hs-CRP.",
+  },
+  {
+    id: "comt-val158met-homozygous",
+    label: "COMT Val158Met (AA — slow COMT)",
+    rsids: ["rs4680"],
+    riskGenotypes: { homozygous: "AA" },
+    // No biomarkerEvidence guard: COMT supplement-dosing implications are
+    // valuable independent of current homocysteine/cortisol values, so we
+    // fire on genotype alone (matching the cyp1a2 pattern).
+    dependentBiomarkers: ["homocysteine", "cortisol"],
+    severity: "watch",
+    mechanism: "COMT AA (Met/Met) reduces catechol-O-methyltransferase activity by ~75%. Slower clearance of dopamine, norepinephrine, and oestrogen catechols. Individuals tend toward higher stress sensitivity, anxiety proneness, and pain sensitivity — but also sustained focus and creativity. Slower methylation turnover means methyl donor supplements (methylfolate, SAMe) can overshoot and worsen anxiety.",
+    patientNarrative: "You carry the slow COMT variant (Met/Met), which means your body clears stress hormones and neurotransmitters more slowly than average. This can mean you're more sensitive to stress but also better at sustained focus. If you're supplementing methylfolate, start at a lower dose (200-400mcg) and increase gradually — high-dose methylation support can cause anxiety and irritability in slow COMT individuals. Magnesium glycinate (400mg) is especially supportive for COMT enzyme function.",
+    suggestedAction: "Start methylfolate at 200-400mcg (not 800mcg) and titrate slowly based on response. Avoid high-dose SAMe (>200mg) initially. Magnesium glycinate 400mg daily supports COMT enzyme function and calms catecholamine excess. Consider phosphatidylserine (100-300mg) for cortisol modulation. Avoid excess caffeine — slow COMT + slow CYP1A2 is a particularly stimulant-sensitive combination.",
+  },
+  {
+    id: "comt-val158met-heterozygous",
+    label: "COMT Val158Met (AG — intermediate COMT)",
+    rsids: ["rs4680"],
+    riskGenotypes: { heterozygous: "AG" },
+    dependentBiomarkers: ["homocysteine", "cortisol"],
+    severity: "info",
+    mechanism: "COMT AG (Val/Met) has ~35-40% reduced enzyme activity compared to GG. Intermediate phenotype — some sensitivity to methylation support overshoot but generally tolerates standard doses.",
+    patientNarrative: "You carry one copy of the slow COMT variant. Your catecholamine clearance is moderately reduced. Standard methylfolate dosing (400-800mcg) is generally well-tolerated, but monitor for anxiety or irritability when starting methylation support — reduce the dose if these occur.",
+    suggestedAction: "Standard methylfolate dosing (400-800mcg) is usually tolerated — monitor for anxiety. Magnesium glycinate (300-400mg) is supportive.",
   },
 ];
 

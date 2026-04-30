@@ -14,6 +14,7 @@ import { computeRatiosFromData } from "./ratios";
 import { buildMedicationBlock, type MedicationContext } from "./medication-biomarker-rules";
 import { evaluateCircadianContext, seasonalVitaminDAdjustment } from "./circadian";
 import { scanNutrigenomicCrossReferences, type PatientGenotype } from "./nutrigenomics";
+import { getAllBiomarkerReferences } from "./biomarker-cache";
 import {
   scanWearableBiomarkerFusion,
   type WearableObservation,
@@ -226,7 +227,18 @@ export async function buildEnrichedLensPayload(
   // 6. Enhancement F: nutrigenomic SNP × biomarker cross-reference.
   let nutrigenomicFindings: ReturnType<typeof scanNutrigenomicCrossReferences> = [];
   try {
-    const watchedRsids = Array.from(new Set(["rs1801133", "rs429358", "rs7412", "rs1544410", "rs762551"]));
+    // SNPs the nutrigenomic rule engine watches. Must include every rsid
+    // referenced by SNP_RULES in nutrigenomics.ts — adding a rule there
+    // without adding the rsid here means the genotype is never loaded and
+    // the rule silently never fires.
+    const watchedRsids = Array.from(new Set([
+      "rs1801133", // MTHFR C677T
+      "rs429358",  // APOE
+      "rs7412",    // APOE
+      "rs1544410", // VDR BsmI
+      "rs762551",  // CYP1A2 *1F
+      "rs4680",    // COMT Val158Met
+    ]));
     const profile = await db.query.geneticProfilesTable.findFirst({
       where: eq(geneticProfilesTable.patientId, patientId),
       columns: { id: true },
@@ -342,6 +354,27 @@ export async function buildEnrichedLensPayload(
     logger.warn({ err, patientId, recordId }, "Failed to load additional evidence for lens enrichment (continuing without)");
   }
 
+  // Functional-medicine notes from the biomarker reference table. These
+  // are short clinical addenda (e.g. "No established toxicity threshold
+  // for D3 with K2/Mg co-supplementation") that reinforce the lens
+  // preamble's optimal-range recalibration with biomarker-specific
+  // detail. Loaded from the in-memory cache so this is effectively free
+  // after the first call. Failure here is non-fatal — the lenses still
+  // have the preamble and reference ranges to work with.
+  let fmNotes: Record<string, string> | null = null;
+  try {
+    const refs = await getAllBiomarkerReferences();
+    const notes: Record<string, string> = {};
+    for (const [name, ref] of refs) {
+      if (ref.functionalMedicineNote) {
+        notes[name] = ref.functionalMedicineNote;
+      }
+    }
+    if (Object.keys(notes).length > 0) fmNotes = notes;
+  } catch (err) {
+    logger.warn({ err, patientId, recordId }, "Failed to load functional medicine notes for lens enrichment (continuing without)");
+  }
+
   // Compose the lens-facing payload — keys are only attached when present
   // so prompt JSON stays clean for fresh patients with no history.
   const hasEnrichment =
@@ -352,7 +385,8 @@ export async function buildEnrichedLensPayload(
     seasonalVitD ||
     nutrigenomicFindings.length > 0 ||
     fusionFindings.length > 0 ||
-    additionalEvidence.length > 0;
+    additionalEvidence.length > 0 ||
+    fmNotes !== null;
 
   const anonymisedForLens: AnonymisedData = hasEnrichment
     ? {
@@ -365,6 +399,7 @@ export async function buildEnrichedLensPayload(
         ...(nutrigenomicFindings.length > 0 ? { nutrigenomicContext: nutrigenomicFindings } : {}),
         ...(fusionFindings.length > 0 ? { wearableBiomarkerFusion: fusionFindings } : {}),
         ...(additionalEvidence.length > 0 ? { additionalEvidence } : {}),
+        ...(fmNotes ? { functionalMedicineContext: fmNotes } : {}),
       }
     : anonymised;
 

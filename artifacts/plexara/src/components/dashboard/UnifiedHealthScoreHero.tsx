@@ -229,14 +229,23 @@ export function UnifiedHealthScoreHero({
           </div>
 
           {/* Degraded-pipeline notice: shown when fewer than the full 3
-              analytical lenses contributed to this reconciliation. */}
-          {lensesCompleted !== null && lensesCompleted !== undefined && lensesCompleted < 3 ? (
+              analytical lenses contributed to this reconciliation. The
+              `> 0` guard suppresses the banner for fresh patients with no
+              interpretation yet (lensesCompleted === 0 is the same UX as
+              null — pending). */}
+          {lensesCompleted != null && lensesCompleted > 0 && lensesCompleted < 3 ? (
             <div
-              className="mt-3 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 rounded-lg px-3 py-2"
+              className="mt-3 flex items-center gap-2 text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 rounded-lg px-3 py-2 border border-amber-200 dark:border-amber-800/50"
               data-testid="lens-degraded-banner"
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              {lensesCompleted} of 3 analytical lenses completed. Results may be less comprehensive.
+              <span>
+                This analysis was produced by {lensesCompleted} of 3 analytical lenses.
+                {lensesCompleted === 2
+                  ? " Results are valid but may be less comprehensive than a full 3-lens analysis."
+                  : " Results have limited cross-validation. Consider re-running when all lenses are available."
+                }
+              </span>
             </div>
           ) : null}
 

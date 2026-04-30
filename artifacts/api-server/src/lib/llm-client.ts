@@ -62,12 +62,11 @@ export const LLM_MODELS = {
   // labels). Defaults to the reconciliation model so the pipeline stays
   // internally consistent without extra config.
   utility: process.env.LLM_UTILITY_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
-  // Extraction model — structured data extraction from PDFs/images.
-  // Bumped from Haiku to Sonnet 4.6 for the testing posture so PDF
-  // parsing accuracy matches the reasoning lenses. Set
-  // LLM_EXTRACTION_MODEL=claude-haiku-4-5-20251001 to revert to the
-  // faster/cheaper extraction path.
-  extraction: process.env.LLM_EXTRACTION_MODEL || "claude-sonnet-4-6",
+  // Extraction is structured data pulling from PDFs — it doesn't need
+  // Sonnet's reasoning power. Haiku is 3-5x faster and produces
+  // equivalent extraction quality. Override via LLM_EXTRACTION_MODEL
+  // if a specific document type requires more reasoning.
+  extraction: process.env.LLM_EXTRACTION_MODEL || "claude-haiku-4-5-20251001",
 } as const;
 
 /**

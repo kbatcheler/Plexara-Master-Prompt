@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# Pre-commit hook: block accidental commit of medical files.
+# Install: git config core.hooksPath .githooks
+#
+
+BLOCKED=$(git diff --cached --name-only | grep -iE '\.(pdf|dcm|dicom|nii|nii\.gz|png|jpg|jpeg)$' | grep -iv 'node_modules\|dist\|public\/.*\.(png|jpg|jpeg)$')
+
+if [ -n "$BLOCKED" ]; then
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════╗"
+  echo "║  ⛔  BLOCKED: Medical/image files detected in commit     ║"
+  echo "╠══════════════════════════════════════════════════════════╣"
+  echo "$BLOCKED" | while IFS= read -r f; do echo "║  $f"; done
+  echo "╠══════════════════════════════════════════════════════════╣"
+  echo "║  Patient data must never be committed to git.            ║"
+  echo "║  Use: git reset HEAD <file> to unstage.                  ║"
+  echo "╚══════════════════════════════════════════════════════════╝"
+  echo ""
+  exit 1
+fi

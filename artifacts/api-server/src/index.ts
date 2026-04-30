@@ -69,6 +69,11 @@ if (process.env.ENABLE_DEV_AUTH === "true") {
       "cookies regardless. Unset ENABLE_DEV_AUTH on this deployment.",
     );
   } else {
+    logger.warn("╔════════════════════════════════════════════════════╗");
+    logger.warn("║  ⚠️  DEV AUTH BYPASS IS ENABLED                    ║");
+    logger.warn("║  Anyone can sign in without Clerk credentials.     ║");
+    logger.warn("║  Do NOT use this in production or beta testing.    ║");
+    logger.warn("╚════════════════════════════════════════════════════╝");
     logger.warn(
       "Dev auth bypass is ENABLED (ENABLE_DEV_AUTH=true). Unset this for " +
       "any production-like deployment.",
