@@ -581,6 +581,17 @@ export const ListInterpretationsResponse = zod.array(
 );
 
 /**
+ * Triggers a fresh lens interpretation against the most recent record's
+cached extraction, picking up any care-plan changes (e.g. newly added
+medications) without requiring a re-upload. Rate-limited per patient.
+
+ * @summary Re-run the 3-lens pipeline against the patient's most recent record
+ */
+export const RegenerateInterpretationParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+/**
  * @summary Get the latest interpretation for a patient
  */
 export const GetLatestInterpretationParams = zod.object({

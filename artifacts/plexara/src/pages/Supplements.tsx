@@ -8,9 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity } from "lucide-react";
+import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity, RefreshCw } from "lucide-react";
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
 import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
+import { useToast } from "../hooks/use-toast";
+import { getListEvidenceQueryKey } from "@workspace/api-client-react";
 
 /**
  * Drug-class → example medications fallback for the medication
@@ -141,6 +143,7 @@ function ImpactPanel({ patientId, supplementId }: { patientId: number; supplemen
 export default function Supplements() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [newSupp, setNewSupp] = useState({ name: "", dosage: "", frequency: "" });
   const [openImpactId, setOpenImpactId] = useState<number | null>(null);
 
@@ -186,6 +189,68 @@ export default function Supplements() {
     },
   });
 
+  /**
+   * Re-runs the 3-lens interpretation pipeline against the patient's most
+   * recent record so newly added medications (which feed the lens enrichment
+   * at run time) get reflected in the dashboard findings without requiring
+   * the user to re-upload the source document.
+   *
+   * The backend cooldown (one minute per patient) protects against runaway
+   * LLM costs from rapid clicking; we surface the retry-after seconds
+   * directly in the toast.
+   */
+  const regenerateMutation = useMutation({
+    mutationFn: () =>
+      api<{ recordId: number; version: number; message: string }>(
+        `/patients/${patientId}/interpretations/regenerate`,
+        { method: "POST" },
+      ),
+    onSuccess: (data) => {
+      toast({
+        title: "Regenerating findings",
+        description: data.message,
+      });
+      // Give the background pipeline a moment, then refresh everything that
+      // hangs off the latest interpretation. The dashboard groups its
+      // queries under the `["intelligence", ...]` prefix (report, supplements,
+      // protocols, alerts, imaging, stack, impact), and React Query matches
+      // by prefix — so a single invalidation of `["intelligence"]` covers
+      // them all and stays correct as new sub-keys get added.
+      // Poll for ~30s because the lens dispatch typically completes in 5-15s.
+      const refresh = (): void => {
+        qc.invalidateQueries({ queryKey: ["intelligence"] });
+        qc.invalidateQueries({ queryKey: ["ratios", patientId] });
+        qc.invalidateQueries({ queryKey: ["baseline", patientId] });
+        // EvidenceMap uses the orval-generated query key, which is the
+        // request URL string — match it exactly via the helper.
+        qc.invalidateQueries({ queryKey: getListEvidenceQueryKey(patientId!) });
+      };
+      const stop = Date.now() + 30_000;
+      const tick = (): void => {
+        refresh();
+        if (Date.now() < stop) {
+          window.setTimeout(tick, 5000);
+        }
+      };
+      window.setTimeout(tick, 4000);
+    },
+    onError: (err: Error & { detail?: { error?: string; retryAfterSec?: number } }) => {
+      const retry = err.detail?.retryAfterSec;
+      if (retry) {
+        toast({
+          title: "Please wait a moment",
+          description: `You can regenerate again in ${retry} second${retry === 1 ? "" : "s"}.`,
+        });
+        return;
+      }
+      toast({
+        title: "Could not regenerate findings",
+        description: err.detail?.error ?? "Please try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
   if (patientLoading || stackQuery.isLoading) {
     return <Skeleton className="h-96 w-full rounded-2xl" />;
   }
@@ -203,6 +268,43 @@ export default function Supplements() {
         <h1 className="font-heading text-3xl font-bold tracking-tight">Supplement Stack</h1>
         <p className="text-muted-foreground mt-1">Track what you take and get evidence-based suggestions tied to your specific biomarkers.</p>
       </div>
+
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-base flex items-center gap-2">
+                <RefreshCw className="h-4 w-4" />
+                Refresh your findings
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">
+                Your dashboard findings were generated against your last record upload.
+                After adding or changing medications here, regenerate to have the analysis
+                re-run with your updated context — no re-upload needed.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => regenerateMutation.mutate()}
+              disabled={regenerateMutation.isPending}
+              data-testid="button-regenerate-findings"
+            >
+              {regenerateMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  Starting…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                  Regenerate findings
+                </>
+              )}
+            </Button>
+          </div>
+        </CardHeader>
+      </Card>
 
       <Tabs defaultValue="stack" className="space-y-4">
         <TabsList>

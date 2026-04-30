@@ -636,6 +636,17 @@ export type ReprocessStuckRecords200 = {
   recordIds: number[];
 };
 
+export type RegenerateInterpretation202 = {
+  recordId: number;
+  version: number;
+  message: string;
+};
+
+export type RegenerateInterpretation429 = {
+  error: string;
+  retryAfterSec: number;
+};
+
 export type ListBiomarkerResultsParams = {
   /**
    * @nullable

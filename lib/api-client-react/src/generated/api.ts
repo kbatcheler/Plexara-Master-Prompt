@@ -38,6 +38,8 @@ import type {
   Patient,
   Record,
   RecordDetail,
+  RegenerateInterpretation202,
+  RegenerateInterpretation429,
   ReprocessStuckRecords200,
   UpdatePatientBody,
   UploadRecordBody,
@@ -1108,6 +1110,98 @@ export function useListInterpretations<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Triggers a fresh lens interpretation against the most recent record's
+cached extraction, picking up any care-plan changes (e.g. newly added
+medications) without requiring a re-upload. Rate-limited per patient.
+
+ * @summary Re-run the 3-lens pipeline against the patient's most recent record
+ */
+export const getRegenerateInterpretationUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/interpretations/regenerate`;
+};
+
+export const regenerateInterpretation = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<RegenerateInterpretation202> => {
+  return customFetch<RegenerateInterpretation202>(
+    getRegenerateInterpretationUrl(patientId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRegenerateInterpretationMutationOptions = <
+  TError = ErrorType<void | RegenerateInterpretation429>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateInterpretation>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof regenerateInterpretation>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  const mutationKey = ["regenerateInterpretation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof regenerateInterpretation>>,
+    { patientId: number }
+  > = (props) => {
+    const { patientId } = props ?? {};
+
+    return regenerateInterpretation(patientId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegenerateInterpretationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof regenerateInterpretation>>
+>;
+
+export type RegenerateInterpretationMutationError =
+  ErrorType<void | RegenerateInterpretation429>;
+
+/**
+ * @summary Re-run the 3-lens pipeline against the patient's most recent record
+ */
+export const useRegenerateInterpretation = <
+  TError = ErrorType<void | RegenerateInterpretation429>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateInterpretation>>,
+    TError,
+    { patientId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof regenerateInterpretation>>,
+  TError,
+  { patientId: number },
+  TContext
+> => {
+  return useMutation(getRegenerateInterpretationMutationOptions(options));
+};
 
 /**
  * @summary Get the latest interpretation for a patient

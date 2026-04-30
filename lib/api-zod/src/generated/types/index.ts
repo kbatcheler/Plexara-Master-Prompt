@@ -51,6 +51,8 @@ export * from "./recordDetailLensCOutput";
 export * from "./recordDetailReconciledOutput";
 export * from "./recordRecordType";
 export * from "./recordStatus";
+export * from "./regenerateInterpretation202";
+export * from "./regenerateInterpretation429";
 export * from "./reprocessStuckRecords200";
 export * from "./updatePatientBody";
 export * from "./updatePatientBodySex";

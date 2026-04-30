@@ -339,6 +339,55 @@ paths:
                 items:
                   $ref: "#/components/schemas/InterpretationSummary"
 
+  /patients/{patientId}/interpretations/regenerate:
+    post:
+      operationId: regenerateInterpretation
+      tags: [interpretations]
+      summary: Re-run the 3-lens pipeline against the patient's most recent record
+      description: |
+        Triggers a fresh lens interpretation against the most recent record's
+        cached extraction, picking up any care-plan changes (e.g. newly added
+        medications) without requiring a re-upload. Rate-limited per patient.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "202":
+          description: Regeneration dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recordId, version, message]
+                properties:
+                  recordId:
+                    type: integer
+                  version:
+                    type: integer
+                  message:
+                    type: string
+        "400":
+          description: No analysed record available to regenerate against
+        "404":
+          description: Patient not found
+        "429":
+          description: Cooldown active — try again shortly
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, retryAfterSec]
+                properties:
+                  error:
+                    type: string
+                  retryAfterSec:
+                    type: integer
+
   /patients/{patientId}/interpretations/latest:
     get:
       operationId: getLatestInterpretation
