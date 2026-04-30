@@ -135,7 +135,15 @@ export function GuidedTour() {
   // Position the popover relative to the anchor rect, clamping to viewport.
   const pos = positionPopover(rect, step.side ?? "bottom");
 
-  const isLast = stepIndex === STEPS.length - 1;
+  // IMPORTANT: compare against `availableSteps.length`, NOT `STEPS.length`.
+  // The tour iterates only the steps whose anchors are actually present in
+  // the DOM (see availableSteps filter on mount). Comparing to STEPS.length
+  // here was the cause of the "tour shows 4 steps but vanishes after 2"
+  // bug: when only 2 anchors existed, isLast never became true on step 2,
+  // the Next button advanced stepIndex past the end of availableSteps,
+  // `step` became undefined, and the whole popover rendered null without
+  // ever calling finish() to persist the completion flag.
+  const isLast = stepIndex === availableSteps.length - 1;
   const isFirst = stepIndex === 0;
 
   return createPortal(
@@ -196,7 +204,7 @@ export function GuidedTour() {
             className="text-[11px] uppercase tracking-wider text-muted-foreground"
             data-testid="guided-tour-progress"
           >
-            Step {stepIndex + 1} of {STEPS.length}
+            Step {stepIndex + 1} of {availableSteps.length}
           </span>
           <div className="flex items-center gap-2">
             {!isFirst && (
