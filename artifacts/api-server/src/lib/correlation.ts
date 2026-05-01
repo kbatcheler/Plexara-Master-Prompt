@@ -77,12 +77,18 @@ export async function runCrossRecordCorrelation(
   const sanitisedHistory = stripPII({ panelHistory } as unknown as Record<string, unknown>) as unknown as { panelHistory: typeof panelHistory };
   const prompt = `${demographics}\n\nTime-ordered panel history (oldest to newest):\n${JSON.stringify(sanitisedHistory.panelHistory, null, 2)}`;
 
-  const message = await anthropic.messages.create({
-    model: LLM_MODELS.utility,
-    max_tokens: 4000,
-    system: CORRELATION_PROMPT,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const message = await anthropic.messages.create(
+    {
+      model: LLM_MODELS.utility,
+      max_tokens: 4000,
+      system: CORRELATION_PROMPT,
+      messages: [{ role: "user", content: prompt }],
+    },
+    // Match the comprehensive-report timeout (180s). Cross-record
+    // correlation runs over the patient's full panel history and has
+    // hit the same default-timeout failure mode in production.
+    { timeout: 180_000 },
+  );
 
   const text = message.content[0].type === "text" ? message.content[0].text : "";
   return parseJSONFromLLM(text) as CorrelationOutput;

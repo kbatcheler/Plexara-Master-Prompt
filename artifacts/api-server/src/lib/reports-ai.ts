@@ -11,6 +11,7 @@ import {
   type BiomarkerHistoryEntry,
 } from "./patient-context";
 import type { ReconciledOutput } from "./reconciliation";
+import { logger } from "./logger";
 
 export interface ComprehensiveReportSection {
   system: string;
@@ -390,19 +391,45 @@ export async function runComprehensiveReport(
       ? `\n\nMETABOLOMIC PATHWAY ANALYSIS (from Organic Acid Test cross-correlated with bloodwork):\n${JSON.stringify(input.metabolomicCorrelations, null, 2)}\n\nIMPORTANT: This metabolomic data reveals the CELLULAR-LEVEL functioning that standard blood panels cannot see. When interpreting, explain what each impaired pathway MEANS for the patient's symptoms and health trajectory. Connect the dots between OAT findings, blood panel findings, and the patient's clinical picture. This is the deepest level of health intelligence Plexara provides.`
       : "";
 
-  const userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}${evidenceMapBlock}${metabolomicBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+  let userPayload = `${demographics}${historyBlock}${supplementsBlock}${imagingBlock}${deltaBlock}${personalResponseBlock}${evidenceMapBlock}${metabolomicBlock}\n\nPer-panel reconciled interpretations (oldest to newest):\n${JSON.stringify(compactPanels, null, 2)}`;
+
+  // Hard cap to prevent token-overflow timeouts on patients with large
+  // longitudinal histories (the comprehensive call has timed out in
+  // production at ~150s for big payloads). 80k chars ≈ 20-25k tokens,
+  // leaving headroom for the system prompt + 16k output tokens within
+  // the model's window. Truncates from the END so demographics + the
+  // most recent panel data + evidence map (which appear earliest in the
+  // payload) survive; the trailing tail is the oldest reconciled panel
+  // detail which the synthesist already has summarised in earlier blocks.
+  const MAX_USER_PAYLOAD_CHARS = 80_000;
+  if (userPayload.length > MAX_USER_PAYLOAD_CHARS) {
+    logger.warn(
+      { original: userPayload.length, capped: MAX_USER_PAYLOAD_CHARS },
+      "Comprehensive report payload truncated",
+    );
+    userPayload =
+      userPayload.slice(0, MAX_USER_PAYLOAD_CHARS) +
+      "\n\n[Context truncated for length — prioritise the most recent panel data above.]";
+  }
 
   const parsed = await withLLMRetry("comprehensiveReport", async () => {
-    const message = await anthropic.messages.create({
-      model: LLM_MODELS.reconciliation,
-      // Cross-panel comprehensive report regularly produces 7+ body-system
-      // sections × multiple key biomarkers × narrative + multiple trailing
-      // arrays. 8000 tokens routinely truncated mid-JSON, dropping the
-      // crossPanelPatterns/topConcerns/etc. arrays at the tail.
-      max_tokens: 16000,
-      system: COMPREHENSIVE_REPORT_PROMPT,
-      messages: [{ role: "user", content: userPayload }],
-    });
+    const message = await anthropic.messages.create(
+      {
+        model: LLM_MODELS.reconciliation,
+        // Cross-panel comprehensive report regularly produces 7+ body-system
+        // sections × multiple key biomarkers × narrative + multiple trailing
+        // arrays. 8000 tokens routinely truncated mid-JSON, dropping the
+        // crossPanelPatterns/topConcerns/etc. arrays at the tail.
+        max_tokens: 16000,
+        system: COMPREHENSIVE_REPORT_PROMPT,
+        messages: [{ role: "user", content: userPayload }],
+      },
+      // Default SDK timeout (~10 min) plus the upstream HTTP server timeout
+      // led to dangling connections. Set explicitly to 180s — long enough
+      // for a fully streamed 16k-token completion but short enough to fail
+      // fast and let withLLMRetry kick in.
+      { timeout: 180_000 },
+    );
 
     const text = message.content[0].type === "text" ? message.content[0].text : "";
     return parseJSONFromLLM(text) as ComprehensiveReportOutput;
