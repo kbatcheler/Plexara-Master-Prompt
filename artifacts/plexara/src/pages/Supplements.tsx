@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity, RefreshCw, FlaskConical, AlertTriangle, Clock, Layers, DollarSign } from "lucide-react";
+import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, TrendingUp, Minus, Activity, RefreshCw, FlaskConical, AlertTriangle, Clock, Layers, DollarSign, Upload } from "lucide-react";
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
+import { SupplementImportDialog } from "../components/supplements/SupplementImportDialog";
 import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
 import { useToast } from "../hooks/use-toast";
 import { HelpHint } from "@/components/help/HelpHint";
@@ -160,6 +161,7 @@ export default function Supplements() {
   // the user back to "stack" — so clicking "My Stack" from
   // Recommendations sometimes appeared to do nothing.
   const [activeTab, setActiveTab] = useState<"stack" | "medications" | "recommendations">("stack");
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   const stackQuery = useQuery({
     queryKey: ["supplements", patientId],
@@ -450,8 +452,18 @@ export default function Supplements() {
 
         <TabsContent value="stack" className="space-y-4">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
               <CardTitle className="text-base">Add a supplement</CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setImportDialogOpen(true)}
+                data-testid="button-supp-import-open"
+              >
+                <Upload className="w-4 h-4 mr-1.5" />
+                Import from file
+              </Button>
             </CardHeader>
             <CardContent>
               <form
@@ -621,6 +633,13 @@ export default function Supplements() {
           <p className="text-xs text-muted-foreground italic">Recommendations are informational only and not medical advice. Always consult your clinician before starting a new supplement.</p>
         </TabsContent>
       </Tabs>
+
+      <SupplementImportDialog
+        patientId={patientId!}
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onAdded={() => setStackChanged(true)}
+      />
     </div>
   );
 }

@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multer from "multer";
+import fs from "fs";
 import { db } from "@workspace/db";
 import {
   supplementsTable,
@@ -31,6 +33,14 @@ import {
 import { validate } from "../middlewares/validate";
 import { supplementCreateBody, supplementUpdateBody, supplementRecommendationStatusBody } from "../lib/validators";
 import { z } from "zod";
+import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
+import { HttpError } from "../middlewares/errorHandler";
+import {
+  extractTextFromFile,
+  parseSupplementsFromText,
+  parseSupplementsFromImage,
+  type ParsedSupplement,
+} from "../lib/supplements-import";
 
 const router = Router({ mergeParams: true });
 
@@ -797,5 +807,169 @@ function classifyBiomarkerForStack(
   if (lo != null || hi != null) return "in_range";
   return "unknown";
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Bulk import — let users upload a list of their current supplements as a
+ * file (text / CSV / Excel / PDF / image) and add them all in one shot.
+ *
+ * Two-step UX:
+ *   1) POST /import   — parse the file into a preview list (no DB writes).
+ *   2) POST /bulk     — user reviews/edits the list, then commits.
+ *
+ * Step 1 is split out so the user can correct OCR/LLM mistakes before the
+ * supplements actually land in their stack.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const importUpload = multer({
+  dest: UPLOADS_DIR,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB — supplement lists are small
+    files: 1,
+    fields: 5,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set([
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "text/csv",
+      "text/plain",
+      "application/json",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.oasis.opendocument.spreadsheet",
+    ]);
+    if (allowed.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(
+        new HttpError(
+          400,
+          `File type not allowed: ${file.mimetype}. Accepted: PDF, JPEG, PNG, WebP, GIF, CSV, TXT, XLS, XLSX, ODS`,
+        ),
+      );
+    }
+  },
+});
+
+router.post(
+  "/import",
+  requireAuth,
+  importUpload.single("file"),
+  async (req, res): Promise<void> => {
+    const { userId } = req as AuthenticatedRequest;
+    const patientId = parseInt(req.params.patientId as string);
+    const patient = await getPatient(patientId, userId);
+    if (!patient) {
+      // Clean up the uploaded temp file even on auth failure.
+      if (req.file?.path) {
+        try { fs.unlinkSync(assertWithinUploads(req.file.path)); } catch { /* best-effort */ }
+      }
+      res.status(404).json({ error: "Patient not found" });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "No file uploaded. Send a single 'file' field." });
+      return;
+    }
+
+    const filePath = assertWithinUploads(req.file.path);
+    const mimeType = req.file.mimetype;
+
+    try {
+      const isVision = mimeType === "application/pdf" || mimeType.startsWith("image/");
+      let items: ParsedSupplement[];
+      if (isVision) {
+        const buf = fs.readFileSync(filePath);
+        const base64 = buf.toString("base64");
+        items = await parseSupplementsFromImage(base64, mimeType, patient.accountId);
+      } else {
+        const text = extractTextFromFile(filePath, mimeType);
+        items = await parseSupplementsFromText(text, patient.accountId);
+      }
+      res.json({ items });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to parse file";
+      req.log.error({ err, mimeType }, "Supplement import parse failed");
+      // Surface consent failures explicitly so the UI can route the user to settings.
+      if (msg.includes("consent required")) {
+        res.status(403).json({ error: msg });
+        return;
+      }
+      res.status(500).json({ error: msg });
+    } finally {
+      try { fs.unlinkSync(filePath); } catch { /* best-effort cleanup */ }
+    }
+  },
+);
+
+const bulkImportBody = z.object({
+  items: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        dosage: z.string().trim().max(200).optional().nullable(),
+        frequency: z.string().trim().max(200).optional().nullable(),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+
+router.post(
+  "/bulk",
+  requireAuth,
+  validate({ body: bulkImportBody }),
+  async (req, res): Promise<void> => {
+    const { userId } = req as AuthenticatedRequest;
+    const patientId = parseInt(req.params.patientId as string);
+    const patient = await getPatient(patientId, userId);
+    if (!patient) {
+      res.status(404).json({ error: "Patient not found" });
+      return;
+    }
+
+    const { items } = req.body as z.infer<typeof bulkImportBody>;
+
+    try {
+      const inserted = await db
+        .insert(supplementsTable)
+        .values(
+          items.map((it) => ({
+            patientId,
+            name: it.name,
+            dosage: it.dosage ?? null,
+            frequency: it.frequency ?? null,
+            startedAt: null,
+            notes: null,
+            active: true,
+          })),
+        )
+        .returning();
+
+      // One stack-change row per insert keeps the change log honest with the
+      // single-add path. We do this in a single insert call rather than a
+      // per-row loop to avoid N round-trips.
+      if (inserted.length > 0) {
+        await db.insert(stackChangesTable).values(
+          inserted.map((s) => ({
+            patientId,
+            supplementId: s.id,
+            supplementName: s.name,
+            eventType: "added" as const,
+            dosageAfter: s.dosage ?? null,
+          })),
+        );
+      }
+
+      res.status(201).json({ supplements: inserted });
+    } catch (err) {
+      req.log.error({ err }, "Failed to bulk-insert supplements");
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 export default router;
