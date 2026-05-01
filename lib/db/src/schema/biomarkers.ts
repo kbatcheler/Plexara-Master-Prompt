@@ -30,6 +30,13 @@ export const biomarkerResultsTable = pgTable("biomarker_results", {
   biomarkerName: text("biomarker_name").notNull(),
   category: text("category"),
   value: numeric("value"),
+  // Comparison prefix when the lab reports a value at the detection limit
+  // (e.g. "<2.0 U/mL" → value: 2.0, valuePrefix: "<"). Captures '<', '>',
+  // '≤', '≥'. Clinically significant for tumour markers (CA 19-9, PSA,
+  // CEA, AFP, CA-125) where "<" indicates "below detection limit" — a
+  // reassuring finding that must NOT be silently dropped from the value.
+  // Nullable: most biomarkers report a plain numeric value with no prefix.
+  valuePrefix: text("value_prefix"),
   unit: text("unit"),
   labReferenceLow: numeric("lab_reference_low"),
   labReferenceHigh: numeric("lab_reference_high"),

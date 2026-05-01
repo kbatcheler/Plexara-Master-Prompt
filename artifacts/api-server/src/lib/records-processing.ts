@@ -232,6 +232,10 @@ export async function processUploadedDocument(opts: {
         // correct date for each value rather than collapsing them all into
         // one point.
         testDate?: string | null;
+        // Fix 3b/3d — comparison prefix for detection-limit values like
+        // "<2.0 U/mL". The model returns value: 2.0, valuePrefix: "<".
+        // Persisted alongside value so the UI can render "<2.0" verbatim.
+        valuePrefix?: string | null;
       }>) || [];
       // Lab name is captured at the panel level by the extraction prompt
       // ("labName": "[LAB]") and stamped onto every biomarker row so
@@ -256,6 +260,7 @@ export async function processUploadedDocument(opts: {
             biomarkerName: bm.name,
             category: bm.category || ref?.category || null,
             value: bm.value ? bm.value.toString() : null,
+            valuePrefix: (bm.valuePrefix as string | null | undefined) ?? null,
             unit: bm.unit || ref?.unit || null,
             labReferenceLow: bm.labRefLow ? bm.labRefLow.toString() : null,
             labReferenceHigh: bm.labRefHigh ? bm.labRefHigh.toString() : null,

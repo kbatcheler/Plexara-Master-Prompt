@@ -408,7 +408,7 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                                     </div>
                                   ) : (
                                     <>
-                                      {val !== null ? val : "--"} <span className="text-xs text-muted-foreground ml-1">{bm.unit}</span>
+                                      {val !== null ? `${bm.valuePrefix ?? ""}${val}` : "--"} <span className="text-xs text-muted-foreground ml-1">{bm.unit}</span>
                                     </>
                                   )}
                                 </td>

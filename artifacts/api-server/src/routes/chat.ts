@@ -18,6 +18,7 @@ import { decryptJson } from "../lib/phi-crypto";
 import { validate } from "../middlewares/validate";
 import { chatBody } from "../lib/validators";
 import { isProviderAllowed } from "../lib/consent";
+import { LLM_MODELS } from "../lib/llm-client";
 import { z } from "zod";
 
 const router = Router({ mergeParams: true });
@@ -267,7 +268,7 @@ Formatting:
 Patient data payload:
 ${contextBlock}`;
 
-    const model = process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6";
+    const model = LLM_MODELS.chat;
     const acceptsSse = (req.headers.accept || "").includes("text/event-stream");
 
     if (acceptsSse) {

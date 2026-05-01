@@ -15,6 +15,7 @@ import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { validate } from "../middlewares/validate";
 import { journalMessageBody } from "../lib/validators";
 import { isProviderAllowed } from "../lib/consent";
+import { LLM_MODELS } from "../lib/llm-client";
 import { HttpError } from "../middlewares/errorHandler";
 import { z } from "zod";
 
@@ -475,7 +476,7 @@ router.post(
         content: m.content,
       }));
 
-      const model = process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6";
+      const model = LLM_MODELS.chat;
       const acceptsSse = (req.headers.accept || "").includes("text/event-stream");
 
       if (acceptsSse) {
@@ -725,7 +726,7 @@ router.post(
     const isText = mimeType === "text/plain" || mimeType === "text/csv";
 
     try {
-      const model = process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6";
+      const model = LLM_MODELS.chat;
 
       let userContent:
         | string

@@ -1494,6 +1494,9 @@ components:
           type: ["string", "null"]
         value:
           type: ["number", "null"]
+        valuePrefix:
+          type: ["string", "null"]
+          description: "Comparison prefix for detection-limit values (e.g. '<' for '<2.0 U/mL'). Captures '<', '>', '≤', '≥'. Clinically significant for tumour markers where '<' indicates 'below detection limit'."
         unit:
           type: ["string", "null"]
         labReferenceLow:

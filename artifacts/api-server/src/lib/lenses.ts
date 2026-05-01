@@ -28,6 +28,31 @@ export interface LensOutput {
   overallAssessment: string;
 }
 
+// Shared grounding rules embedded in all three lens prompts AND the
+// reconciliation prompt. This is the anti-hallucination layer that prevents
+// the system from inventing diagnoses (e.g. PSC) or flagging normal tumour
+// markers as urgent surveillance failures. Real beta-tester regression: a
+// patient's CA 19-9 of <2.0 U/mL was flagged "URGENT — ensure
+// cholangiocarcinoma surveillance is current" with NO documented PSC.
+// These rules are intentionally inserted IMMEDIATELY before the JSON
+// output schema so the model reads them last and applies them at output
+// time.
+const GROUNDING_RULES = `GROUNDING RULES — THESE ARE NON-NEGOTIABLE:
+
+1. NEVER infer or assume a diagnosis that is not explicitly documented in the patient's health profile, medical history, conditions list, or uploaded clinical records. If PSC is not documented, do not assume PSC. If diabetes is not documented, do not assume diabetes.
+
+2. NEVER generate an urgentFlag for a condition the patient has not been diagnosed with. An urgent flag like "ensure cholangiocarcinoma surveillance is current" is ONLY appropriate if the patient HAS a documented diagnosis of PSC or inflammatory bowel disease.
+
+3. When a tumour marker (CA 19-9, PSA, CEA, AFP, CA-125) is within normal range, the finding must be REASSURING: "CA 19-9 <2.0 U/mL — within normal range, no oncological concern." Do NOT flag normal tumour markers as requiring surveillance confirmation.
+
+4. Every urgentFlag you produce must be directly traceable to a specific abnormal value, a specific data quality issue, or a specific documented condition in the patient's records. If you cannot point to the exact data that justifies the flag, do not include it.
+
+5. Valid urgent flags: critically abnormal values (potassium >6.0, glucose <2.5), data quality issues (free PSA > total PSA), genuinely missing tests for DOCUMENTED conditions (no lipid panel for a patient documented as being on a statin).
+
+6. Invalid urgent flags: "ensure [disease] surveillance is current" for undocumented conditions, "consider screening for [condition]" without documented risk factors, any flag that requires assuming a diagnosis to justify itself.
+
+`;
+
 const LENS_A_PROMPT = `You are the Clinical Synthesist — a primary interpretation engine for anonymised patient health data.
 
 INTERPRETATION PARADIGM — FUNCTIONAL AND LONGEVITY MEDICINE
@@ -95,6 +120,7 @@ You may also receive anonymised patient demographics (age range, biological sex,
 
 Critical: You receive ANONYMISED data only. No patient names, no DOBs, no identifiers.
 
+${GROUNDING_RULES}
 Respond with a valid JSON object matching this exact structure:
 {
   "findings": [
@@ -137,6 +163,7 @@ You may also receive anonymised patient demographics (age range, biological sex,
 
 Critical: You receive ANONYMISED data only. 
 
+${GROUNDING_RULES}
 Respond with valid JSON matching this exact structure:
 {
   "findings": [
@@ -192,6 +219,7 @@ Be adversarial, rigorous, and specific. Default to surfacing nuance, not vibing 
 You may also receive anonymised patient demographics (age range, biological sex, ethnicity) and prior biomarker history. Demographic-specific risks differ — cardiovascular risk profiles by sex, haemoglobin norms by ethnicity, hormonal patterns by age — flag where standard interpretation would miss them.
 Critical: ANONYMISED data only.
 
+${GROUNDING_RULES}
 Respond with valid JSON:
 {
   "findings": [

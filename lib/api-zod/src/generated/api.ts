@@ -520,6 +520,12 @@ export const GetRecordResponse = zod
             biomarkerName: zod.string(),
             category: zod.string().nullish(),
             value: zod.number().nullish(),
+            valuePrefix: zod
+              .string()
+              .nullish()
+              .describe(
+                "Comparison prefix for detection-limit values (e.g. '<' for '<2.0 U\/mL'). Captures '<', '>', '≤', '≥'. Clinically significant for tumour markers where '<' indicates 'below detection limit'.",
+              ),
             unit: zod.string().nullish(),
             labReferenceLow: zod.number().nullish(),
             labReferenceHigh: zod.number().nullish(),
@@ -888,6 +894,12 @@ export const ListBiomarkerResultsResponseItem = zod.object({
   biomarkerName: zod.string(),
   category: zod.string().nullish(),
   value: zod.number().nullish(),
+  valuePrefix: zod
+    .string()
+    .nullish()
+    .describe(
+      "Comparison prefix for detection-limit values (e.g. '<' for '<2.0 U\/mL'). Captures '<', '>', '≤', '≥'. Clinically significant for tumour markers where '<' indicates 'below detection limit'.",
+    ),
   unit: zod.string().nullish(),
   labReferenceLow: zod.number().nullish(),
   labReferenceHigh: zod.number().nullish(),
@@ -937,6 +949,12 @@ export const PatchBiomarkerResultResponse = zod.object({
   biomarkerName: zod.string(),
   category: zod.string().nullish(),
   value: zod.number().nullish(),
+  valuePrefix: zod
+    .string()
+    .nullish()
+    .describe(
+      "Comparison prefix for detection-limit values (e.g. '<' for '<2.0 U\/mL'). Captures '<', '>', '≤', '≥'. Clinically significant for tumour markers where '<' indicates 'below detection limit'.",
+    ),
   unit: zod.string().nullish(),
   labReferenceLow: zod.number().nullish(),
   labReferenceHigh: zod.number().nullish(),

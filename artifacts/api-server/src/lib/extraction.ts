@@ -654,6 +654,17 @@ MULTI-DATE DOCUMENTS: If this document contains results from multiple collection
 
 If the same biomarker appears multiple times with different dates, include ALL occurrences as separate entries in the biomarkers array.
 
+COLUMNAR DATE LAYOUT: If dates appear as COLUMN HEADERS (each column = a different collection date), extract EACH cell as a separate biomarker entry with that column's date as the testDate. Example:
+
+| Component | 27 Feb 2025 | 28 Apr 2026 |
+| CA 19-9   | <2.0 U/mL   | <2.0 U/mL   |
+
+→ Extract as two entries:
+  { "name": "CA 19-9", "value": 2.0, "valuePrefix": "<", "unit": "U/mL", "testDate": "2025-02-27" }
+  { "name": "CA 19-9", "value": 2.0, "valuePrefix": "<", "unit": "U/mL", "testDate": "2026-04-28" }
+
+Convert all dates to YYYY-MM-DD. If Hijri dates appear alongside Gregorian, use the Gregorian date.
+
 Return valid JSON only:
 {
   "documentType": "blood_panel",
@@ -664,6 +675,7 @@ Return valid JSON only:
     {
       "name": "string",
       "value": number or null,
+      "valuePrefix": "string or null — capture '<', '>', '≤', '≥' if the value has a comparison prefix. Example: '<2.0 U/mL' → value: 2.0, valuePrefix: '<'. This means 'below detection limit' and is clinically significant.",
       "unit": "string",
       "labRefLow": number or null,
       "labRefHigh": number or null,
@@ -695,8 +707,25 @@ ADDITIONAL FIELD — append to your JSON output as a sibling to the other top-le
   }
 If everything is clearly legible, return overall=100 and lowConfidenceItems=[].`;
 
+// Multilingual extraction is appended to EVERY prompt (blood panel, imaging,
+// genetics, etc.) so a Gulf-hospital Arabic/English report, a French clinic
+// letter, or a Spanish lab panel all extract correctly. Beta-tester regression:
+// Mo's bilingual Arabic/English lab from a Gulf hospital returned no biomarkers
+// at all because the model treated Arabic biomarker names as unparseable noise.
+const MULTILINGUAL_INSTRUCTION = `
+
+MULTILINGUAL DOCUMENT HANDLING:
+This document may be in ANY language or combination of languages (Arabic + English, French + English, etc.).
+
+RULES:
+1. Extract ALL data regardless of language. Translate biomarker names to standard English (e.g., "الهيموجلوبين" → "Haemoglobin", "الجلوكوز" → "Glucose", "الكرياتينين" → "Creatinine").
+2. For dates: prefer Gregorian. If only Hijri dates present, convert to Gregorian. If both, use Gregorian.
+3. Extract from any layout direction — left-to-right, right-to-left, or mixed.
+4. Units in standard international notation (U/mL, nmol/L, mg/dL).
+5. Do NOT skip data because it is in a non-English language.`;
+
 export async function extractFromDocument(base64File: string, mimeType: string, recordType: string = "blood_panel"): Promise<Record<string, unknown>> {
-  const extractionPrompt = buildExtractionPrompt(recordType) + EXTRACTION_CONFIDENCE_POSTSCRIPT;
+  const extractionPrompt = buildExtractionPrompt(recordType) + EXTRACTION_CONFIDENCE_POSTSCRIPT + MULTILINGUAL_INSTRUCTION;
 
   try {
     const imageTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;

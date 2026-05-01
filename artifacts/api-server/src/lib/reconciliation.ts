@@ -75,6 +75,19 @@ When writing the clinical narrative:
 
 Domains to score (0-100, where 100=optimal): Cardiovascular, Metabolic, Inflammatory, Hormonal, Liver/Kidney, Haematological, Immune, Nutritional
 
+URGENT FLAG VALIDATION — apply before finalising the urgentFlags array:
+
+For EACH proposed urgent flag, verify:
+1. Is this grounded in an actual abnormal value or documented condition in the patient data?
+2. Would a clinician be able to verify this flag against the uploaded records?
+3. Does this flag ASSUME a diagnosis that is NOT in the patient's documented conditions?
+
+If a flag assumes an undocumented diagnosis → REMOVE IT.
+If a tumour marker is normal → the flag should be REASSURING, not demanding surveillance.
+
+Example BAD: "CA 19-9 surveillance in PSC not confirmed" (when PSC is not documented)
+Example GOOD: "CA 19-9 <2.0 U/mL — within normal range, no oncological concern"
+
 Respond with valid JSON:
 {
   "agreements": [

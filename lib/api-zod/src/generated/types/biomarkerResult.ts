@@ -15,6 +15,11 @@ export interface BiomarkerResult {
   category?: string | null;
   /** @nullable */
   value?: number | null;
+  /**
+   * Comparison prefix for detection-limit values (e.g. '<' for '<2.0 U/mL'). Captures '<', '>', '≤', '≥'. Clinically significant for tumour markers where '<' indicates 'below detection limit'.
+   * @nullable
+   */
+  valuePrefix?: string | null;
   /** @nullable */
   unit?: string | null;
   /** @nullable */

@@ -62,6 +62,11 @@ export const LLM_MODELS = {
   // labels). Defaults to the reconciliation model so the pipeline stays
   // internally consistent without extra config.
   utility: process.env.LLM_UTILITY_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
+  // Chat and Journal are conversational — answering questions about
+  // already-interpreted data or capturing patient-reported information.
+  // Haiku is 3-5x faster with equivalent quality for these tasks.
+  // Override via LLM_CHAT_MODEL if needed.
+  chat: process.env.LLM_CHAT_MODEL || "claude-haiku-4-5-20251001",
   // Extraction is structured data pulling from PDFs — it doesn't need
   // Sonnet's reasoning power. Haiku is 3-5x faster and produces
   // equivalent extraction quality. Override via LLM_EXTRACTION_MODEL
