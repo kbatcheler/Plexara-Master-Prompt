@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { TrendChart } from "../components/trends/TrendChart";
+import { HelpHint } from "@/components/help/HelpHint";
 
 interface Trend {
   id: number; biomarkerName: string; slopePerDay: number | null; intercept: number | null;
@@ -65,7 +66,14 @@ export default function Trends() {
     <div className="container max-w-6xl py-8 space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2"><TrendingUp className="w-7 h-7 text-primary" /> Trends &amp; change alerts</h1>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <TrendingUp className="w-7 h-7 text-primary" /> Trends &amp; change alerts
+            <HelpHint topic="Trends &amp; change alerts" anchor="feature-trends">
+              Per-biomarker linear regression with 95% projection bands.
+              Change alerts fire on threshold crossings or ≥10%
+              directional drift since your personal baseline.
+            </HelpHint>
+          </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Per-biomarker linear regression with 95% projection bands at 30 / 90 / 365 days. Rate-of-change detector fires when a marker shifts &gt;15% (warn) or &gt;30% (critical) over rolling windows.
           </p>

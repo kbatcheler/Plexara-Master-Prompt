@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { HelpHint } from "@/components/help/HelpHint";
 
 export default function Dashboard() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
@@ -142,8 +143,13 @@ export default function Dashboard() {
       <section aria-labelledby="domains-heading" className="space-y-5">
         <div className="flex items-end justify-between">
           <div>
-            <h3 id="domains-heading" className="font-heading text-xl font-semibold tracking-tight">
+            <h3 id="domains-heading" className="font-heading text-xl font-semibold tracking-tight flex items-center gap-2">
               System domains
+              <HelpHint topic="System domains" anchor="health-domains">
+                Eight body-system gauges. Each one is a 0-100 score
+                produced by the three-lens AI from your latest panel —
+                green optimal, yellow watch, orange concern, red urgent.
+              </HelpHint>
             </h3>
             <p className="text-sm text-muted-foreground mt-1">
               Each gauge synthesises one or more clinical signals into a 0-100 score.

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Loader2, Upload, Trash2, RefreshCw, Dna, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { HelpHint } from "@/components/help/HelpHint";
 
 interface GeneticProfile {
   id: number;
@@ -130,6 +131,11 @@ export default function Genetics() {
         <div>
           <h1 className="text-3xl font-heading font-semibold tracking-tight flex items-center gap-3">
             <Dna className="w-7 h-7 text-primary" /> Genetics
+            <HelpHint topic="Genetics" anchor="feature-genetics">
+              Polygenic risk scores from your raw genotype file plus a
+              plain-language interpretation. Pharmacogenomic findings
+              flow into Stack Intelligence and the Comprehensive Report.
+            </HelpHint>
           </h1>
           <p className="text-muted-foreground mt-1 max-w-2xl">
             Upload your raw genotype file from 23andMe, AncestryDNA, or MyHeritage. Plexara computes polygenic risk

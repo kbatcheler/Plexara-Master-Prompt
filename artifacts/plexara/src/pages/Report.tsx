@@ -6,6 +6,7 @@ import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, 
 import { Button } from "@/components/ui/button";
 import { ReportShareCard } from "../components/ReportShareCard";
 import AINarrative from "@/components/AINarrative";
+import { HelpHint } from "@/components/help/HelpHint";
 
 /**
  * COMPREHENSIVE REPORT page. Two routes share this component:
@@ -158,6 +159,12 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
         <h1 className="text-2xl font-heading font-semibold flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-primary" />
           Comprehensive report
+          <HelpHint topic="Comprehensive Report" anchor="feature-comprehensive-report">
+            A multi-page narrative synthesis of your full record set:
+            top findings, biomarker trend cards, body-system summaries,
+            current care plan assessment, recommended next tests and a
+            glossary. Designed to be printed for a physician visit.
+          </HelpHint>
         </h1>
         <div className="flex gap-2">
           <Button onClick={onRegenerate} variant="outline" size="sm" disabled={regenerating} data-testid="btn-regenerate-report">

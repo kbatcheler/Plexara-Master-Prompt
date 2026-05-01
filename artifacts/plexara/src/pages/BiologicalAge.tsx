@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2, AlertCircle, Calendar } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, ReferenceLine, Legend } from "recharts";
+import { HelpHint } from "@/components/help/HelpHint";
 
 interface BiologicalAgeRow {
   id: number;
@@ -78,7 +79,15 @@ export default function BiologicalAge() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-heading text-3xl font-bold tracking-tight">Biological Age</h1>
+        <h1 className="font-heading text-3xl font-bold tracking-tight flex items-center gap-2">
+          Biological Age
+          <HelpHint topic="Biological age" anchor="feature-biological-age">
+            Phenotypic age (Levine PhenoAge) computed from albumin,
+            creatinine, glucose, hs-CRP, lymphocyte %, MCV, RDW, WBC, ALP
+            and your chronological age. Trend matters more than the
+            absolute number.
+          </HelpHint>
+        </h1>
         <p className="text-muted-foreground mt-1">Phenotypic age computed from your blood biomarkers using the Levine PhenoAge algorithm.</p>
       </div>
 

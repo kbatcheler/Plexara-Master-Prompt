@@ -12,6 +12,7 @@ import { Loader2, Plus, Trash2, Sparkles, Check, X, Pill, TrendingDown, Trending
 import { SupplementNameInput } from "../components/supplements/SupplementNameInput";
 import { NihAutocompleteInput, type NihAutocompleteSuggestion } from "../components/lookup/NihAutocompleteInput";
 import { useToast } from "../hooks/use-toast";
+import { HelpHint } from "@/components/help/HelpHint";
 import {
   getListEvidenceQueryKey,
   useAnalyseSupplementStack,
@@ -363,6 +364,12 @@ export default function Supplements() {
               <CardTitle className="text-base flex items-center gap-2">
                 <FlaskConical className="h-4 w-4" />
                 Stack analysis
+                <HelpHint topic="Stack Intelligence" anchor="feature-supplements-stack-intel">
+                  An AI critique of your CURRENT supplement + medication
+                  stack against your latest biomarkers, genetics and
+                  medications — verdicts, gaps, interactions, optimal
+                  timing, daily pill burden and monthly cost.
+                </HelpHint>
               </CardTitle>
               <CardDescription className="text-xs leading-relaxed">
                 Get a personalised review of your current supplement and medication stack —
