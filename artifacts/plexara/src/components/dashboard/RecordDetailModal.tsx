@@ -351,12 +351,30 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                             
                             let statusClass = "bg-muted";
                             if (val !== null && val !== undefined) {
-                              if (optLow !== null && optLow !== undefined && optHigh !== null && optHigh !== undefined && val >= optLow && val <= optHigh) {
-                                statusClass = "bg-status-optimal";
-                              } else if (clinLow !== null && clinLow !== undefined && clinHigh !== null && clinHigh !== undefined && val >= clinLow && val <= clinHigh) {
-                                statusClass = "bg-status-watch";
+                              const hasOptimal =
+                                (optLow !== null && optLow !== undefined) ||
+                                (optHigh !== null && optHigh !== undefined);
+                              const hasClinical =
+                                (clinLow !== null && clinLow !== undefined) ||
+                                (clinHigh !== null && clinHigh !== undefined);
+
+                              if (!hasOptimal && !hasClinical) {
+                                statusClass = "bg-muted";
                               } else {
-                                statusClass = "bg-status-urgent";
+                                const inOptimal =
+                                  (optLow === null || optLow === undefined || val >= optLow) &&
+                                  (optHigh === null || optHigh === undefined || val <= optHigh);
+                                const inClinical =
+                                  (clinLow === null || clinLow === undefined || val >= clinLow) &&
+                                  (clinHigh === null || clinHigh === undefined || val <= clinHigh);
+
+                                if (hasOptimal && inOptimal) {
+                                  statusClass = "bg-status-optimal";
+                                } else if (hasClinical && inClinical) {
+                                  statusClass = "bg-status-watch";
+                                } else {
+                                  statusClass = "bg-status-urgent";
+                                }
                               }
                             }
 

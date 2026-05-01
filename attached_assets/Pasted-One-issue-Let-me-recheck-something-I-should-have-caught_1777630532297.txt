@@ -1,0 +1,51 @@
+One issue. Let me recheck something I should have caught.
+
+Yes — there’s a real bug the fix didn’t fully resolve.
+
+Bug 8 is only partially fixed. The display now uses optimalRangeLow/High instead of clinicalRangeLow/High, which is correct. But the colour-flag logic has a fallthrough problem:
+
+if (val !== null && val !== undefined) {
+  if (optLow !== null && ... && val >= optLow && val <= optHigh) {
+    statusClass = "bg-status-optimal";     // green
+  } else if (clinLow !== null && ... && val >= clinLow && val <= clinHigh) {
+    statusClass = "bg-status-watch";       // amber
+  } else {
+    statusClass = "bg-status-urgent";      // RED ← problem
+  }
+}
+
+
+When a biomarker has a value but no ranges at all (both optimal and clinical are null), both if conditions fail and it falls through to bg-status-urgent (red). This means markers like urine culture, INR, blood cadmium — anything without defined ranges in the reference table — show up as red/urgent for no reason. This is exactly what Bug 8 described: “markers with no range show ‘– - –’ yet are still colour-flagged.”
+
+The same problem hits one-sided ranges. hs-CRP has optimalRangeHigh: 0.5 but optimalRangeLow: null. The check requires BOTH optLow !== null && optHigh !== null, so hs-CRP’s optimal range is never matched — it falls through to clinical, and if clinical is also one-sided, it hits urgent.
+
+Paste this into Replit:
+
+“Bug 8 has a remaining issue in RecordDetailModal.tsx around line 355. When a biomarker has a value but NO ranges defined (all four range fields are null), the else clause falls through to bg-status-urgent — showing a red flag on markers that simply don’t have ranges. Same problem for one-sided ranges (e.g., hs-CRP only has an upper bound). Fix the logic:
+
+let statusClass = "bg-muted";
+if (val !== null && val !== undefined) {
+  const hasOptimal = optLow !== null || optHigh !== null;
+  const hasClinical = clinLow !== null || clinHigh !== null;
+  
+  if (!hasOptimal && !hasClinical) {
+    // No ranges defined at all — neutral, not flagged
+    statusClass = "bg-muted";
+  } else {
+    const inOptimal = (optLow === null || val >= optLow) && (optHigh === null || val <= optHigh);
+    const inClinical = (clinLow === null || val >= clinLow) && (clinHigh === null || val <= clinHigh);
+    
+    if (hasOptimal && inOptimal) {
+      statusClass = "bg-status-optimal";
+    } else if (hasClinical && inClinical) {
+      statusClass = "bg-status-watch";
+    } else if (hasOptimal || hasClinical) {
+      statusClass = "bg-status-urgent";
+    }
+  }
+}
+
+
+This handles all four cases: no ranges (grey), within optimal (green), outside optimal but within clinical (amber), outside both (red). One-sided ranges work correctly — if only an upper bound exists, any value below it is in-range. Run pnpm tsc --noEmit after.”
+
+That’s the only issue. Everything else is clean.
