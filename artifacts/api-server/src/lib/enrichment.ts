@@ -412,28 +412,44 @@ export async function buildEnrichedLensPayload(
     // panel, in this preference order:
     //   1. structuredData.testDate (extraction-time per-document date)
     //   2. recordRow.testDate (DB-stored test date, e.g. user-provided at upload)
-    // Falling back to `new Date()` only when neither exists — but this is a
-    // last resort because anchoring to "now" can produce false positives
-    // (procedure was 7 weeks before record date but 7 months before today).
-    const recordTestDate =
-      (structuredData.testDate as string | undefined) ??
-      recordRow?.testDate ??
-      null;
-    // Guard against malformed dates (e.g. "Q1 2024", "unknown") — without
-    // this, isNaN(referenceDate.getTime()) would propagate NaN into every
-    // diffMs and accidentally include or exclude all procedures.
-    let referenceDate = recordTestDate ? new Date(recordTestDate) : new Date();
-    if (isNaN(referenceDate.getTime())) {
-      logger.warn(
-        { patientId, recordId, recordTestDate },
-        "Temporal correlation: anchor date unparseable — falling back to now",
-      );
-      referenceDate = new Date();
-    } else if (!recordTestDate) {
+    //   3. latest valid per-biomarker testDate (multi-date trend reports —
+    //      Fix 1 enables these, so the panel-level testDate is often null
+    //      while every individual biomarker carries its own draw date).
+    // If none of these resolve to a parseable date we SKIP temporal
+    // correlation entirely instead of anchoring to "now" — anchoring to
+    // today produces false positives (procedure was 7 weeks before the
+    // actual draw but 7 months before today) and false negatives in equal
+    // measure, which is worse than no temporal context at all.
+    const tryParseDate = (s: string | null | undefined): Date | null => {
+      if (!s) return null;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    };
+    let referenceDate: Date | null =
+      tryParseDate(structuredData.testDate as string | undefined) ??
+      tryParseDate(recordRow?.testDate ?? null);
+    if (!referenceDate) {
+      // Multi-date panel fallback: pick the LATEST valid per-biomarker
+      // testDate — that's the most recent draw represented in the document
+      // and the most clinically relevant anchor for "what procedures could
+      // be affecting these results right now?".
+      const bms = Array.isArray(structuredData.biomarkers)
+        ? (structuredData.biomarkers as Array<{ testDate?: string | null }>)
+        : [];
+      let latest: Date | null = null;
+      for (const b of bms) {
+        const d = tryParseDate(b?.testDate ?? null);
+        if (d && (!latest || d.getTime() > latest.getTime())) latest = d;
+      }
+      referenceDate = latest;
+    }
+    if (!referenceDate) {
       logger.warn(
         { patientId, recordId },
-        "Temporal correlation: no record test date — anchoring 8-week window to now (may yield stale matches)",
+        "Temporal correlation: no reliable anchor date (panel + per-biomarker dates all missing or unparseable) — skipping",
       );
+      // Leave temporalContext null and skip the procedure scan entirely.
+      throw new Error("__skip_temporal_correlation__");
     }
     const eightWeeksMs = 8 * 7 * 24 * 60 * 60 * 1000;
     const recentProcedures = await db
@@ -482,7 +498,11 @@ export async function buildEnrichedLensPayload(
       );
     }
   } catch (err) {
-    logger.warn({ err, patientId, recordId }, "Temporal correlation lookup failed — non-fatal");
+    // Skip sentinel from the no-anchor branch is expected — already logged
+    // above as a warn. Don't double-log it as an error.
+    if ((err as Error)?.message !== "__skip_temporal_correlation__") {
+      logger.warn({ err, patientId, recordId }, "Temporal correlation lookup failed — non-fatal");
+    }
   }
 
   // Functional-medicine notes from the biomarker reference table. These
