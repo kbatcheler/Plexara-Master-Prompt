@@ -11,6 +11,7 @@ import { eq, and, desc, count } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
 import { decryptText, decryptInterpretationFields } from "../lib/phi-crypto";
+import { sanitiseUploadFilename } from "../lib/uploads";
 
 const router = Router({ mergeParams: true });
 
@@ -138,7 +139,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       gauges: gaugesWithSpark,
       patientNarrative: decryptText(latestInterpretation?.patientNarrative),
       clinicalNarrative: decryptText(latestInterpretation?.clinicalNarrative),
-      recentRecords,
+      recentRecords: recentRecords.map((r) => ({ ...r, fileName: sanitiseUploadFilename(r.fileName) })),
       lensesCompleted: latestInterpretation?.lensesCompleted || null,
       executiveSummary: decryptText(latestReport?.executiveSummary) ?? null,
       reportGeneratedAt: latestReport?.generatedAt?.toISOString() ?? null,

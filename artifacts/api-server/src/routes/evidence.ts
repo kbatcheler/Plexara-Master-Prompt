@@ -4,6 +4,7 @@ import { evidenceRegistryTable, patientsTable, recordsTable } from "@workspace/d
 import { eq, and, desc, notInArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
+import { sanitiseUploadFilename } from "../lib/uploads";
 
 const router = Router({ mergeParams: true });
 
@@ -65,28 +66,35 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     )
     .orderBy(desc(recordsTable.uploadDate));
 
-  const orphanEntries = orphanRecords.map((r) => ({
-    id: -r.id, // negative synthetic id, won't collide with registry ids
-    recordId: r.id,
-    recordType: r.recordType,
-    // Reuse recordType as documentType so the EvidenceMap icon mapping
-    // ("blood_panel", "dexa_scan", …) still works for orphan rows.
-    documentType: r.recordType,
-    testDate: r.testDate ?? null,
-    uploadDate: r.uploadDate.toISOString(),
-    summary: r.status === "complete"
-      ? `${r.fileName ?? "Record"} on file — awaiting evidence summary.`
-      : r.status === "error"
-        ? `${r.fileName ?? "Record"} — extraction failed.`
-        : r.status === "consent_blocked"
-          ? `${r.fileName ?? "Record"} — AI extraction blocked by consent settings.`
-          : `${r.fileName ?? "Record"} — processing in progress.`,
-    significance: null as string | null,
-    keyFindings: [] as unknown[],
-    metrics: [] as unknown[],
-    integratedIntoReport: false,
-    lastReportId: null as number | null,
-  }));
+  const orphanEntries = orphanRecords.map((r) => {
+    // Decode legacy form-urlencoded filenames so the user-facing summary
+    // string ("Scan - MRI ABDOMEN.pdf on file — …") doesn't leak "+" /
+    // "%20" from old iOS Safari uploads. New uploads are sanitised on
+    // insert; this covers existing rows without a data migration.
+    const displayName = sanitiseUploadFilename(r.fileName) || "Record";
+    return {
+      id: -r.id, // negative synthetic id, won't collide with registry ids
+      recordId: r.id,
+      recordType: r.recordType,
+      // Reuse recordType as documentType so the EvidenceMap icon mapping
+      // ("blood_panel", "dexa_scan", …) still works for orphan rows.
+      documentType: r.recordType,
+      testDate: r.testDate ?? null,
+      uploadDate: r.uploadDate.toISOString(),
+      summary: r.status === "complete"
+        ? `${displayName} on file — awaiting evidence summary.`
+        : r.status === "error"
+          ? `${displayName} — extraction failed.`
+          : r.status === "consent_blocked"
+            ? `${displayName} — AI extraction blocked by consent settings.`
+            : `${displayName} — processing in progress.`,
+      significance: null as string | null,
+      keyFindings: [] as unknown[],
+      metrics: [] as unknown[],
+      integratedIntoReport: false,
+      lastReportId: null as number | null,
+    };
+  });
 
   const evidence = [
     ...rows.map((r) => ({

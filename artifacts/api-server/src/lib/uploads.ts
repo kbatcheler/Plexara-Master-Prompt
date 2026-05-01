@@ -36,3 +36,40 @@ export function assertWithinUploads(p: string): string {
   }
   return resolved;
 }
+
+/**
+ * Sanitise a filename that arrived through a multipart upload.
+ *
+ * Some mobile browsers (notably iOS Safari) send filenames in
+ * application/x-www-form-urlencoded form inside the multipart Content-
+ * Disposition header — spaces become "+", and unicode chars become "%XX".
+ * Multer surfaces those raw, so without this helper the user sees
+ * "Scan+-+MRI+ABDOMEN.pdf" in their record list.
+ *
+ * Strategy:
+ *   1. Replace "+" with space (form-urlencoded space convention).
+ *   2. Try decodeURIComponent to reverse any "%XX" sequences. If that
+ *      throws (malformed escape), keep the +→space version.
+ *   3. Trim — some uploaders pad the filename with whitespace.
+ *
+ * Returns the original string if it has no "+" or "%" characters (the
+ * common case), so well-behaved uploads pay nothing.
+ *
+ * Tradeoff: if a user uploads a file whose real name contains a literal
+ * "+" (e.g. "C++ primer.pdf"), this helper will rewrite it to a space.
+ * In the medical-records domain that powers this app, literal "+" in
+ * filenames is essentially nonexistent, and any browser that sends a
+ * literal "+" in a name with other special chars also sends "%2B" for
+ * it, which round-trips correctly through decodeURIComponent. Accepting
+ * this edge case keeps the iOS Safari fix simple.
+ */
+export function sanitiseUploadFilename(raw: string | null | undefined): string {
+  if (!raw) return "";
+  if (!raw.includes("+") && !raw.includes("%")) return raw.trim();
+  const spaced = raw.replace(/\+/g, " ");
+  try {
+    return decodeURIComponent(spaced).trim();
+  } catch {
+    return spaced.trim();
+  }
+}

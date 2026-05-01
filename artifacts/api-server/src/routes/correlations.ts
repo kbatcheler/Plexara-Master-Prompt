@@ -10,6 +10,7 @@ import { eq, and, desc, asc } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
 import { runCrossRecordCorrelation, buildPatientContext, type PatientContext } from "../lib/ai";
+import { sanitiseUploadFilename } from "../lib/uploads";
 
 const router = Router({ mergeParams: true });
 
@@ -83,7 +84,8 @@ router.get("/timeline", requireAuth, async (req, res): Promise<void> => {
       .orderBy(asc(recordsTable.createdAt));
 
     res.json({
-      records,
+      // Decode legacy form-urlencoded filenames (iOS Safari multipart bug).
+      records: records.map((r) => ({ ...r, fileName: sanitiseUploadFilename(r.fileName) })),
       biomarkers: Object.values(grouped).sort((a, b) => (a.category ?? "").localeCompare(b.category ?? "")),
     });
   } catch (err) {

@@ -13,6 +13,7 @@ import {
   decryptInterpretationFields,
   decryptStructuredJson,
 } from "../lib/phi-crypto";
+import { sanitiseUploadFilename } from "../lib/uploads";
 
 /**
  * Read-only sub-router — GET `/` (list) + GET `/:recordId` (detail).
@@ -38,7 +39,11 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       ? records.filter(r => r.recordType === req.query.recordType)
       : records;
 
-    res.json(filtered);
+    // Decode legacy form-urlencoded filenames (iOS Safari multipart quirk —
+    // see sanitiseUploadFilename for details). New uploads are sanitised on
+    // insert; this mapping covers existing rows without a data migration.
+    const sanitised = filtered.map(r => ({ ...r, fileName: sanitiseUploadFilename(r.fileName) }));
+    res.json(sanitised);
   } catch (err) {
     req.log.error({ err }, "Failed to list records");
     res.status(500).json({ error: "Internal server error" });
@@ -88,6 +93,7 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
     const decryptedInterp = decryptInterpretationFields(interpretation);
     res.json({
       ...record,
+      fileName: sanitiseUploadFilename(record.fileName),
       extractedData: decryptStructuredJson(extracted?.structuredJson),
       lensAOutput: decryptedInterp?.lensAOutput || null,
       lensBOutput: decryptedInterp?.lensBOutput || null,

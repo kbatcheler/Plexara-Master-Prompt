@@ -47,6 +47,7 @@ The application is a pnpm monorepo built with TypeScript.
 -   **Curriculum-Style /help System**: `pages/Help.tsx` orchestrates a deep functional-medicine guide via `HelpLayout` with a sticky sidebar TOC and `IntersectionObserver` scroll-spy. Inline `HelpHint` tooltips are wired across the application.
 -   **Comprehensive Report PDF Export**: `POST /api/patients/:id/report-export/export-pdf` streams a PDF via `pdfkit`. When `ENABLE_PHYSICIAN_PORTAL=true` and `?withQr=1`, a 30-day SHA-256-hashed share link with an embedded QR code is minted, using a trusted server-configured base URL to prevent QR poisoning.
 -   **WOW-factor Enhancements**: Includes streaming chat (SSE), an executive summary on the Dashboard, first-time user guidance, processing-stage animation, "What changed" delta, browser notifications, quick actions on gauges/alerts, biomarker explain popovers, extraction confidence with manual editing, sparkline trends in gauges, expandable lens reasoning, and a "Share-as-image" card (`GET /patients/:id/share-card.png`).
+-   **Upload Filename Decoding**: `lib/uploads.ts#sanitiseUploadFilename` normalises form-urlencoded filenames sent by some mobile browsers (notably iOS Safari, which encodes spaces as `+` and special chars as `%XX`). Applied at WRITE time in `records-upload.ts` and `imaging.ts`, and at READ time in `records-query.ts`, `dashboard.ts`, `evidence.ts`, and `correlations.ts` so legacy production rows display correctly without a data migration.
 
 **System Design Choices:**
 -   **Monorepo**: pnpm workspaces.

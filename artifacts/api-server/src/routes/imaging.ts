@@ -20,6 +20,7 @@ import { processUploadedDocument } from "./records";
 import { validate } from "../middlewares/validate";
 import { HttpError } from "../middlewares/errorHandler";
 import { annotationBody } from "../lib/validators";
+import { sanitiseUploadFilename } from "../lib/uploads";
 import { runImagingInterpretation } from "../lib/imaging-interpretation";
 import { z } from "zod";
 
@@ -237,7 +238,7 @@ router.post("/", requireAuth, uploadAny, async (req, res): Promise<void> => {
             numberOfSlices: slices.length,
             sliceThickness: cover.meta.sliceThickness,
             pixelSpacing: cover.meta.pixelSpacing,
-            fileName: cover.originalname,
+            fileName: sanitiseUploadFilename(cover.originalname),
             dicomObjectKey: uploadedKeys[0],
             fileSize: cover.size,
           })
@@ -251,7 +252,7 @@ router.post("/", requireAuth, uploadAny, async (req, res): Promise<void> => {
             instanceNumber: sl.meta.instanceNumber,
             sliceLocation: sl.meta.sliceLocation,
             dicomObjectKey: uploadedKeys[i],
-            fileName: sl.originalname,
+            fileName: sanitiseUploadFilename(sl.originalname),
             fileSize: sl.size,
           })),
         );
@@ -311,7 +312,7 @@ router.post("/:studyId/report", requireAuth, reportUpload.single("file"), async 
         patientId,
         recordType,
         filePath: req.file.path,
-        fileName: req.file.originalname,
+        fileName: sanitiseUploadFilename(req.file.originalname),
         testDate: study.studyDate || null,
         status: "pending",
       })

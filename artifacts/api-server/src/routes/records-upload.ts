@@ -14,7 +14,7 @@ import { verifyPatientAccess } from "../lib/patient-access";
 import { extractFromDocument } from "../lib/ai";
 import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
-import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
+import { UPLOADS_DIR, assertWithinUploads, sanitiseUploadFilename } from "../lib/uploads";
 import { encryptJson } from "../lib/phi-crypto";
 import { parseExtractionConfidence, bucketConfidence } from "../lib/extraction-confidence";
 import { validate } from "../middlewares/validate";
@@ -103,7 +103,7 @@ router.post(
         patientId,
         recordType,
         filePath: req.file.path,
-        fileName: req.file.originalname,
+        fileName: sanitiseUploadFilename(req.file.originalname),
         testDate: testDate || null,
         status: "pending",
       })
@@ -278,7 +278,7 @@ router.post(
             patientId,
             recordType,
             filePath: f.path,
-            fileName: f.originalname,
+            fileName: sanitiseUploadFilename(f.originalname),
             testDate: testDate || null,
             status: "pending" as const,
           })),
