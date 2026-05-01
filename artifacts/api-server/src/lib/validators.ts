@@ -85,6 +85,15 @@ export const chatBody = z.object({
   conversationId: z.coerce.number().int().positive().optional().nullable(),
 });
 
+// Journal — conversational health intake. Body is intentionally narrow:
+// `message` is what the patient just said, `conversationId` continues an
+// existing thread (or starts a new one when absent). Quick-start prompts
+// hit the same endpoint with a pre-filled message.
+export const journalMessageBody = z.object({
+  message: z.string().min(1).max(20_000),
+  conversationId: z.coerce.number().int().positive().optional().nullable(),
+});
+
 export const baselineCreateBody = z
   .object({
     notes: z.string().max(2_000).optional().nullable(),

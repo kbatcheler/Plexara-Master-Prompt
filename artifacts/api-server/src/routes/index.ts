@@ -21,6 +21,7 @@ import notesRouter from "./notes";
 import alertPrefsRouter from "./alert-prefs";
 import accountRouter from "./account";
 import chatRouter from "./chat";
+import journalRouter from "./journal";
 import predictionsRouter from "./predictions";
 import shareRouter, { publicRouter as sharePublicRouter } from "./share";
 import protocolsRouter, { globalRouter as protocolsGlobalRouter } from "./protocols";
@@ -100,6 +101,7 @@ router.use("/patients/:patientId/symptoms", symptomsRouter);
 router.use("/patients/:patientId/notes", notesRouter);
 router.use("/patients/:patientId/alert-preferences", alertPrefsRouter);
 router.use("/patients/:patientId/chat", chatRouter);
+router.use("/patients/:patientId/journal", journalRouter);
 
 // Predictive trajectories — gated on ENABLE_PREDICTIVE_TRAJECTORIES.
 // When disabled, the route table simply doesn't include the predictions

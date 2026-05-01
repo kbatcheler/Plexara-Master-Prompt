@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LogOut, Settings as SettingsIcon, ChevronDown, Menu, X,
   LayoutDashboard, FileText, Sparkles, HeartPulse, MessageSquare, HelpCircle, Users,
+  BookOpen,
 } from "lucide-react";
 import { PatientSwitcher } from "./PatientSwitcher";
 import { NarrativeRail } from "./NarrativeRail";
@@ -25,13 +26,17 @@ interface NavGroup {
 
 const NAV: NavGroup[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  // Journal — first-class entry point for conversational data capture.
+  // Patients tell the assistant about their supplements, medications,
+  // symptoms, and goals; the backend extracts and files it structurally.
+  { label: "Journal", href: "/journal", icon: BookOpen },
   {
     label: "My data", icon: FileText, items: [
-      { label: "Records",   href: "/records",   hint: "Lab reports & uploads" },
-      { label: "Timeline",  href: "/timeline",  hint: "Chronological history" },
-      { label: "Wearables", href: "/wearables", hint: "Apple Health, Oura, Fitbit" },
-      { label: "Genetics",  href: "/genetics",  hint: "Raw SNP data & PRS" },
-      { label: "Imaging",   href: "/imaging",   hint: "DICOM viewer" },
+      { label: "Upload records", href: "/records",   hint: "Lab reports, scans, tests" },
+      { label: "Timeline",       href: "/timeline",  hint: "Chronological history" },
+      { label: "Wearables",      href: "/wearables", hint: "Apple Health, Oura, Fitbit" },
+      { label: "Genetics",       href: "/genetics",  hint: "Raw SNP data & PRS" },
+      { label: "Imaging",        href: "/imaging",   hint: "DICOM viewer" },
     ],
   },
   {

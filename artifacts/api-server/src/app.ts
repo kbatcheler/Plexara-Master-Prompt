@@ -207,6 +207,7 @@ app.use("/api", globalLimiter);
 // check matches all of the above without false positives.
 const LLM_SEGMENTS: ReadonlySet<string> = new Set([
   "chat",
+  "journal",
   "records",
   "interpretations",
   "predictions",

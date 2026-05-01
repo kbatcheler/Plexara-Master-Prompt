@@ -33,6 +33,7 @@ import SharedView from "./pages/SharedView";
 import Protocols from "./pages/Protocols";
 import Report from "./pages/Report";
 import Chat from "./pages/Chat";
+import Journal from "./pages/Journal";
 import Genetics from "./pages/Genetics";
 import Imaging from "./pages/Imaging";
 import ImagingViewer from "./pages/ImagingViewer";
@@ -210,6 +211,7 @@ function ClerkProviderWithRoutes() {
                 <Route path="/supplements"><ProtectedRoute component={Supplements} /></Route>
                 <Route path="/protocols"><ProtectedRoute component={Protocols} /></Route>
                 <Route path="/chat"><ProtectedRoute component={Chat} /></Route>
+                <Route path="/journal"><ProtectedRoute component={Journal} /></Route>
                 <Route path="/share-portal"><ProtectedRoute component={Share} /></Route>
                 <Route path="/profile"><ProtectedRoute component={HealthProfile} /></Route>
                 <Route path="/settings"><ProtectedRoute component={Settings} /></Route>

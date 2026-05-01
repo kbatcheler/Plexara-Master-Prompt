@@ -17,7 +17,8 @@ import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard
 import { SymptomLoggerCard } from "../components/dashboard/SymptomLoggerCard";
 import { EvidenceMap } from "../components/dashboard/EvidenceMap";
 import { AlertBanner, type AlertSeverity } from "../components/AlertBanner";
-import { ChevronRight, FileText, Activity } from "lucide-react";
+import { ChevronRight, FileText, Activity, BookOpen, Upload, MessageSquare } from "lucide-react";
+import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -139,8 +140,54 @@ export default function Dashboard() {
         rebaselineBusy={rebaselineMutation.isPending}
       />
 
-      {/* ── Quick upload affordance ── */}
-      <UploadZone />
+      {/* ── Quick actions ──
+          Replaces the prominent inline UploadZone. The Dashboard's job
+          is to show OUTPUT (your health picture); INPUT lives on its
+          own surfaces. Patients reach the Journal (conversational
+          intake), the Records page (document uploads), or Ask (Q&A)
+          via these three equal-weight cards. The dedicated UploadZone
+          still lives on /records for the document-upload-first journey. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="dashboard-quick-actions">
+        <Link
+          to="/journal"
+          className="flex items-center gap-3 rounded-xl border border-border bg-card hover:bg-secondary/50 transition-colors px-4 py-3 group"
+          data-testid="quick-action-journal"
+        >
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/15">
+            <BookOpen className="w-4 h-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Health Journal</p>
+            <p className="text-xs text-muted-foreground truncate">Log supplements, symptoms, lifestyle</p>
+          </div>
+        </Link>
+        <Link
+          to="/records"
+          className="flex items-center gap-3 rounded-xl border border-border bg-card hover:bg-secondary/50 transition-colors px-4 py-3 group"
+          data-testid="quick-action-records"
+        >
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/15">
+            <Upload className="w-4 h-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Upload records</p>
+            <p className="text-xs text-muted-foreground truncate">Blood panels, scans, genetic tests</p>
+          </div>
+        </Link>
+        <Link
+          to="/chat"
+          className="flex items-center gap-3 rounded-xl border border-border bg-card hover:bg-secondary/50 transition-colors px-4 py-3 group"
+          data-testid="quick-action-ask"
+        >
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/15">
+            <MessageSquare className="w-4 h-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Ask about my health</p>
+            <p className="text-xs text-muted-foreground truncate">Chat with your health AI</p>
+          </div>
+        </Link>
+      </div>
 
       {/* ── First-time onboarding (zero records only) ── */}
       {dashboard.recordCount === 0 && <WelcomeFirstUpload />}

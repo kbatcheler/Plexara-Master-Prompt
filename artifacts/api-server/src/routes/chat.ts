@@ -12,7 +12,7 @@ import {
   predictionsTable,
   supplementsTable,
 } from "@workspace/db";
-import { eq, and, desc, isNotNull } from "drizzle-orm";
+import { eq, and, desc, isNotNull, ne } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { decryptJson } from "../lib/phi-crypto";
 import { validate } from "../middlewares/validate";
@@ -41,10 +41,17 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
+    // Exclude Journal threads (subjectType="journal"). They live in the same
+    // chat_conversations table for code reuse, but Journal is a distinct
+    // surface with its own /journal/conversations endpoint — they must NOT
+    // appear in the Ask sidebar or be continuable as Ask chats.
     const conversations = await db
       .select()
       .from(chatConversationsTable)
-      .where(eq(chatConversationsTable.patientId, patientId))
+      .where(and(
+        eq(chatConversationsTable.patientId, patientId),
+        ne(chatConversationsTable.subjectType, "journal"),
+      ))
       .orderBy(desc(chatConversationsTable.updatedAt));
     res.json(conversations);
   } catch (err) {
@@ -60,8 +67,14 @@ router.get("/:conversationId", requireAuth, async (req, res): Promise<void> => {
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
+    // Same isolation as the list endpoint: never expose a Journal thread
+    // through the Ask chat detail endpoint.
     const [conv] = await db.select().from(chatConversationsTable)
-      .where(and(eq(chatConversationsTable.id, conversationId), eq(chatConversationsTable.patientId, patientId)));
+      .where(and(
+        eq(chatConversationsTable.id, conversationId),
+        eq(chatConversationsTable.patientId, patientId),
+        ne(chatConversationsTable.subjectType, "journal"),
+      ));
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
     const messages = await db.select().from(chatMessagesTable)
       .where(eq(chatMessagesTable.conversationId, conversationId))
@@ -201,8 +214,15 @@ router.post("/", requireAuth, validate({ body: chatBody }), async (req, res): Pr
 
     let activeConvId: number;
     if (conversationId) {
+      // Refuse to continue a Journal thread through the Ask endpoint —
+      // they are different products and Ask wouldn't run extraction on
+      // the reply, so the JSON contract would silently drift.
       const [conv] = await db.select().from(chatConversationsTable)
-        .where(and(eq(chatConversationsTable.id, conversationId), eq(chatConversationsTable.patientId, patientId)));
+        .where(and(
+          eq(chatConversationsTable.id, conversationId),
+          eq(chatConversationsTable.patientId, patientId),
+          ne(chatConversationsTable.subjectType, "journal"),
+        ));
       if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
       activeConvId = conv.id;
       await db.update(chatConversationsTable).set({ updatedAt: new Date() }).where(eq(chatConversationsTable.id, activeConvId));
@@ -365,8 +385,16 @@ router.delete("/:conversationId", requireAuth, async (req, res): Promise<void> =
   const patient = await getPatient(patientId, userId);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   try {
+    // Don't delete Journal threads via the Ask delete endpoint — they have
+    // their own dedicated DELETE under /journal/conversations/:id. Returning
+    // 204 here for a journal id would let the Ask UI silently destroy a
+    // Journal entry the user can't even see in this surface.
     const [conv] = await db.select().from(chatConversationsTable)
-      .where(and(eq(chatConversationsTable.id, conversationId), eq(chatConversationsTable.patientId, patientId)));
+      .where(and(
+        eq(chatConversationsTable.id, conversationId),
+        eq(chatConversationsTable.patientId, patientId),
+        ne(chatConversationsTable.subjectType, "journal"),
+      ));
     if (!conv) { res.status(204).send(); return; }
     await db.delete(chatMessagesTable).where(eq(chatMessagesTable.conversationId, conversationId));
     await db.delete(chatConversationsTable).where(eq(chatConversationsTable.id, conversationId));
