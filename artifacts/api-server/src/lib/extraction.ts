@@ -28,18 +28,43 @@ export function buildExtractionPrompt(recordType: string): string {
 Return valid JSON only:
 {
   "documentType": "imaging",
-  "modality": "MRI|CT|XRAY|ULTRASOUND|PET|OTHER",
+  "modality": "MRI|CT|XRAY|ULTRASOUND|PET|NUCLEAR|FLUOROSCOPY|OTHER",
   "bodyRegion": "string",
   "studyDate": "YYYY-MM-DD or null",
-  "technique": "string",
+  "technique": "string — include contrast details if mentioned",
+  "contrastAdministered": true | false | null,
+  "contrastDetails": {
+    "agent": "string or null (e.g. iodinated, gadolinium, barium, technetium)",
+    "route": "string or null (e.g. IV, oral, rectal)",
+    "volume": "string or null",
+    "reactions": "string or null (any noted adverse reactions)"
+  },
+  "radiationDose": "string or null (if documented, e.g. DLP, CTDIvol)",
   "findings": [
     { "region": "string", "description": "string", "measurementMm": number or null, "severity": "normal|mild|moderate|severe|incidental", "confidence": "high|medium|low" }
   ],
   "impression": "string",
   "comparedTo": "string or null",
+  "recommendations": "string or null (any follow-up recommendations from the radiologist)",
+  "clinicalIndication": "string or null (why the scan was ordered)",
+  "keyFindings": ["string array — the most clinically significant findings"],
+  "systemicImplications": [
+    {
+      "affectedSystem": "string (e.g. thyroid, renal, hepatic)",
+      "implication": "string",
+      "timeframe": "string (e.g. 2-8 weeks post-contrast)"
+    }
+  ],
   "biomarkers": [],
   "extractionNotes": "string"
-}`;
+}
+
+CRITICAL: If contrast was administered, ALWAYS note the agent type. This is clinically important:
+- Iodinated contrast (CT) → can cause transient thyroid dysfunction for 4-8 weeks (iodine overload suppresses thyroid hormone production, causing compensatory TSH elevation)
+- Gadolinium contrast (MRI) → renal considerations (check eGFR)
+- Any contrast → possible allergic/anaphylactoid reactions
+
+Include systemicImplications when contrast was used, documenting which body systems may be transiently affected and for how long.`;
   }
   // Pharmacogenomics / pharmacokinetics reports (drug-gene interaction
   // profiles such as AttoDiagnostics, OneOme, Genomind, GenoPharm, etc.).
@@ -527,12 +552,112 @@ Anonymise: [PATIENT] for name, [FACILITY] for lab.
 Return ONLY valid JSON. No markdown, no preamble.`;
   }
 
+  // Fix 2a — Smart content detection for the catch-all "other" record type.
+  // When a patient uploads a non-categorised document we ask the model to
+  // self-identify the document type first (supplement stack, clinical
+  // letter, blood panel, imaging, etc.) and extract accordingly. Without
+  // this, "other" used to fall through to the blood-panel default and
+  // return nothing useful for non-bloodwork documents (e.g. a supplement
+  // stack PDF would be read as a failed lab and never reach
+  // supplementsTable). The downstream record-processing pipeline branches
+  // on the returned `documentType` to populate the correct tables.
+  if (t === "other") {
+    return `You are a medical document specialist. This document was uploaded without a specific category. Your first job is to IDENTIFY what type of document this is, then extract accordingly.
+
+STEP 1 — IDENTIFY THE DOCUMENT TYPE. Look for:
+- If it contains supplement names, dosages, brands, timing → it's a SUPPLEMENT STACK
+- If it contains medication names, prescriptions, dosing → it's a MEDICATION LIST
+- If it contains biomarker values, lab results, reference ranges → it's a BLOOD PANEL
+- If it contains imaging findings, radiology → it's an IMAGING REPORT
+- If it contains genetic test results → it's a GENETIC/PHARMACOGENOMIC REPORT
+- If it contains a clinical letter, referral, or consultation notes → it's a CLINICAL LETTER
+
+STEP 2 — EXTRACT BASED ON TYPE.
+
+If SUPPLEMENT STACK, return:
+{
+  "documentType": "supplement_stack",
+  "supplements": [
+    {
+      "name": "string (e.g. Vitamin D3, Magnesium Glycinate, CoQ10)",
+      "brand": "string or null",
+      "dosage": "string (e.g. 5000 IU, 400mg, 200mg)",
+      "form": "string or null (e.g. softgel, capsule, powder, liquid, tablet, sublingual)",
+      "frequency": "string or null (e.g. daily, twice daily, 3x weekly)",
+      "timing": "string or null (e.g. with breakfast, at bedtime, empty stomach)",
+      "startDate": "YYYY-MM-DD or null",
+      "endDate": "YYYY-MM-DD or null (null if currently taking)",
+      "notes": "string or null"
+    }
+  ],
+  "medications": [
+    {
+      "name": "string",
+      "brandName": "string or null",
+      "dosage": "string",
+      "frequency": "string or null",
+      "drugClass": "string or null (e.g. statin, PPI, SSRI, beta-blocker)",
+      "prescribedFor": "string or null",
+      "startDate": "YYYY-MM-DD or null",
+      "notes": "string or null"
+    }
+  ],
+  "stackPeriods": [
+    {
+      "periodLabel": "string (e.g. 'Morning stack', 'Phase 1: Jan-Mar 2025', 'Current stack')",
+      "dateRange": "string or null",
+      "items": ["string — supplement/medication names in this period"]
+    }
+  ],
+  "keyFindings": ["string array"],
+  "testDate": "YYYY-MM-DD or null"
+}
+
+If CLINICAL LETTER, return:
+{
+  "documentType": "clinical_letter",
+  "letterDate": "YYYY-MM-DD or null",
+  "from": "[PHYSICIAN]",
+  "to": "[PHYSICIAN]",
+  "regarding": "string — what the letter is about",
+  "diagnoses": ["string"],
+  "procedures": [
+    {
+      "name": "string",
+      "date": "YYYY-MM-DD or null",
+      "notes": "string or null"
+    }
+  ],
+  "medications": [
+    {
+      "name": "string",
+      "dosage": "string or null",
+      "action": "started | continued | stopped | changed"
+    }
+  ],
+  "keyFindings": ["string array — the most clinically significant information"],
+  "followUpPlan": "string or null",
+  "testDate": "YYYY-MM-DD or null"
+}
+
+If BLOOD PANEL, return the standard blood panel format with documentType "blood_panel", testDate, labName, and a biomarkers array (each with name, value, unit, labRefLow, labRefHigh, category, methodology, flagged, confidence, and per-biomarker testDate when results span multiple dates).
+
+If any other type, use your best judgement for structured extraction and set documentType to a descriptive slug.
+
+Anonymise: [PATIENT] for name, [FACILITY] for lab/clinic, [PHYSICIAN] for doctor.
+Return ONLY valid JSON. No markdown, no preamble.`;
+  }
+
   return `You are a medical document extraction specialist. Extract ALL data points from this blood panel into structured JSON. Anonymise lab name as [LAB], physician as [PHYSICIAN], patient name as [PATIENT].
+
+MULTI-DATE DOCUMENTS: If this document contains results from multiple collection dates (trend reports, compiled summaries, longitudinal data), extract EACH result with its specific date in the per-biomarker testDate field. This is critical for timeline and trend analysis. Do NOT collapse multiple dates into one — the system needs each date-value pair to track changes over time.
+
+If the same biomarker appears multiple times with different dates, include ALL occurrences as separate entries in the biomarkers array.
 
 Return valid JSON only:
 {
   "documentType": "blood_panel",
-  "testDate": "YYYY-MM-DD or null",
+  "testDate": "YYYY-MM-DD or null — the PRIMARY collection date if a single date applies to all results",
   "drawTime": "HH:MM in 24h format, or null if absent. Look for 'Collection Time', 'Drawn at', 'Specimen Collected', 'Time Collected'.",
   "labName": "[LAB]",
   "biomarkers": [
@@ -545,7 +670,8 @@ Return valid JSON only:
       "category": "CBC|Metabolic|Lipid|Thyroid|Hormonal|Inflammatory|Vitamins|Metabolic Health|Liver|Kidney|Cardiac|Other",
       "methodology": "string or null — assay technique reported on the report (e.g. 'LC-MS/MS', 'immunoassay', 'ELISA', 'HPLC', 'spectrophotometry', 'electrochemiluminescence'). Look near the biomarker name, in a Methodology/Method/Assay column, or in panel footnotes. Critical for testosterone, vitamin D, cortisol, thyroid panels.",
       "flagged": boolean,
-      "confidence": "high|medium|low"
+      "confidence": "high|medium|low",
+      "testDate": "YYYY-MM-DD or null — the SPECIFIC date this individual result was collected. CRITICAL: If this document contains results from MULTIPLE dates (e.g. a trend report, a compiled summary, or tests collected on different days), each biomarker MUST have its own testDate. If all results share one date, you may leave this null and set the top-level testDate instead."
     }
   ],
   "otherFindings": {},

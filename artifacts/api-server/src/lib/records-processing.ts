@@ -5,6 +5,8 @@ import {
   biomarkerResultsTable,
   interpretationsTable,
   alertsTable,
+  supplementsTable,
+  medicationsTable,
 } from "@workspace/db";
 import { eq, sql, desc, and } from "drizzle-orm";
 import fs from "fs";
@@ -222,6 +224,14 @@ export async function processUploadedDocument(opts: {
         name: string; value: number; unit: string;
         labRefLow?: number; labRefHigh?: number; category?: string;
         methodology?: string | null;
+        // Fix 1a/1b — per-biomarker testDate for multi-date trend reports.
+        // When a single PDF contains results from several collection dates
+        // (e.g. a lab-portal trend export), the extraction prompt now asks
+        // the model to populate this field per-row. We prefer it over the
+        // document-level testDate so the timeline/trend surfaces show the
+        // correct date for each value rather than collapsing them all into
+        // one point.
+        testDate?: string | null;
       }>) || [];
       // Lab name is captured at the panel level by the extraction prompt
       // ("labName": "[LAB]") and stamped onto every biomarker row so
@@ -251,7 +261,13 @@ export async function processUploadedDocument(opts: {
             labReferenceHigh: bm.labRefHigh ? bm.labRefHigh.toString() : null,
             optimalRangeLow: ref?.optimalRangeLow ? ref.optimalRangeLow.toString() : null,
             optimalRangeHigh: ref?.optimalRangeHigh ? ref.optimalRangeHigh.toString() : null,
-            testDate: (structuredData.testDate as string) || testDate || null,
+            // Fix 1b — prefer per-biomarker testDate (multi-date trend reports);
+            // fall back to the document-level date and finally the upload-time
+            // date. NOTE: biomarker_results has no unique constraint on
+            // (patientId, recordId, biomarkerName), so multiple rows for the
+            // same biomarker on different dates insert cleanly without an
+            // ON CONFLICT clause (Fix 1c is a no-op against current schema).
+            testDate: (bm.testDate as string | null | undefined) || (structuredData.testDate as string) || testDate || null,
             // Enhancement I: persist methodology + lab attribution for
             // cross-lab comparability tracking. Both fields are nullable
             // and degrade gracefully when extraction omits them.
@@ -299,6 +315,138 @@ export async function processUploadedDocument(opts: {
         "Marking record as error — skipping 3-lens analysis",
       );
       return;
+    }
+
+    // ── Fix 2b — Supplement-stack document import ────────────────────────
+    // When the smart "other" prompt identifies the upload as a supplement
+    // stack (or medication list), populate the structured supplements /
+    // medications tables so the items reach the Care Plan, lens enrichment
+    // (loadActiveSupplements / loadActiveMedications), and the orchestrator.
+    // Per-row try/catch so one bad item never poisons the whole batch.
+    // Schema notes (real columns, NOT the ones in the spec):
+    //   supplementsTable: name, dosage, frequency, startedAt, notes, active
+    //   medicationsTable: name, drugClass, dosage, frequency, startedAt, notes, active
+    // We fold the spec's `form`, `timing`, `brand`, `prescribedFor` into
+    // the `notes` field since there are no dedicated columns for them.
+    {
+      const sd = structuredData as Record<string, unknown>;
+      if (sd.documentType === "supplement_stack") {
+        const supplements = (Array.isArray(sd.supplements) ? sd.supplements : []) as Array<{
+          name?: string;
+          brand?: string | null;
+          dosage?: string | null;
+          form?: string | null;
+          frequency?: string | null;
+          timing?: string | null;
+          startDate?: string | null;
+          endDate?: string | null;
+          notes?: string | null;
+        }>;
+        const medications = (Array.isArray(sd.medications) ? sd.medications : []) as Array<{
+          name?: string;
+          brandName?: string | null;
+          dosage?: string | null;
+          frequency?: string | null;
+          drugClass?: string | null;
+          prescribedFor?: string | null;
+          startDate?: string | null;
+          notes?: string | null;
+        }>;
+
+        // Idempotency: tag every inserted row's `notes` with a stable
+        // [src:rec=<recordId>] marker, then on (re)processing of the same
+        // record we delete prior rows tagged for THIS record before
+        // inserting fresh. This way reprocessing/retries never duplicate
+        // active stack entries, while items imported from other records
+        // (or hand-entered by the user) are untouched.
+        //
+        // No legacy-row backfill is needed because the supplement_stack
+        // import path is brand new — before this commit, "other" docs fell
+        // through to the blood-panel default prompt and never wrote to
+        // supplementsTable / medicationsTable at all. Any rows already in
+        // those tables were therefore manually entered and must be left
+        // alone (they have no source tag and won't match the LIKE filter).
+        const sourceTag = `[src:rec=${recordId}]`;
+        try {
+          await db
+            .delete(supplementsTable)
+            .where(
+              and(
+                eq(supplementsTable.patientId, patientId),
+                sql`${supplementsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
+              ),
+            );
+          await db
+            .delete(medicationsTable)
+            .where(
+              and(
+                eq(medicationsTable.patientId, patientId),
+                sql`${medicationsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
+              ),
+            );
+        } catch (err) {
+          logger.warn({ err, recordId }, "Failed to clear prior stack-import rows; proceeding with insert (may duplicate)");
+        }
+
+        let suppInserted = 0;
+        let medInserted = 0;
+        for (const s of supplements) {
+          if (!s?.name) continue;
+          try {
+            const noteParts = [
+              s.brand ? `Brand: ${s.brand}` : null,
+              s.form ? `Form: ${s.form}` : null,
+              s.timing ? `Timing: ${s.timing}` : null,
+              s.notes || null,
+              sourceTag,
+            ].filter(Boolean) as string[];
+            await db.insert(supplementsTable).values({
+              patientId,
+              name: s.name,
+              dosage: s.dosage ?? null,
+              frequency: s.frequency ?? null,
+              startedAt: s.startDate ?? null,
+              notes: noteParts.join(" · "),
+              // Active when there's no end date (still on the stack).
+              active: !s.endDate,
+            });
+            suppInserted++;
+          } catch (err) {
+            logger.warn({ err, supplement: s.name, recordId }, "Failed to insert supplement from stack document");
+          }
+        }
+        for (const m of medications) {
+          if (!m?.name) continue;
+          try {
+            // Combine generic+brand into the single `name` column.
+            const combinedName = m.brandName && m.brandName !== m.name
+              ? `${m.name} (${m.brandName})`
+              : m.name;
+            const noteParts = [
+              m.prescribedFor ? `For: ${m.prescribedFor}` : null,
+              m.notes || null,
+              sourceTag,
+            ].filter(Boolean) as string[];
+            await db.insert(medicationsTable).values({
+              patientId,
+              name: combinedName,
+              drugClass: m.drugClass ?? null,
+              dosage: m.dosage ?? null,
+              frequency: m.frequency ?? null,
+              startedAt: m.startDate ?? null,
+              notes: noteParts.join(" · "),
+              active: true,
+            });
+            medInserted++;
+          } catch (err) {
+            logger.warn({ err, medication: m.name, recordId }, "Failed to insert medication from stack document");
+          }
+        }
+        logger.info(
+          { patientId, recordId, suppInserted, medInserted },
+          "Populated supplements/medications from uploaded stack document",
+        );
+      }
     }
 
     // Universal evidence registry — one row per uploaded record, regardless
@@ -409,6 +557,60 @@ export async function processUploadedDocument(opts: {
           return acc + (Array.isArray(arr) ? arr.length : 0);
         }, 0);
         if (totalOatMarkers > 0) keyFindings.push(`${totalOatMarkers} organic acid markers extracted`);
+      } else if (docType === "supplement_stack") {
+        // Fix 2c — surface the import in the evidence registry so the
+        // patient/practitioner can see that supplements were captured
+        // from a real uploaded document (vs typed in by hand).
+        const suppCount = Array.isArray(sd.supplements) ? (sd.supplements as unknown[]).length : 0;
+        const medCount = Array.isArray(sd.medications) ? (sd.medications as unknown[]).length : 0;
+        if (suppCount > 0) {
+          metrics.push({ name: "Supplements imported", value: suppCount, unit: null, interpretation: null, category: "supplement_stack" });
+        }
+        if (medCount > 0) {
+          metrics.push({ name: "Medications imported", value: medCount, unit: null, interpretation: null, category: "supplement_stack" });
+        }
+        keyFindings.push(`Imported ${suppCount} supplements and ${medCount} medications from uploaded document`);
+      } else if (docType === "clinical_letter") {
+        const dx = Array.isArray(sd.diagnoses) ? (sd.diagnoses as unknown[]).length : 0;
+        const procs = Array.isArray(sd.procedures) ? (sd.procedures as unknown[]).length : 0;
+        const meds = Array.isArray(sd.medications) ? (sd.medications as unknown[]).length : 0;
+        if (dx > 0) keyFindings.push(`${dx} diagnoses noted in clinical letter`);
+        if (procs > 0) keyFindings.push(`${procs} procedures noted in clinical letter`);
+        if (meds > 0) keyFindings.push(`${meds} medication actions noted in clinical letter`);
+      } else if (docType === "imaging") {
+        // Fix 3b — surface contrast administration as an evidence-registry
+        // metric and bubble each systemicImplication into keyFindings. This
+        // is what makes the temporal-correlation engine (Fix 4a) and the
+        // lens prompts (Fix 4b) able to "see" that a CT with iodinated
+        // contrast happened, so an elevated TSH 3 weeks later can be read
+        // as contrast-induced thyroiditis rather than autoimmune disease.
+        if (sd.contrastAdministered) {
+          const contrast = (sd.contrastDetails ?? {}) as {
+            agent?: string | null;
+            route?: string | null;
+            volume?: string | null;
+            reactions?: string | null;
+          };
+          metrics.push({
+            name: "Contrast Agent",
+            value: contrast?.agent || "yes (type unknown)",
+            unit: null,
+            interpretation: contrast?.route ? `Route: ${contrast.route}` : null,
+            category: "imaging_procedure",
+          });
+          const implications = (Array.isArray(sd.systemicImplications) ? sd.systemicImplications : []) as Array<{
+            affectedSystem?: string;
+            implication?: string;
+            timeframe?: string;
+          }>;
+          for (const imp of implications) {
+            if (imp?.affectedSystem && imp?.implication) {
+              keyFindings.push(
+                `${imp.affectedSystem}: ${imp.implication}${imp.timeframe ? ` (${imp.timeframe})` : ""}`,
+              );
+            }
+          }
+        }
       } else if (docType === "fatty_acid_profile") {
         const ratios = (sd.calculatedRatios ?? {}) as Record<string, number | null | undefined>;
         if (ratios.omega6_omega3 != null) metrics.push({ name: "Omega-6:3 Ratio", value: ratios.omega6_omega3, unit: "ratio", interpretation: null, category: "fatty_acids" });
@@ -456,13 +658,27 @@ export async function processUploadedDocument(opts: {
         summary = balance
           ? `Fatty acid profile — ${balance.replace(/_/g, " ")}`
           : `Fatty acid profile`;
+      } else if (docType === "supplement_stack") {
+        const suppCount = Array.isArray(sd.supplements) ? (sd.supplements as unknown[]).length : 0;
+        const medCount = Array.isArray(sd.medications) ? (sd.medications as unknown[]).length : 0;
+        summary = `Supplement stack — ${suppCount} supplement${suppCount === 1 ? "" : "s"}, ${medCount} medication${medCount === 1 ? "" : "s"}`;
+      } else if (docType === "clinical_letter") {
+        const regarding = (sd.regarding as string | undefined) ?? null;
+        summary = regarding ? `Clinical letter — ${regarding}` : `Clinical letter`;
       } else {
         summary = `${recordType.replace(/_/g, " ")} record`;
       }
 
+      // Date fallback chain — keep `studyDate` in here so imaging procedures
+      // (whose extraction prompt emits `studyDate`) get a non-null evidence
+      // date. Without this, the temporal-correlation engine in enrichment.ts
+      // (Fix 4a) would silently drop CT/MRI rows because their registry row
+      // has a NULL testDate, defeating Fix 3b's whole purpose.
       const testDateForEvidence: string | null =
         (sd.testDate as string | undefined) ??
+        (sd.studyDate as string | undefined) ??
         (sd.scanDate as string | undefined) ??
+        (sd.letterDate as string | undefined) ??
         ((sd.specimenDetails as { collected?: string } | undefined)?.collected ?? null) ??
         testDate ??
         null;

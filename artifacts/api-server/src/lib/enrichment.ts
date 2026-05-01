@@ -388,6 +388,103 @@ export async function buildEnrichedLensPayload(
     logger.warn({ err, patientId, recordId }, "Failed to load additional evidence for lens enrichment (continuing without)");
   }
 
+  // ── Fix 4a — Temporal correlation: medical procedures near abnormal results ──
+  // When the patient has had imaging (especially with iodinated contrast),
+  // pathology, or a cancer screening within the 8 weeks prior to the
+  // current panel's draw date, surface that as `temporalContext` so the
+  // lenses can reason about transient procedure-related abnormalities
+  // (e.g. CT-with-IV-contrast → elevated TSH for 4-8 weeks). Without this,
+  // the system risks flagging contrast-induced thyroiditis as autoimmune
+  // thyroid disease — a classic functional-medicine miss.
+  let temporalContext: {
+    label: string;
+    procedures: Array<{
+      type: string;
+      date: string | null;
+      summary: string | null;
+      keyFindings: string[];
+      metrics: unknown[];
+      daysBeforeThisPanel: number | null;
+    }>;
+  } | null = null;
+  try {
+    // Anchor the 8-week window to the most reliable date we have for this
+    // panel, in this preference order:
+    //   1. structuredData.testDate (extraction-time per-document date)
+    //   2. recordRow.testDate (DB-stored test date, e.g. user-provided at upload)
+    // Falling back to `new Date()` only when neither exists — but this is a
+    // last resort because anchoring to "now" can produce false positives
+    // (procedure was 7 weeks before record date but 7 months before today).
+    const recordTestDate =
+      (structuredData.testDate as string | undefined) ??
+      recordRow?.testDate ??
+      null;
+    // Guard against malformed dates (e.g. "Q1 2024", "unknown") — without
+    // this, isNaN(referenceDate.getTime()) would propagate NaN into every
+    // diffMs and accidentally include or exclude all procedures.
+    let referenceDate = recordTestDate ? new Date(recordTestDate) : new Date();
+    if (isNaN(referenceDate.getTime())) {
+      logger.warn(
+        { patientId, recordId, recordTestDate },
+        "Temporal correlation: anchor date unparseable — falling back to now",
+      );
+      referenceDate = new Date();
+    } else if (!recordTestDate) {
+      logger.warn(
+        { patientId, recordId },
+        "Temporal correlation: no record test date — anchoring 8-week window to now (may yield stale matches)",
+      );
+    }
+    const eightWeeksMs = 8 * 7 * 24 * 60 * 60 * 1000;
+    const recentProcedures = await db
+      .select({
+        recordId: evidenceRegistryTable.recordId,
+        documentType: evidenceRegistryTable.documentType,
+        testDate: evidenceRegistryTable.testDate,
+        summary: evidenceRegistryTable.summary,
+        keyFindings: evidenceRegistryTable.keyFindings,
+        metrics: evidenceRegistryTable.metrics,
+      })
+      .from(evidenceRegistryTable)
+      .where(
+        and(
+          eq(evidenceRegistryTable.patientId, patientId),
+          ne(evidenceRegistryTable.recordId, recordId),
+          inArray(evidenceRegistryTable.documentType, ["imaging", "pathology_report", "cancer_screening"]),
+        ),
+      );
+    const nearby = recentProcedures
+      .map((p) => {
+        const procDate = p.testDate ? new Date(p.testDate) : null;
+        if (!procDate || isNaN(procDate.getTime())) return null;
+        const diffMs = referenceDate.getTime() - procDate.getTime();
+        // Only past procedures within 8 weeks — future-dated procedures
+        // (e.g. data-entry typos) shouldn't pollute the temporal context.
+        if (diffMs < 0 || diffMs > eightWeeksMs) return null;
+        return {
+          type: p.documentType,
+          date: p.testDate,
+          summary: p.summary,
+          keyFindings: Array.isArray(p.keyFindings) ? p.keyFindings : [],
+          metrics: Array.isArray(p.metrics) ? p.metrics : [],
+          daysBeforeThisPanel: Math.round(diffMs / (24 * 60 * 60 * 1000)),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    if (nearby.length > 0) {
+      temporalContext = {
+        label: "Recent medical procedures that may affect blood results",
+        procedures: nearby,
+      };
+      logger.info(
+        { patientId, recordId, procedureCount: nearby.length },
+        "Temporal correlation: procedures detected within 8 weeks of this panel",
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, patientId, recordId }, "Temporal correlation lookup failed — non-fatal");
+  }
+
   // Functional-medicine notes from the biomarker reference table. These
   // are short clinical addenda (e.g. "No established toxicity threshold
   // for D3 with K2/Mg co-supplementation") that reinforce the lens
@@ -421,6 +518,7 @@ export async function buildEnrichedLensPayload(
     nutrigenomicFindings.length > 0 ||
     fusionFindings.length > 0 ||
     additionalEvidence.length > 0 ||
+    temporalContext !== null ||
     fmNotes !== null;
 
   const anonymisedForLens: AnonymisedData = hasEnrichment
@@ -435,6 +533,7 @@ export async function buildEnrichedLensPayload(
         ...(nutrigenomicFindings.length > 0 ? { nutrigenomicContext: nutrigenomicFindings } : {}),
         ...(fusionFindings.length > 0 ? { wearableBiomarkerFusion: fusionFindings } : {}),
         ...(additionalEvidence.length > 0 ? { additionalEvidence } : {}),
+        ...(temporalContext ? { temporalContext } : {}),
         ...(fmNotes ? { functionalMedicineContext: fmNotes } : {}),
       }
     : anonymised;
