@@ -21,6 +21,9 @@ interface Props {
   initialPrompt?: string;
   conversationId?: number | null;
   className?: string;
+  /** B3 — fires whenever a new conversation is created or the active one
+   *  is updated so the parent (Chat page) can refetch the sidebar list. */
+  onConversationChange?: (conversationId: number) => void;
 }
 
 function subjectLabel(subjectType: string, subjectRef: string | null): string {
@@ -31,7 +34,7 @@ function subjectLabel(subjectType: string, subjectRef: string | null): string {
   return subjectType.charAt(0).toUpperCase() + subjectType.slice(1);
 }
 
-export function ChatPanel({ patientId, subjectType = "general", subjectRef = null, initialPrompt, conversationId: initialConvId = null, className }: Props) {
+export function ChatPanel({ patientId, subjectType = "general", subjectRef = null, initialPrompt, conversationId: initialConvId = null, className, onConversationChange }: Props) {
   const { mode } = useMode();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<number | null>(initialConvId);
@@ -39,20 +42,48 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
   const [sending, setSending] = useState(false);
   const { toast } = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // B2 — when the SSE `start` event creates a brand-new conversation we
+  // promote the local `conversationId`. We must NOT also re-fetch the
+  // server-side message log in that moment (it would overwrite the
+  // optimistic + streaming bubbles). This ref records which conversation
+  // id the local `messages` array represents, and is updated only by:
+  //   (a) a successful server fetch (sidebar click path), or
+  //   (b) the SSE `start`/`done` events (new-conversation path).
+  // Initialised to `null` so a sidebar click into an existing
+  // conversation always triggers a load on first mount.
+  const lastLoadedConvIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     setConversationId(initialConvId);
     if (!initialConvId) {
       setMessages([]);
+      lastLoadedConvIdRef.current = null;
+    } else if (lastLoadedConvIdRef.current !== initialConvId) {
+      // Switching to a different existing conversation — clear stale
+      // bubbles immediately so we don't flash the previous thread while
+      // the next one loads. (No-op if this id was already loaded by the
+      // SSE start/done path — i.e. the user just sent a first message.)
+      setMessages([]);
     }
   }, [initialConvId]);
 
   useEffect(() => {
+    // Only load history when the conversation came from the parent
+    // (sidebar click). Mid-stream `start` events that promote a
+    // freshly-created id must not trigger a reload — see B2.
     if (!conversationId) return;
+    if (conversationId !== initialConvId) return;
+    if (lastLoadedConvIdRef.current === conversationId) return;
+    let cancelled = false;
     api<{ messages: ChatMessage[] }>(`/patients/${patientId}/chat/${conversationId}`)
-      .then((r) => setMessages(r.messages))
+      .then((r) => {
+        if (cancelled) return;
+        setMessages(r.messages);
+        lastLoadedConvIdRef.current = conversationId;
+      })
       .catch(() => null);
-  }, [conversationId, patientId]);
+    return () => { cancelled = true; };
+  }, [conversationId, initialConvId, patientId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -96,6 +127,7 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let sawDone = false;
 
         const appendDelta = (text: string) => {
           streamedAny = true;
@@ -132,10 +164,18 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
                   | { type: "error"; error: string };
                 if (evt.type === "start") {
                   setConversationId(evt.conversationId);
+                  // B3 — sidebar refetch on conversation create.
+                  onConversationChange?.(evt.conversationId);
+                  // B2 — record the just-created id so the post-stream
+                  // load-history effect doesn't fire and clobber state.
+                  lastLoadedConvIdRef.current = evt.conversationId;
                 } else if (evt.type === "delta") {
                   appendDelta(evt.text);
                 } else if (evt.type === "done") {
+                  sawDone = true;
                   setConversationId(evt.conversationId);
+                  onConversationChange?.(evt.conversationId);
+                  lastLoadedConvIdRef.current = evt.conversationId;
                   if (evt.message) {
                     // Replace the streamed bubble with the persisted row
                     // (which has id/createdAt for downstream use).
@@ -158,10 +198,19 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
             }
           }
         }
+
+        // B2 — surface silent failures: stream closed without ever emitting
+        // a `done` event AND we never received any text. Without this the
+        // user just sees their question echoed and an empty bubble.
+        if (!sawDone && !streamedAny) {
+          throw new Error("The assistant didn't respond. Please try again.");
+        }
       } else {
         // ── Legacy JSON path (server didn't honour SSE Accept) ──────────
         const json = (await response.json()) as { conversationId: number; message: ChatMessage };
         setConversationId(json.conversationId);
+        onConversationChange?.(json.conversationId);
+        lastLoadedConvIdRef.current = json.conversationId;
         setMessages((prev) => {
           const next = [...prev];
           // Replace the empty assistant placeholder with the full message.

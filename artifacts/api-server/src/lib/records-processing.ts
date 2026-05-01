@@ -203,6 +203,21 @@ export async function processUploadedDocument(opts: {
         await db.update(recordsTable).set({ drawTime: extractedDrawTime }).where(eq(recordsTable.id, recordId));
       }
 
+      // B6 — backfill records.testDate from the extracted collectionDate when
+      // the user didn't specify one at upload time. Without this the Records
+      // list shows "No date" even though the lab's draw date is sitting right
+      // there in structuredData.testDate.
+      const extractedTestDate = typeof structuredData.testDate === "string" && structuredData.testDate.trim().length > 0
+        ? structuredData.testDate.trim()
+        : null;
+      if (extractedTestDate && !testDate) {
+        try {
+          await db.update(recordsTable).set({ testDate: extractedTestDate }).where(eq(recordsTable.id, recordId));
+        } catch (err) {
+          logger.warn({ recordId, extractedTestDate, err }, "Failed to backfill records.testDate");
+        }
+      }
+
       const biomarkers = (structuredData.biomarkers as Array<{
         name: string; value: number; unit: string;
         labRefLow?: number; labRefHigh?: number; category?: string;

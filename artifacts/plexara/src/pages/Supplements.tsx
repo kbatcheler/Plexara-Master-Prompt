@@ -155,6 +155,11 @@ export default function Supplements() {
   const { toast } = useToast();
   const [newSupp, setNewSupp] = useState({ name: "", dosage: "", frequency: "" });
   const [openImpactId, setOpenImpactId] = useState<number | null>(null);
+  // B13 — make the active tab fully controlled. With Tabs `defaultValue`
+  // alone, sibling state changes can re-mount the Tabs root and snap
+  // the user back to "stack" — so clicking "My Stack" from
+  // Recommendations sometimes appeared to do nothing.
+  const [activeTab, setActiveTab] = useState<"stack" | "medications" | "recommendations">("stack");
 
   const stackQuery = useQuery({
     queryKey: ["supplements", patientId],
@@ -301,7 +306,10 @@ export default function Supplements() {
 
   const stack = stackQuery.data ?? [];
   const recs = recsQuery.data ?? [];
-  const activeRecs = recs.filter((r) => r.status !== "dismissed");
+  // B12 — the counter should reflect recommendations that still need a
+  // decision. Once the user accepts (→ added to stack) or dismisses one,
+  // it should drop off the badge so the number actually decrements.
+  const activeRecs = recs.filter((r) => r.status !== "dismissed" && r.status !== "accepted");
 
   const generateError = generateMutation.error as (Error & { detail?: { error?: string } }) | null;
   const generatePayload = generateMutation.data;
@@ -429,7 +437,7 @@ export default function Supplements() {
         <StackAnalysisPanel data={stackAnalysis} />
       )}
 
-      <Tabs defaultValue="stack" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="space-y-4">
         <TabsList>
           <TabsTrigger value="stack" data-testid="tab-stack">My Stack ({stack.filter((s) => s.active).length})</TabsTrigger>
           <TabsTrigger value="medications" data-testid="tab-medications">Medications</TabsTrigger>

@@ -1,0 +1,70 @@
+Plexara — Bug Fix & Consistency Sprint
+We just completed a full functional test of the Plexara app. Below is the prioritised list of issues to fix. Please address them in order, and after each fix, verify the behaviour against the acceptance criteria. Do not introduce new features — this sprint is purely bug fixes and consistency.
+P0 — Broken core functionality
+1. "Dashboard" nav link doesn't navigate
+Symptom: Clicking "Dashboard" in the top nav from /chat keeps the URL on /chat. Only direct URL navigation to /dashboard works.
+Fix: Ensure the Dashboard nav link is a proper router <Link> (or equivalent) pointing to /dashboard, not a button or a no-op handler. Check that no parent element is event.preventDefault()-ing the click.
+Acceptance: From every page (/chat, /records, /supplements, etc.), clicking "Dashboard" navigates to /dashboard and renders the dashboard view.
+2. Chat: first message silently fails
+Symptom: The first message sent in a fresh /chat session produces no response, no spinner, and no error. A second message works.
+Fix: Investigate the first-message code path — likely a race between conversation creation and message POST, or a missing conversationId on the first request. Ensure a conversation is created (or the API tolerates a null conversation) before the first POST. Add a visible loading/streaming indicator and an error toast on failure.
+Acceptance: Sending the very first message in a new chat reliably returns a response within the normal latency, with a visible "thinking" indicator while waiting. Failed requests surface a user-facing error.
+3. Conversations sidebar never populates
+Symptom: The "Conversations" panel on /chat always says "No conversations yet" even after successful exchanges.
+Fix: Wire the sidebar to the conversations list endpoint, refresh after each new message, and show the conversation title (auto-generated from the first user message if not set). Persist conversations server-side.
+Acceptance: After sending a message, the conversation appears in the sidebar with a sensible title and timestamp. Clicking it reloads the thread. The list survives page reloads.
+P1 — Data consistency bugs
+4. "Not Assessed" domain still shows a numeric score
+Symptom: On the dashboard, the Liver/Kidney card shows status "Not Assessed" but also displays "70 / GOOD" with a partially filled gauge.
+Fix: When a domain's status is not_assessed (or insufficient markers), render an empty/greyed gauge with no number and no GOOD/OPTIMAL/etc. label. Show a short "Insufficient data" message and link to the Records page.
+Acceptance: Liver/Kidney (and any other not-assessed domain) shows no numeric score, no qualitative label, and a neutral grey gauge.
+5. Evidence map ignores existing records
+Symptom: Evidence map says "No evidence on file yet" while a Complete blood panel is visible in Recent records and on /records.
+Fix: The evidence map data source is not querying the same records table as Recent records. Point it at the canonical records endpoint and re-render after upload.
+Acceptance: Any record listed in Recent records appears as a node/entry in the Evidence map. Uploading a new record updates both views.
+6. Record metadata: "Unknown.pdf" and "No date"
+Symptom: The Record Analysis modal shows filename Unknown.pdf and "No date" even though the chat and dashboard correctly reference the 28 April 2026 ferritin measurement.
+Fix: During upload, persist (a) the original filename and (b) the collection date extracted from the PDF (or fall back to upload date with a clear "uploaded" label). Surface the same fields in the modal header.
+Acceptance: The Record Analysis modal shows the real filename and the collection date (or "Collected: unknown · Uploaded: dd/mm/yyyy" if extraction failed). Date is consistent across Records, Recent records, chat citations, and the modal.
+7. Unified health score card missing values
+Symptom: Header reads "— +0.0 vs baseline" with what looks like a missing leading score, and the meta line "1 record analysed · 3 lenses complete ·" has a trailing separator suggesting a missing third item.
+Fix: Either compute and render the missing score and the missing meta item, or remove the placeholder dashes/separators when the value is unavailable. Don't leave dangling em-dashes or trailing dots.
+Acceptance: The card shows a real score (e.g. "72 +0.0 vs baseline") and a clean meta line with no orphaned separators.
+8. Optimal range column inconsistent with app logic
+Symptom: Record Analysis table shows Ferritin optimal range as 40–150, but the dashboard "Finding to Watch" and AI recommendations treat 70–100 as the functional optimal. WBC, RBC, and Vitamin D show "-- - --" for range yet are still colour-flagged red/amber.
+Fix: Single source of truth for ranges. Decide per biomarker: conventional reference range vs functional-medicine optimal. The table should display the same range that drives the status colour. If a marker has no range, it must not be colour-flagged — show a neutral grey dot.
+Acceptance: For every biomarker row, (a) the displayed range matches the range used for the status colour, (b) markers with no range show a neutral indicator, and (c) Ferritin specifically shows 70–100 (or whichever single range the app commits to) consistently across the table, dashboard findings, and recommendations.
+P2 — UX and feedback
+9. Patient/Clinician toggle doesn't persist
+Symptom: Switching to Clinician on /chat reverts to Patient when navigating to /dashboard.
+Fix: Persist the display mode in user settings (server-side) or at minimum in localStorage, and read it on app mount before rendering.
+Acceptance: Selecting Clinician on any page keeps Clinician active across navigation and after a full page reload.
+10. Biological age page misleading empty state
+Symptom: Page says "No analysed records yet" despite a complete blood panel being present. PhenoAge likely can't compute because some of the 9 required markers are missing.
+Fix: Distinguish "no records" from "records present but missing required markers". Show which specific markers are missing (e.g. "Need: Albumin, hs-CRP, Lymphocytes %") with a deep link to upload.
+Acceptance: When a panel exists but is incomplete, the page lists the missing markers; "no records" only appears when there are genuinely zero records.
+11. Trends "Recompute" button has no feedback
+Symptom: Clicking Recompute produces no toast, spinner, or state change.
+Fix: Add a loading state on the button, a success/failure toast, and a "last computed at" timestamp on the page.
+Acceptance: Clicking Recompute disables the button briefly, shows a spinner, then a toast ("Recomputed — no new alerts" or similar), and updates a visible timestamp.
+12. AI Recommendations counter doesn't update on accept
+Symptom: After accepting "5-MTHF" into the stack, AI Recommendations still shows (6) and the accepted item still appears in the recommendations list.
+Fix: When a recommendation is accepted, either remove it from the list or render it in an "Added to stack" state. Decrement the counter accordingly.
+Acceptance: Accepting an item moves the count from (6) to (5) and the card visibly reflects the accepted state. Re-accepting the same item is not possible.
+13. My Stack tab doesn't switch view
+Symptom: Clicking "My Stack (1)" while on AI Recommendations doesn't visibly switch — the recommendations content remains on screen.
+Fix: Ensure the tab control actually swaps the panel content (controlled state, aria-selected, conditional render). Confirm there is no fixed-position overlay obscuring the stack panel.
+Acceptance: Clicking each of My Stack / Medications / AI Recommendations swaps the visible panel cleanly with aria-selected set correctly for accessibility.
+14. Drug interaction screener wording
+Symptom: With an empty stack, "No interactions detected on your current stack" is technically true but misleading.
+Fix: When the stack is empty, show "Add supplements to your stack to enable interaction screening" instead of a green "No interactions" tick. Only show the green state when there's a non-empty stack and a real scan ran.
+Acceptance: Empty stack → neutral informational message. Non-empty stack with no hits → green "No interactions detected" with a note of how many items were checked.
+Cross-cutting requirements
+
+For every async user action (send message, recompute, regenerate findings, analyse stack, accept recommendation, log/delete symptom, upload), there must be: a loading indicator, a success confirmation, and an error toast on failure. Audit every button and ensure none silently no-op.
+Add an end-to-end test (Playwright or similar) for: dashboard nav from chat, first-message chat flow, conversation persistence, accepting a recommendation, and the not-assessed domain rendering.
+Add an integration test asserting that the same range value drives both the table column and the colour-flag logic for at least Ferritin, Vitamin D, B12, MCV, and WBC.
+
+Out of scope
+Do not redesign UI, do not change the AI prompt, do not touch auth, do not modify the data schema beyond what's needed for filename/date persistence and conversation persistence.
+When all issues are fixed, post a summary of which file(s) changed for each numbered item and the test results.

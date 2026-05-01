@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { evidenceRegistryTable, patientsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { evidenceRegistryTable, patientsTable, recordsTable } from "@workspace/db";
+import { eq, and, desc, notInArray } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
 
@@ -43,8 +43,53 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     .where(eq(evidenceRegistryTable.patientId, patientId))
     .orderBy(desc(evidenceRegistryTable.uploadDate));
 
-  res.json({
-    evidence: rows.map((r) => ({
+  // B5 — surface every record the patient has on file, even ones that
+  // never got an evidence_registry row (older blood panels uploaded
+  // before the registry existed, records still being processed, or
+  // record types that don't go through the registry path). This way the
+  // Evidence Map stays in sync with the Records list.
+  const registeredRecordIds = rows
+    .map((r) => r.recordId)
+    .filter((id): id is number => typeof id === "number");
+
+  const orphanRecords = await db
+    .select()
+    .from(recordsTable)
+    .where(
+      registeredRecordIds.length > 0
+        ? and(
+            eq(recordsTable.patientId, patientId),
+            notInArray(recordsTable.id, registeredRecordIds),
+          )
+        : eq(recordsTable.patientId, patientId),
+    )
+    .orderBy(desc(recordsTable.uploadDate));
+
+  const orphanEntries = orphanRecords.map((r) => ({
+    id: -r.id, // negative synthetic id, won't collide with registry ids
+    recordId: r.id,
+    recordType: r.recordType,
+    // Reuse recordType as documentType so the EvidenceMap icon mapping
+    // ("blood_panel", "dexa_scan", …) still works for orphan rows.
+    documentType: r.recordType,
+    testDate: r.testDate ?? null,
+    uploadDate: r.uploadDate.toISOString(),
+    summary: r.status === "complete"
+      ? `${r.fileName ?? "Record"} on file — awaiting evidence summary.`
+      : r.status === "error"
+        ? `${r.fileName ?? "Record"} — extraction failed.`
+        : r.status === "consent_blocked"
+          ? `${r.fileName ?? "Record"} — AI extraction blocked by consent settings.`
+          : `${r.fileName ?? "Record"} — processing in progress.`,
+    significance: null as string | null,
+    keyFindings: [] as unknown[],
+    metrics: [] as unknown[],
+    integratedIntoReport: false,
+    lastReportId: null as number | null,
+  }));
+
+  const evidence = [
+    ...rows.map((r) => ({
       id: r.id,
       recordId: r.recordId,
       recordType: r.recordType,
@@ -58,7 +103,10 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       integratedIntoReport: r.integratedIntoReport,
       lastReportId: r.lastReportId,
     })),
-  });
+    ...orphanEntries,
+  ].sort((a, b) => (a.uploadDate < b.uploadDate ? 1 : a.uploadDate > b.uploadDate ? -1 : 0));
+
+  res.json({ evidence });
 });
 
 export default router;

@@ -156,6 +156,18 @@ router.post(
             category?: string;
           }>) || [];
 
+          // B6 — backfill records.testDate from extraction when not user-provided.
+          const extractedTestDate = typeof structuredData.testDate === "string" && structuredData.testDate.trim().length > 0
+            ? structuredData.testDate.trim()
+            : null;
+          if (extractedTestDate && !testDate) {
+            try {
+              await db.update(recordsTable).set({ testDate: extractedTestDate }).where(eq(recordsTable.id, record.id));
+            } catch (err) {
+              logger.warn({ recordId: record.id, extractedTestDate, err }, "Failed to backfill records.testDate");
+            }
+          }
+
           if (biomarkers.length > 0) {
             const refData = await db.select().from(biomarkerReferenceTable);
             const refMap = new Map(refData.map(r => [r.biomarkerName.toLowerCase(), r]));

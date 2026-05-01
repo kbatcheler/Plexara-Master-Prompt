@@ -51,7 +51,11 @@ function useReducedMotion(): boolean {
 
 export function ArcGauge({ gauge, delay = 0, size = 180 }: GaugeProps) {
   const { mode } = useMode();
-  const score = toNum(gauge.currentValue);
+  const rawScore = toNum(gauge.currentValue);
+  // Treat "Not Assessed" / "Insufficient data" gauges as having no score —
+  // the backend may still send a placeholder number we don't want to render.
+  const notAssessed = !!(gauge.label && /not\s*assessed|insufficient/i.test(gauge.label));
+  const score = notAssessed ? null : rawScore;
   const colour = scoreColour(score);
   const trend = gauge.trend;
   const lensAgreement = gauge.lensAgreement;

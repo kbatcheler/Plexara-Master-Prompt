@@ -396,11 +396,15 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                                 </td>
                                 {mode === "clinician" && (
                                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums">
-                                    {clinLow ?? "--"} – {clinHigh ?? "--"}
+                                    {clinLow !== null && clinLow !== undefined && clinHigh !== null && clinHigh !== undefined
+                                      ? `${clinLow} – ${clinHigh}`
+                                      : "—"}
                                   </td>
                                 )}
                                 <td className="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums">
-                                  {optLow ?? "--"} – {optHigh ?? "--"}
+                                  {optLow !== null && optLow !== undefined && optHigh !== null && optHigh !== undefined
+                                    ? `${optLow} – ${optHigh}`
+                                    : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <div className="inline-flex justify-end w-full">

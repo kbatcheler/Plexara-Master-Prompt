@@ -59,6 +59,7 @@ function isGroupActive(group: NavGroup, currentPath: string): boolean {
 
 function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string }) {
   const isActive = isGroupActive(group, currentPath);
+  const [, setLocation] = useLocation();
 
   const baseCls = cn(
     "inline-flex items-center gap-1.5 px-3 h-10 rounded-lg text-sm font-medium transition-colors",
@@ -69,8 +70,25 @@ function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string 
   );
 
   if (group.href) {
+    // B1 — guarantee the top-level nav item navigates even if some
+    // ancestor swallows the event. wouter's <Link> is the primary path
+    // (best a11y, supports cmd-click etc.); the explicit onClick is a
+    // defensive fallback for the SPA case so the click always lands.
+    const href = group.href;
     return (
-      <Link href={group.href} className={baseCls} data-testid={`nav-${group.label.toLowerCase()}`}>
+      <Link
+        href={href}
+        className={baseCls}
+        data-testid={`nav-${group.label.toLowerCase()}`}
+        onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
+          // Let modifier-clicks (new tab/window) and non-primary buttons
+          // through to the browser.
+          if (e.defaultPrevented) return;
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          setLocation(href);
+        }}
+      >
         {group.label}
       </Link>
     );
@@ -83,11 +101,17 @@ function NavItem({ group, currentPath }: { group: NavGroup; currentPath: string 
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64 p-1.5">
         {group.items?.map((item) => (
-          <DropdownMenuItem key={item.href} asChild>
-            <Link href={item.href} className="flex flex-col items-start gap-0.5 cursor-pointer rounded-md px-2.5 py-2">
-              <span className="text-sm font-medium">{item.label}</span>
-              {item.hint && <span className="text-[11px] text-muted-foreground">{item.hint}</span>}
-            </Link>
+          // B1 — DropdownMenuItem with asChild + wouter Link can be a flaky
+          // combo (Radix's onSelect closes the menu before Link's onClick
+          // pushes history). Navigate explicitly in onSelect for reliability.
+          <DropdownMenuItem
+            key={item.href}
+            className="flex flex-col items-start gap-0.5 cursor-pointer rounded-md px-2.5 py-2"
+            onSelect={() => setLocation(item.href)}
+            data-testid={`nav-item-${item.href.replace(/[^a-z0-9]+/gi, "-")}`}
+          >
+            <span className="text-sm font-medium">{item.label}</span>
+            {item.hint && <span className="text-[11px] text-muted-foreground">{item.hint}</span>}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

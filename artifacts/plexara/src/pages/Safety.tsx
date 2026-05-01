@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Loader2, ShieldAlert, RefreshCw, X, ExternalLink, GitBranchPlus, CheckCircle2, Activity, ChevronDown } from "lucide-react";
+import { Loader2, ShieldAlert, RefreshCw, X, ExternalLink, GitBranchPlus, CheckCircle2, Activity, ChevronDown, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Interaction {
@@ -49,6 +49,21 @@ export default function Safety() {
     queryFn: () => api(`/patients/${patientId}/safety/interactions${extras ? `?extra=${encodeURIComponent(extras)}` : ""}`),
     enabled: !!patientId,
   });
+
+  // B14 — distinguish "no supplements/meds in scope" from "scanned and clean".
+  // Without this, an empty stack reads as "everything's safe" when actually
+  // nothing was scanned.
+  const stackQ = useQuery<Array<{ id: number; active: boolean }>>({
+    queryKey: ["supplements", patientId],
+    queryFn: () => api(`/patients/${patientId}/supplements`),
+    enabled: !!patientId,
+  });
+  const activeStackCount = (stackQ.data ?? []).filter((s) => s.active).length;
+  const extrasCount = extras
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+  const nothingInScope = activeStackCount === 0 && extrasCount === 0;
 
   const disagreementsQ = useQuery<Disagreement[]>({
     queryKey: ["safety", "disagreements", patientId],
@@ -134,7 +149,22 @@ export default function Safety() {
           {interactionsQ.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
             interactionsQ.isError ? <p className="text-sm text-destructive">Scan failed.</p> :
             active.length === 0 ? (
-              <p className="text-sm text-muted-foreground flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> No interactions detected on your current stack.</p>
+              nothingInScope ? (
+                <p className="text-sm text-muted-foreground flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                  <span>
+                    Nothing to scan yet — add supplements on the{" "}
+                    <em>Supplements</em> page or list medications above and we'll
+                    check them against the interaction rule set.
+                  </span>
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  No interactions detected — scanned {activeStackCount} supplement{activeStackCount === 1 ? "" : "s"}
+                  {extrasCount > 0 ? ` and ${extrasCount} medication${extrasCount === 1 ? "" : "s"}` : ""}.
+                </p>
+              )
             ) : (
               <div className="space-y-2">
                 {active.map((i) => (

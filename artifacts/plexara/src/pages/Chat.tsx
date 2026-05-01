@@ -117,13 +117,27 @@ export default function Chat() {
         </CardContent>
       </Card>
       <ChatPanel
-        key={`${activeId ?? "new"}-${seed?.subjectType ?? "g"}-${seed?.subjectRef ?? ""}`}
+        // NOTE: deliberately do NOT include `activeId` in the key. When the
+        // SSE `start` event creates a brand-new conversation, the parent
+        // promotes `activeId` from null → <id>; remounting on that change
+        // would tear down the streaming component mid-response. Conv id
+        // changes are handled inside ChatPanel via the `initialConvId`
+        // useEffect. We only force a remount when the *subject* changes
+        // (the URL-seeded "Ask about this" flow needs a fresh thread).
+        key={`${seed?.subjectType ?? "g"}-${seed?.subjectRef ?? ""}`}
         patientId={patientId}
         conversationId={activeId}
         subjectType={seed?.subjectType}
         subjectRef={seed?.subjectRef}
         initialPrompt={seed?.prompt}
         className="min-h-[600px]"
+        onConversationChange={(id) => {
+          // B3 — when ChatPanel creates or uses a conversation, refetch the
+          // sidebar list so it shows up immediately, and adopt it as active
+          // so a subsequent "New" toggle behaves correctly.
+          if (activeId !== id) setActiveId(id);
+          load();
+        }}
       />
     </div>
   );

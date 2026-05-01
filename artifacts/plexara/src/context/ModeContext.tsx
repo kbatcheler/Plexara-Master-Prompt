@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
 type Mode = "patient" | "clinician";
 
@@ -10,10 +10,32 @@ interface ModeContextType {
 
 const ModeContext = createContext<ModeContextType | undefined>(undefined);
 
-export function ModeProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<Mode>("patient");
+const STORAGE_KEY = "plexara.mode";
 
-  const toggleMode = () => setMode((prev) => (prev === "patient" ? "clinician" : "patient"));
+function readInitialMode(): Mode {
+  if (typeof window === "undefined") return "patient";
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === "patient" || stored === "clinician") return stored;
+  } catch {
+    // ignore (e.g. SecurityError when storage is disabled)
+  }
+  return "patient";
+}
+
+export function ModeProvider({ children }: { children: ReactNode }) {
+  const [mode, setModeState] = useState<Mode>(readInitialMode);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, mode);
+    } catch {
+      // ignore
+    }
+  }, [mode]);
+
+  const setMode = (next: Mode) => setModeState(next);
+  const toggleMode = () => setModeState((prev) => (prev === "patient" ? "clinician" : "patient"));
 
   return (
     <ModeContext.Provider value={{ mode, setMode, toggleMode }}>

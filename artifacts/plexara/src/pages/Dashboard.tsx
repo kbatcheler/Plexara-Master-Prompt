@@ -252,8 +252,15 @@ export default function Dashboard() {
                       <div className="min-w-0">
                         <h4 className="font-medium text-sm text-foreground truncate">{record.fileName}</h4>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {record.recordType.replace("_", " ")} ·{" "}
-                          {new Date(record.uploadDate).toLocaleDateString()}
+                          {(() => {
+                            // B7 — don't render orphan separators when the
+                            // upload date is missing or unparseable.
+                            const dt = record.uploadDate ? new Date(record.uploadDate) : null;
+                            const dateLabel = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleDateString() : null;
+                            const typeLabel = record.recordType ? record.recordType.replace(/_/g, " ") : null;
+                            if (typeLabel && dateLabel) return `${typeLabel} · ${dateLabel}`;
+                            return typeLabel ?? dateLabel ?? "";
+                          })()}
                         </p>
                       </div>
                     </div>

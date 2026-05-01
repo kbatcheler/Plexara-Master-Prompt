@@ -54,6 +54,14 @@ export default function Trends() {
     onError: (err: Error) => toast({ title: "Recompute failed", description: err.message, variant: "destructive" }),
   });
 
+  // B11 — show when the trends were last computed so users have feedback
+  // beyond the toast. We pull the freshest computedAt across all trend rows.
+  const lastComputedAt = (trendsQ.data ?? []).reduce<string | null>((acc, t) => {
+    if (!t.computedAt) return acc;
+    if (!acc || t.computedAt > acc) return t.computedAt;
+    return acc;
+  }, null);
+
   const ackMut = useMutation({
     mutationFn: (id: number) => api(`/patients/${patientId}/trends/change-alerts/${id}/ack`, { method: "PATCH" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["change-alerts"] }),
@@ -79,10 +87,17 @@ export default function Trends() {
             Per-biomarker linear regression with 95% projection bands at 30 / 90 / 365 days. Rate-of-change detector fires when a marker shifts &gt;15% (warn) or &gt;30% (critical) over rolling windows.
           </p>
         </div>
-        <Button onClick={() => recomputeMut.mutate()} disabled={recomputeMut.isPending || !patientId} data-testid="trends-recompute">
-          {recomputeMut.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-          Recompute
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button onClick={() => recomputeMut.mutate()} disabled={recomputeMut.isPending || !patientId} data-testid="trends-recompute">
+            {recomputeMut.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+            {recomputeMut.isPending ? "Recomputing…" : "Recompute"}
+          </Button>
+          {lastComputedAt && (
+            <p className="text-[11px] text-muted-foreground" data-testid="trends-last-computed">
+              Last computed {new Date(lastComputedAt).toLocaleString()}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Change alerts */}

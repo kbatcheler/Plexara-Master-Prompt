@@ -63,6 +63,14 @@ export default function BiologicalAge() {
   const latest = data?.latest;
   const history = data?.history ?? [];
   const uncomputedRecords = records.filter((r) => r.processingStatus === "complete" && !computedRecordIds.has(r.id));
+  // B10 — richer empty-state messaging. We need to tell apart:
+  //   • patient has no records at all
+  //   • records still processing
+  //   • complete records exist but compute hasn't been attempted (the
+  //     422 "missing markers" path is already handled below).
+  const hasAnyRecord = records.length > 0;
+  const completeCount = records.filter((r) => r.processingStatus === "complete").length;
+  const inFlightCount = records.filter((r) => r.processingStatus !== "complete" && r.processingStatus !== "error").length;
 
   const chartData = [...history]
     .reverse()
@@ -188,7 +196,13 @@ export default function BiologicalAge() {
         </CardHeader>
         <CardContent className="space-y-3">
           {uncomputedRecords.length === 0 && computedRecordIds.size === 0 && (
-            <p className="text-sm text-muted-foreground">No analysed records yet. Upload one on the Records page.</p>
+            <p className="text-sm text-muted-foreground">
+              {!hasAnyRecord
+                ? "No records uploaded yet. Add a blood panel on the Records page to compute your biological age."
+                : completeCount === 0 && inFlightCount > 0
+                  ? `${inFlightCount} record${inFlightCount === 1 ? " is" : "s are"} still being analysed. Once analysis finishes, you'll be able to compute biological age here.`
+                  : "No analysed records contain the markers needed for PhenoAge. Upload a comprehensive metabolic + CBC panel that includes albumin, creatinine, fasting glucose, hs-CRP, lymphocyte %, MCV, RDW, ALP and WBC."}
+            </p>
           )}
           {uncomputedRecords.map((r) => (
             <div key={r.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 p-3">

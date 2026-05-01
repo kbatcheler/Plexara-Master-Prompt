@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { UploadCloud, Loader2, CheckCircle2, XCircle, FileText, X } from "lucide-react";
-import { getGetDashboardQueryKey, getListRecordsQueryKey } from "@workspace/api-client-react";
+import { getGetDashboardQueryKey, getListRecordsQueryKey, getListEvidenceQueryKey } from "@workspace/api-client-react";
 import { useCurrentPatient } from "../../hooks/use-current-patient";
 import { api } from "../../lib/api";
 import { Link } from "wouter";
@@ -140,6 +140,7 @@ export function UploadZone() {
           if (statusChanged && (upd.status === "complete" || upd.status === "error" || upd.status === "consent_blocked")) {
             queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey(currentPatientId) });
             queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(currentPatientId) });
+            queryClient.invalidateQueries({ queryKey: getListEvidenceQueryKey(currentPatientId) });
           }
           if (statusChanged && upd.status === "complete") {
             maybeNotifyComplete(e.fileName);
@@ -257,6 +258,7 @@ export function UploadZone() {
           });
         }
         queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(currentPatientId) });
+        queryClient.invalidateQueries({ queryKey: getListEvidenceQueryKey(currentPatientId) });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Upload failed.";
         setEntries((prev) =>
