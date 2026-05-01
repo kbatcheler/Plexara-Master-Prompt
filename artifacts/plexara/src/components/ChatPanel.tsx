@@ -61,18 +61,132 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
   async function send(question: string) {
     if (!question.trim() || sending) return;
     setSending(true);
-    setMessages((prev) => [...prev, { role: "user", content: question }]);
+    // Optimistic user bubble + an empty assistant bubble we'll fill as
+    // tokens stream in.
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: question },
+      { role: "assistant", content: "" },
+    ]);
     setDraft("");
+
+    let streamedAny = false;
     try {
-      const res = await api<{ conversationId: number; message: ChatMessage }>(`/patients/${patientId}/chat`, {
+      const response = await fetch(`/api/patients/${patientId}/chat`, {
         method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          // Opt in to the server's SSE branch. Servers that don't support
+          // streaming will fall back to JSON, which we also handle below.
+          Accept: "text/event-stream",
+        },
         body: JSON.stringify({ question, subjectType, subjectRef, conversationId }),
       });
-      setConversationId(res.conversationId);
-      setMessages((prev) => [...prev, res.message]);
-    } catch {
-      toast({ title: "Chat failed", variant: "destructive" });
-      setMessages((prev) => prev.slice(0, -1));
+
+      if (!response.ok || !response.body) {
+        const errPayload = await response.json().catch(() => ({}));
+        throw new Error((errPayload as { error?: string }).error || `HTTP ${response.status}`);
+      }
+
+      const ctype = response.headers.get("content-type") || "";
+
+      // ── Streaming SSE path ─────────────────────────────────────────────
+      if (ctype.includes("text/event-stream")) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        const appendDelta = (text: string) => {
+          streamedAny = true;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === "assistant") {
+              next[next.length - 1] = { ...last, content: last.content + text };
+            }
+            return next;
+          });
+        };
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE events are separated by a blank line. Process every
+          // complete event currently in the buffer; keep any partial
+          // event for the next read.
+          let sepIdx: number;
+          while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+            const rawEvent = buffer.slice(0, sepIdx);
+            buffer = buffer.slice(sepIdx + 2);
+            for (const line of rawEvent.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(line.slice(6)) as
+                  | { type: "start"; conversationId: number }
+                  | { type: "delta"; text: string }
+                  | { type: "done"; conversationId: number; message: ChatMessage | null }
+                  | { type: "error"; error: string };
+                if (evt.type === "start") {
+                  setConversationId(evt.conversationId);
+                } else if (evt.type === "delta") {
+                  appendDelta(evt.text);
+                } else if (evt.type === "done") {
+                  setConversationId(evt.conversationId);
+                  if (evt.message) {
+                    // Replace the streamed bubble with the persisted row
+                    // (which has id/createdAt for downstream use).
+                    setMessages((prev) => {
+                      const next = [...prev];
+                      const last = next[next.length - 1];
+                      if (last && last.role === "assistant") {
+                        next[next.length - 1] = { ...evt.message!, content: last.content };
+                      }
+                      return next;
+                    });
+                  }
+                } else if (evt.type === "error") {
+                  throw new Error(evt.error);
+                }
+              } catch (parseErr) {
+                // Surface the parse/stream error to the outer catch.
+                throw parseErr;
+              }
+            }
+          }
+        }
+      } else {
+        // ── Legacy JSON path (server didn't honour SSE Accept) ──────────
+        const json = (await response.json()) as { conversationId: number; message: ChatMessage };
+        setConversationId(json.conversationId);
+        setMessages((prev) => {
+          const next = [...prev];
+          // Replace the empty assistant placeholder with the full message.
+          const last = next[next.length - 1];
+          if (last && last.role === "assistant" && last.content === "") {
+            next[next.length - 1] = json.message;
+          } else {
+            next.push(json.message);
+          }
+          return next;
+        });
+        streamedAny = true;
+      }
+    } catch (err) {
+      toast({ title: "Chat failed", variant: "destructive", description: (err as Error).message });
+      setMessages((prev) => {
+        // Strip the empty assistant placeholder; keep partial text if any.
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last && last.role === "assistant" && !streamedAny) {
+          next.pop(); // remove empty assistant
+          next.pop(); // remove user we optimistically added
+        }
+        return next;
+      });
     } finally {
       setSending(false);
     }
@@ -107,34 +221,38 @@ export function ChatPanel({ patientId, subjectType = "general", subjectRef = nul
             )}
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm whitespace-pre-wrap shadow-sm">
-                {m.content}
-              </div>
-            ) : (
-              <div className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-secondary text-foreground px-4 py-3 ${assistantTextClass}`}>
-                <AINarrative
-                  text={m.content}
-                  variant={mode === "clinician" ? "clinical" : "compact"}
-                />
-              </div>
-            )}
-          </div>
-        ))}
-        {sending && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-sm bg-secondary text-muted-foreground px-4 py-3 text-sm flex items-center gap-2">
-              <span className="flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "0ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "150ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "300ms" }} />
-              </span>
-              thinking
+        {messages.map((m, i) => {
+          const isAssistant = m.role === "assistant";
+          const isStreamingPlaceholder = isAssistant && m.content === "" && sending && i === messages.length - 1;
+          return (
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              {m.role === "user" ? (
+                <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm whitespace-pre-wrap shadow-sm">
+                  {m.content}
+                </div>
+              ) : isStreamingPlaceholder ? (
+                <div className="rounded-2xl rounded-bl-sm bg-secondary text-muted-foreground px-4 py-3 text-sm flex items-center gap-2">
+                  <span className="flex gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "0ms" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-pulse" style={{ animationDelay: "300ms" }} />
+                  </span>
+                  thinking
+                </div>
+              ) : (
+                <div className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-secondary text-foreground px-4 py-3 ${assistantTextClass}`}>
+                  <AINarrative
+                    text={m.content}
+                    variant={mode === "clinician" ? "clinical" : "compact"}
+                  />
+                  {sending && i === messages.length - 1 && (
+                    <span className="inline-block w-1 h-4 ml-0.5 align-middle bg-foreground/60 animate-pulse" aria-hidden />
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })}
       </div>
       <div className="p-3 border-t border-border flex gap-2">
         <Textarea

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMode } from "../../context/ModeContext";
 import { Gauge as GaugeType } from "@workspace/api-client-react";
-import { ArrowUp, ArrowDown, ArrowRight } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowRight, LineChart, Pill } from "lucide-react";
+import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { AskAboutThis } from "../AskAboutThis";
+import { LineChart as RcLineChart, Line, ResponsiveContainer } from "recharts";
 
 interface GaugeProps {
   gauge: GaugeType;
@@ -207,7 +209,39 @@ export function ArcGauge({ gauge, delay = 0, size = 180 }: GaugeProps) {
             Lens agreement: {lensAgreement}
           </div>
         )}
-        <div className="mt-2 -ml-2">
+        {/* Enhancement E3 — sparkline trend.
+            Render only when we have ≥2 historical points (single point would
+            be a flat dot, which is misleading). Slope sign drives the colour:
+            up = optimal-green, down = urgent-red, flat = muted. */}
+        {(() => {
+          const sparkline = (gauge as GaugeType & { sparkline?: Array<{ date: string; value: number }> }).sparkline;
+          if (!sparkline || sparkline.length < 2) return null;
+          const first = sparkline[0].value;
+          const last = sparkline[sparkline.length - 1].value;
+          const slope = last - first;
+          const stroke = slope > 0.5
+            ? "hsl(var(--status-optimal))"
+            : slope < -0.5
+              ? "hsl(var(--status-urgent))"
+              : "hsl(var(--muted-foreground))";
+          return (
+            <div className="mt-2 h-7 w-full" aria-hidden data-testid={`gauge-sparkline-${gauge.id}`}>
+              <ResponsiveContainer width="100%" height="100%">
+                <RcLineChart data={sparkline} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke={stroke}
+                    strokeWidth={1.75}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </RcLineChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })()}
+        <div className="mt-2 -ml-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
           <AskAboutThis
             subjectType="gauge"
             subjectRef={gauge.id}
@@ -215,6 +249,24 @@ export function ArcGauge({ gauge, delay = 0, size = 180 }: GaugeProps) {
             prompt={`What does my ${gauge.domain} score of ${score === null ? "(pending)" : Math.round(score)} mean, and what would move it?`}
             testId={`ask-gauge-${gauge.id}`}
           />
+          <Link
+            href="/supplements"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors"
+            data-testid={`gauge-recs-${gauge.id}`}
+            aria-label={`View recommendations for ${gauge.domain}`}
+          >
+            <Pill className="w-3 h-3" />
+            <span>Recommendations</span>
+          </Link>
+          <Link
+            href="/timeline"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors"
+            data-testid={`gauge-timeline-${gauge.id}`}
+            aria-label={`See ${gauge.domain} timeline`}
+          >
+            <LineChart className="w-3 h-3" />
+            <span>Timeline</span>
+          </Link>
         </div>
       </div>
     </div>

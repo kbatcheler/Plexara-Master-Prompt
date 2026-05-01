@@ -1,10 +1,16 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { recordsTable, interpretationsTable, gaugesTable, alertsTable } from "@workspace/db";
+import {
+  recordsTable,
+  interpretationsTable,
+  gaugesTable,
+  alertsTable,
+  comprehensiveReportsTable,
+} from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
-import { decryptText } from "../lib/phi-crypto";
+import { decryptText, decryptInterpretationFields } from "../lib/phi-crypto";
 
 const router = Router({ mergeParams: true });
 
@@ -41,6 +47,50 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       .from(gaugesTable)
       .where(eq(gaugesTable.patientId, patientId));
 
+    // Enhancement E3 — Sparkline trends.
+    // Build a per-domain history of `currentValue` from the most recent (up to 6)
+    // interpretations' `reconciledOutput.gaugeUpdates`. Stored encrypted, so we
+    // decrypt each row's `reconciledOutput` here. The result is attached as the
+    // optional `sparkline` field on each gauge — purely additive; clients that
+    // don't know about it ignore it. Single-point gauges get an empty array
+    // (frontend renders nothing in that case).
+    type SparkPoint = { date: string; value: number };
+    const sparklineByDomain = new Map<string, SparkPoint[]>();
+    try {
+      const recentInterps = await db
+        .select()
+        .from(interpretationsTable)
+        .where(eq(interpretationsTable.patientId, patientId))
+        .orderBy(desc(interpretationsTable.createdAt))
+        .limit(6);
+
+      // Walk oldest → newest so the resulting array is chronological,
+      // which is what Recharts expects for a left-to-right trend line.
+      for (let i = recentInterps.length - 1; i >= 0; i--) {
+        const interp = recentInterps[i];
+        const decrypted = decryptInterpretationFields(interp);
+        const reconciled = decrypted?.reconciledOutput as { gaugeUpdates?: Array<{ domain?: string; currentValue?: number }> } | null | undefined;
+        const updates = Array.isArray(reconciled?.gaugeUpdates) ? reconciled!.gaugeUpdates! : [];
+        const dateIso = interp.createdAt instanceof Date ? interp.createdAt.toISOString() : String(interp.createdAt ?? "");
+        for (const g of updates) {
+          if (!g || typeof g.domain !== "string") continue;
+          const v = typeof g.currentValue === "number" ? g.currentValue : Number(g.currentValue);
+          if (!Number.isFinite(v)) continue;
+          const arr = sparklineByDomain.get(g.domain) ?? [];
+          arr.push({ date: dateIso, value: v });
+          sparklineByDomain.set(g.domain, arr);
+        }
+      }
+    } catch (err) {
+      // History is best-effort — never break the dashboard if a single
+      // historical interpretation fails to decrypt.
+      req.log.warn({ err }, "Failed to build sparkline history (continuing without)");
+    }
+    const gaugesWithSpark = gauges.map((g) => ({
+      ...g,
+      sparkline: sparklineByDomain.get(g.domain) ?? [],
+    }));
+
     const alerts = await db
       .select()
       .from(alertsTable)
@@ -61,6 +111,20 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       .from(recordsTable)
       .where(eq(recordsTable.patientId, patientId));
 
+    // Latest comprehensive report — surfaced as the dashboard "executive
+    // summary" card. Only the executiveSummary and generatedAt are exposed
+    // here; the full report (sections, narratives, etc.) remains served
+    // by /comprehensive-report/latest.
+    const [latestReport] = await db
+      .select({
+        executiveSummary: comprehensiveReportsTable.executiveSummary,
+        generatedAt: comprehensiveReportsTable.generatedAt,
+      })
+      .from(comprehensiveReportsTable)
+      .where(eq(comprehensiveReportsTable.patientId, patientId))
+      .orderBy(desc(comprehensiveReportsTable.generatedAt))
+      .limit(1);
+
     res.json({
       patient,
       unifiedHealthScore: latestInterpretation?.unifiedHealthScore
@@ -71,11 +135,13 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       latestInterpretationDate: latestInterpretation?.createdAt?.toISOString() || null,
       activeAlertCount: activeAlerts.length,
       urgentAlertCount: urgentAlerts.length,
-      gauges,
+      gauges: gaugesWithSpark,
       patientNarrative: decryptText(latestInterpretation?.patientNarrative),
       clinicalNarrative: decryptText(latestInterpretation?.clinicalNarrative),
       recentRecords,
       lensesCompleted: latestInterpretation?.lensesCompleted || null,
+      executiveSummary: decryptText(latestReport?.executiveSummary) ?? null,
+      reportGeneratedAt: latestReport?.generatedAt?.toISOString() ?? null,
     });
   } catch (err) {
     req.log.error({ err }, "Failed to get dashboard");

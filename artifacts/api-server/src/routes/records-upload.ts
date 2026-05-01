@@ -16,6 +16,7 @@ import { logger } from "../lib/logger";
 import { isProviderAllowed } from "../lib/consent";
 import { UPLOADS_DIR, assertWithinUploads } from "../lib/uploads";
 import { encryptJson } from "../lib/phi-crypto";
+import { parseExtractionConfidence, bucketConfidence } from "../lib/extraction-confidence";
 import { validate } from "../middlewares/validate";
 import { HttpError } from "../middlewares/errorHandler";
 import { recordCreateBody } from "../lib/validators";
@@ -134,13 +135,16 @@ router.post(
         try {
           structuredData = await extractFromDocument(base64, mimeType, recordType);
 
+          // Enhancement E4 — derive the legacy text bucket from the LLM-reported
+          // numeric confidence; full structured block stays inside structuredJson.
+          const conf = parseExtractionConfidence(structuredData);
           await db.insert(extractedDataTable).values({
             recordId: record.id,
             patientId,
             dataType: (structuredData.documentType as string) || recordType,
             structuredJson: encryptJson(structuredData) as object,
             extractionModel: "claude-sonnet-4-6",
-            extractionConfidence: "high",
+            extractionConfidence: bucketConfidence(conf.overall),
           });
 
           const biomarkers = (structuredData.biomarkers as Array<{

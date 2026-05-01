@@ -2,11 +2,13 @@ import { useEffect, useState, useCallback } from "react";
 import { useRoute } from "wouter";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
-import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles, Download } from "lucide-react";
+import { Loader2, Printer, FileText, AlertTriangle, CheckCircle2, FlaskConical, Sparkles, Download, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReportShareCard } from "../components/ReportShareCard";
 import AINarrative from "@/components/AINarrative";
 import { HelpHint } from "@/components/help/HelpHint";
+import { BiomarkerName } from "../components/biomarker/BiomarkerExplainPopover";
+import { LensReasoningPanel } from "../components/report/LensReasoningPanel";
 
 /**
  * COMPREHENSIVE REPORT page. Two routes share this component:
@@ -181,6 +183,19 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
             {downloading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
             {downloading ? "Generating…" : "Download PDF"}
           </Button>
+          {/* Enhancement E12 — share-as-image card. Opens the PNG in a new
+              tab so the user can long-press / right-click → save and paste
+              into a chat app. */}
+          <Button asChild variant="outline" size="sm" data-testid="btn-share-image">
+            <a
+              href={`/api/patients/${patientId}/share-card.png`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ImageIcon className="w-4 h-4 mr-2" />
+              Share summary
+            </a>
+          </Button>
           <Button onClick={() => window.print()} variant="outline" size="sm">
             <Printer className="w-4 h-4 mr-2" />Print
           </Button>
@@ -329,7 +344,14 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
         {report.topConcerns.length > 0 && (
           <div className="rounded-lg border border-border/60 p-4">
             <h4 className="text-xs uppercase tracking-wide text-muted-foreground mb-2 font-semibold">Top concerns</h4>
-            <ul className="list-disc pl-5 text-sm space-y-1">{report.topConcerns.map((c, i) => <li key={i}>{c}</li>)}</ul>
+            <ul className="list-disc pl-5 text-sm space-y-2">
+              {report.topConcerns.map((c, i) => (
+                <li key={i}>
+                  <div>{c}</div>
+                  <LensReasoningPanel patientId={patientId} finding={c} tone="concern" />
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {report.topPositives.length > 0 && (
@@ -337,7 +359,14 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
             <h4 className="text-xs uppercase tracking-wide text-green-700 dark:text-green-400 mb-2 font-semibold flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />What's going well
             </h4>
-            <ul className="list-disc pl-5 text-sm space-y-1">{report.topPositives.map((c, i) => <li key={i}>{c}</li>)}</ul>
+            <ul className="list-disc pl-5 text-sm space-y-2">
+              {report.topPositives.map((c, i) => (
+                <li key={i}>
+                  <div>{c}</div>
+                  <LensReasoningPanel patientId={patientId} finding={c} tone="positive" />
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </section>
@@ -427,7 +456,7 @@ function LegacyView({ report }: { report: LegacyReport }) {
           <tbody>
             {report.biomarkers.map((b) => (
               <tr key={b.id} className="border-t border-border/40">
-                <td className="px-2 py-1">{b.biomarkerName}</td>
+                <td className="px-2 py-1"><BiomarkerName name={b.biomarkerName} /></td>
                 <td className="px-2 py-1">{b.value}{b.unit ? ` ${b.unit}` : ""}</td>
                 <td className="px-2 py-1 capitalize">{b.status || "—"}</td>
                 <td className="px-2 py-1 text-muted-foreground">{b.testDate || "—"}</td>

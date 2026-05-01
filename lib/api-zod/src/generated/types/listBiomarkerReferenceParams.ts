@@ -11,4 +11,9 @@ export type ListBiomarkerReferenceParams = {
    * @nullable
    */
   category?: string | null;
+  /**
+   * Case-insensitive exact match on biomarkerName.
+   * @nullable
+   */
+  name?: string | null;
 };

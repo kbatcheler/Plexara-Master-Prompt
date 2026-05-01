@@ -445,6 +445,70 @@ paths:
         "404":
           description: No interpretation found
 
+  /patients/{patientId}/interpretations/latest/delta:
+    get:
+      operationId: getLatestInterpretationDelta
+      tags: [interpretations]
+      summary: Get the "what changed" delta for the latest interpretation
+      description: |
+        Returns the diff between the patient's latest interpretation and the
+        immediately-prior one (score change, gauge movements, new/resolved
+        concerns and new positives). 204 when no prior interpretation exists.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Delta vs the previous interpretation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterpretationDelta"
+        "204":
+          description: No prior interpretation to compare against
+
+  /patients/{patientId}/interpretations/latest/lens-reasoning:
+    get:
+      operationId: getLatestInterpretationLensReasoning
+      tags: [interpretations]
+      summary: Get per-lens reasoning for a specific finding
+      description: |
+        For the patient's latest interpretation, returns each lens's
+        reasoning text and confidence (when available) for the supplied
+        `finding` string. Match is best-effort substring (case-insensitive)
+        against the decrypted lens output JSON. Lenses without a matching
+        passage come back as `null`.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: finding
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The finding text to look up across the three lens outputs.
+      responses:
+        "200":
+          description: Per-lens reasoning for the finding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LensReasoning"
+        "400":
+          description: Missing finding
+        "404":
+          description: No interpretation found
+
   /patients/{patientId}/interpretations/{interpretationId}:
     get:
       operationId: getInterpretation
@@ -529,6 +593,52 @@ paths:
                 items:
                   $ref: "#/components/schemas/BiomarkerResult"
 
+  /patients/{patientId}/biomarkers/{biomarkerResultId}:
+    patch:
+      operationId: patchBiomarkerResult
+      tags: [biomarkers]
+      summary: "Enhancement E4 — manually edit an extracted biomarker value"
+      description: >
+        Updates a single biomarker result's `value`. On the first edit the
+        original LLM-extracted value is snapshotted to `originalValue` and
+        `manuallyEdited` is flipped to true. Pass `?reinterpret=1` to also
+        kick off a fresh interpretation pipeline run for the source record.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: biomarkerResultId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: reinterpret
+          in: query
+          schema:
+            type: ["string", "null"]
+            enum: ["1", null]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: number
+      responses:
+        "200":
+          description: Updated biomarker row
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BiomarkerResult"
+
   /biomarker-reference:
     get:
       operationId: listBiomarkerReference
@@ -537,6 +647,11 @@ paths:
       parameters:
         - name: category
           in: query
+          schema:
+            type: ["string", "null"]
+        - name: name
+          in: query
+          description: Case-insensitive exact match on biomarkerName.
           schema:
             type: ["string", "null"]
       responses:
@@ -707,6 +822,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Dashboard"
+
+  /patients/{patientId}/share-card.png:
+    get:
+      operationId: getPatientShareCard
+      tags: [reports]
+      summary: Render a 1080x1080 share-card PNG for the patient's latest report
+      description: |
+        Enhancement E12 — returns a square PNG containing the patient's
+        unified health score, six mini-gauge dots, and top three concerns
+        from the most recent comprehensive report. When the physician
+        portal is enabled, a fresh 30-day share-link QR is embedded in the
+        bottom-right; otherwise the QR is omitted.
+      security:
+        - clerkAuth: []
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 1080x1080 PNG image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No comprehensive report yet — generate one first.
 
 components:
   securitySchemes:
@@ -1192,6 +1337,96 @@ components:
         - lensesCompleted
         - createdAt
 
+    InterpretationDelta:
+      type: object
+      description: |
+        "What changed" diff between the patient's latest interpretation and
+        the immediately-prior one. Score and gauge fields are omitted when
+        the prior values are missing or non-numeric.
+      properties:
+        scoreDelta:
+          type: ["number", "null"]
+          description: Change in unifiedHealthScore (current minus previous), to 1 dp.
+        since:
+          type: ["string", "null"]
+          format: date-time
+          description: createdAt of the previous interpretation being compared against.
+        gauges:
+          type: array
+          description: Per-domain numeric movements, sorted by absolute delta desc.
+          items:
+            type: object
+            properties:
+              domain:
+                type: string
+              delta:
+                type: number
+              from:
+                type: number
+              to:
+                type: number
+            required: [domain, delta, from, to]
+        newConcerns:
+          type: array
+          items:
+            type: string
+        resolvedConcerns:
+          type: array
+          items:
+            type: string
+        newPositives:
+          type: array
+          items:
+            type: string
+      required:
+        - scoreDelta
+        - since
+        - gauges
+        - newConcerns
+        - resolvedConcerns
+        - newPositives
+
+    LensReasoning:
+      type: object
+      description: |
+        Enhancement E10 — per-lens reasoning extracted from the latest
+        interpretation for a given finding (e.g. one of `topConcerns` /
+        `topPositives`). Lens slots come back `null` when the lens output
+        contains no passage that matches the finding text.
+      properties:
+        finding:
+          type: string
+        lensA:
+          oneOf:
+            - $ref: "#/components/schemas/LensReasoningMatch"
+            - type: "null"
+        lensB:
+          oneOf:
+            - $ref: "#/components/schemas/LensReasoningMatch"
+            - type: "null"
+        lensC:
+          oneOf:
+            - $ref: "#/components/schemas/LensReasoningMatch"
+            - type: "null"
+        reconciliation:
+          type: object
+          properties:
+            summary:
+              type: ["string", "null"]
+            allLensesAgree:
+              type: boolean
+          required: [summary, allLensesAgree]
+      required: [finding, lensA, lensB, lensC, reconciliation]
+
+    LensReasoningMatch:
+      type: object
+      properties:
+        text:
+          type: string
+        confidence:
+          type: ["string", "null"]
+      required: [text, confidence]
+
     Gauge:
       type: object
       properties:
@@ -1226,6 +1461,18 @@ components:
         lastUpdated:
           type: string
           format: date-time
+        sparkline:
+          type: array
+          description: "Enhancement E3 — chronological history of `currentValue` from the last (up to 6) interpretations for this domain. Empty when fewer than 2 historical points are available."
+          items:
+            type: object
+            required: [date, value]
+            properties:
+              date:
+                type: string
+                format: date-time
+              value:
+                type: number
       required:
         - id
         - patientId
@@ -1259,6 +1506,12 @@ components:
           type: ["number", "null"]
         testDate:
           type: ["string", "null"]
+        manuallyEdited:
+          type: ["boolean", "null"]
+          description: "Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI."
+        originalValue:
+          type: ["number", "null"]
+          description: "Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited."
         createdAt:
           type: string
           format: date-time
@@ -1452,6 +1705,12 @@ components:
             $ref: "#/components/schemas/Record"
         lensesCompleted:
           type: ["integer", "null"]
+        executiveSummary:
+          type: ["string", "null"]
+          description: One-paragraph summary of the latest comprehensive report (decrypted server-side). Null until a comprehensive report has been generated.
+        reportGeneratedAt:
+          type: ["string", "null"]
+          description: ISO timestamp of the latest comprehensive report. Null until one exists.
       required:
         - patient
         - recordCount

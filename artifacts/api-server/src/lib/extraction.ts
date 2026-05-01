@@ -553,8 +553,24 @@ Return valid JSON only:
 }`;
 }
 
+// Enhancement E4 — Extraction confidence postscript.
+// Appended to every prompt template so the model adds a top-level
+// `extractionConfidence` field to its JSON output. The parser tolerates
+// absence (defaulting to {overall: 100, lowConfidenceItems: []}).
+const EXTRACTION_CONFIDENCE_POSTSCRIPT = `
+
+ADDITIONAL FIELD — append to your JSON output as a sibling to the other top-level keys:
+  "extractionConfidence": {
+    "overall": number 0-100 (your overall confidence the structured data faithfully reflects the source),
+    "lowConfidenceItems": [
+      { "name": "string (the field, biomarker, or section that was hard to read)",
+        "reason": "string (e.g. handwritten value, blurred scan, ambiguous units, partial table cut off)" }
+    ]
+  }
+If everything is clearly legible, return overall=100 and lowConfidenceItems=[].`;
+
 export async function extractFromDocument(base64File: string, mimeType: string, recordType: string = "blood_panel"): Promise<Record<string, unknown>> {
-  const extractionPrompt = buildExtractionPrompt(recordType);
+  const extractionPrompt = buildExtractionPrompt(recordType) + EXTRACTION_CONFIDENCE_POSTSCRIPT;
 
   try {
     const imageTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;

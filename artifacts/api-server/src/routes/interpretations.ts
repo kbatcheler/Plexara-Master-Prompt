@@ -10,8 +10,10 @@ import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
 import {
   decryptInterpretationFields,
+  decryptJson,
   decryptStructuredJson,
 } from "../lib/phi-crypto";
+import type { InterpretationDelta } from "../lib/interpretation-delta";
 import { runInterpretationPipeline } from "../lib/records-processing";
 import { logger } from "../lib/logger";
 
@@ -81,6 +83,157 @@ router.get("/latest", requireAuth, async (req, res): Promise<void> => {
     res.json(decryptInterpretationFields(interpretation));
   } catch (err) {
     req.log.error({ err }, "Failed to get latest interpretation");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Returns the "what changed" delta computed at finalisation time for the
+ * patient's latest interpretation (vs the immediately-prior interpretation).
+ * Returns 204 No Content when no prior interpretation exists or when the
+ * delta column is null. Never blocks on or recomputes the delta — the
+ * source of truth is what was persisted on the row.
+ */
+router.get("/latest/delta", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+
+  try {
+    const [latest] = await db
+      .select({ deltaJson: interpretationsTable.deltaJson })
+      .from(interpretationsTable)
+      .where(eq(interpretationsTable.patientId, patientId))
+      .orderBy(desc(interpretationsTable.createdAt))
+      .limit(1);
+
+    if (!latest || latest.deltaJson == null) {
+      res.status(204).end();
+      return;
+    }
+
+    const delta = decryptJson<InterpretationDelta>(latest.deltaJson);
+    if (!delta) {
+      res.status(204).end();
+      return;
+    }
+    res.json(delta);
+  } catch (err) {
+    req.log.error({ err }, "Failed to load latest interpretation delta");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Enhancement E10 — "How was this determined?" expandable lens reasoning.
+ *
+ * For the patient's latest interpretation, returns each lens's reasoning
+ * for a specific finding (e.g. one of the topConcerns / topPositives
+ * strings rendered on the report). The match is intentionally fuzzy
+ * (substring, case-insensitive) and walks the decrypted lens output JSON
+ * looking for any string field that mentions the finding.
+ *
+ * Best-effort: if no match is found in a given lens, that lens's slot
+ * comes back null and the frontend renders "Not available" for it.
+ */
+router.get("/latest/lens-reasoning", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt((req.params.patientId as string));
+  const findingRaw = typeof req.query.finding === "string" ? req.query.finding.trim() : "";
+
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+  if (findingRaw.length === 0) {
+    res.status(400).json({ error: "Missing finding" });
+    return;
+  }
+
+  try {
+    const [latest] = await db
+      .select()
+      .from(interpretationsTable)
+      .where(eq(interpretationsTable.patientId, patientId))
+      .orderBy(desc(interpretationsTable.createdAt))
+      .limit(1);
+
+    if (!latest) {
+      res.status(404).json({ error: "No interpretation found" });
+      return;
+    }
+
+    const decrypted = decryptInterpretationFields(latest);
+    const findingLc = findingRaw.toLowerCase();
+
+    // Walk an arbitrary lens-output object and pull out any string field
+    // that mentions the finding text. We collect short surrounding values
+    // (`text` + nearest `confidence`, if any) so the UI can render them
+    // without us having to know the exact lens schema.
+    type Match = { text: string; confidence: string | null };
+    function findMatch(node: unknown): Match | null {
+      if (!node) return null;
+      if (typeof node === "string") {
+        return node.toLowerCase().includes(findingLc) ? { text: node, confidence: null } : null;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          const m = findMatch(item);
+          if (m) return m;
+        }
+        return null;
+      }
+      if (typeof node === "object") {
+        const obj = node as Record<string, unknown>;
+        // Prefer a top-level reasoning/explanation/finding field on the
+        // current object if it mentions the finding, then fall back to
+        // any other string in the object.
+        const preferredKeys = ["reasoning", "explanation", "rationale", "finding", "text", "summary", "note"];
+        for (const k of preferredKeys) {
+          const v = obj[k];
+          if (typeof v === "string" && v.toLowerCase().includes(findingLc)) {
+            const conf = typeof obj.confidence === "string" ? obj.confidence : null;
+            return { text: v, confidence: conf };
+          }
+        }
+        for (const v of Object.values(obj)) {
+          const m = findMatch(v);
+          if (m) return m;
+        }
+      }
+      return null;
+    }
+
+    const lensA = findMatch(decrypted?.lensAOutput);
+    const lensB = findMatch(decrypted?.lensBOutput);
+    const lensC = findMatch(decrypted?.lensCOutput);
+
+    // Reconciliation summary: pull the patient/clinical narrative from the
+    // reconciled output and check for "all lenses agree" — derived from the
+    // gauge with matching domain having lensAgreement starting with "3".
+    const reconciled = decrypted?.reconciledOutput as
+      | { patientSummary?: string; clinicalSummary?: string; gaugeUpdates?: Array<{ lensAgreement?: string }>; topConcerns?: string[]; topPositives?: string[] }
+      | null
+      | undefined;
+    const summaryStr = (reconciled?.patientSummary || reconciled?.clinicalSummary || null) ?? null;
+    const allLensesAgree = !!(lensA && lensB && lensC);
+
+    res.json({
+      finding: findingRaw,
+      lensA,
+      lensB,
+      lensC,
+      reconciliation: {
+        summary: summaryStr,
+        allLensesAgree,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to load lens reasoning");
     res.status(500).json({ error: "Internal server error" });
   }
 });

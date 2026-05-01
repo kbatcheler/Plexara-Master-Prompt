@@ -27,6 +27,7 @@ import protocolsRouter, { globalRouter as protocolsGlobalRouter } from "./protoc
 import reportsRouter from "./reports";
 import comprehensiveReportRouter from "./comprehensive-report";
 import reportExportRouter from "./report-export";
+import shareCardRouter from "./share-card";
 import storageRouter from "./storage";
 import geneticsRouter, { globalRouter as pgsCatalogRouter } from "./genetics";
 import imagingRouter, { dicomRouter } from "./imaging";
@@ -126,6 +127,10 @@ router.use("/patients/:patientId/comprehensive-report", comprehensiveReportRoute
 // the PDF is useful with or without the physician portal — but the route
 // itself decides whether to mint a share-link QR based on the same flag.
 router.use("/patients/:patientId/report-export", reportExportRouter);
+// Enhancement E12 — Share-as-image card. Mounted unconditionally; the route
+// itself decides whether to mint a share-link QR based on the physician
+// portal flag. Path is `/patients/:patientId/share-card.png`.
+router.use("/patients/:patientId", shareCardRouter);
 router.use("/biomarker-reference", biomarkerReferenceRouter);
 router.use("/protocols", protocolsGlobalRouter);
 // Public-ish (auth-required) RxNorm typeahead. Mounted GLOBALLY rather

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { TrendChart } from "../components/trends/TrendChart";
+import { BiomarkerName } from "../components/biomarker/BiomarkerExplainPopover";
 import { HelpHint } from "@/components/help/HelpHint";
 
 interface Trend {
@@ -100,7 +101,7 @@ export default function Trends() {
                   <div key={a.id} className={`flex items-center justify-between rounded-md border p-3 ${a.acknowledgedAt ? "border-border/40 opacity-60" : a.severity === "critical" ? "border-destructive/50 bg-destructive/5" : "border-amber-500/30 bg-amber-500/5"}`}>
                     <div>
                       <div className="font-medium flex items-center gap-2">
-                        {a.biomarkerName}
+                        <BiomarkerName name={a.biomarkerName} />
                         <Badge variant={a.severity === "critical" ? "destructive" : "secondary"} className="text-[10px]">{a.severity}</Badge>
                         <Badge variant="outline" className="text-[10px]">{a.windowDays}d window</Badge>
                       </div>
@@ -166,7 +167,12 @@ export default function Trends() {
                                   ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
                                   : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                                 {arrow(t.slopePerDay)}
-                                <span className="font-medium">{t.biomarkerName}</span>
+                                <span
+                                  className="font-medium"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <BiomarkerName name={t.biomarkerName} />
+                                </span>
                                 <span className="text-xs text-muted-foreground">{t.unit}</span>
                               </div>
                             </td>

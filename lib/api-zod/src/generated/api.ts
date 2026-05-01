@@ -526,6 +526,18 @@ export const GetRecordResponse = zod
             optimalRangeLow: zod.number().nullish(),
             optimalRangeHigh: zod.number().nullish(),
             testDate: zod.string().nullish(),
+            manuallyEdited: zod
+              .boolean()
+              .nullish()
+              .describe(
+                "Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI.",
+              ),
+            originalValue: zod
+              .number()
+              .nullish()
+              .describe(
+                "Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited.",
+              ),
             createdAt: zod.coerce.date(),
           }),
         )
@@ -689,6 +701,101 @@ export const GetLatestInterpretationResponse = zod.object({
 });
 
 /**
+ * Returns the diff between the patient's latest interpretation and the
+immediately-prior one (score change, gauge movements, new/resolved
+concerns and new positives). 204 when no prior interpretation exists.
+
+ * @summary Get the "what changed" delta for the latest interpretation
+ */
+export const GetLatestInterpretationDeltaParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const GetLatestInterpretationDeltaResponse = zod
+  .object({
+    scoreDelta: zod
+      .number()
+      .nullable()
+      .describe(
+        "Change in unifiedHealthScore (current minus previous), to 1 dp.",
+      ),
+    since: zod.coerce
+      .date()
+      .nullable()
+      .describe(
+        "createdAt of the previous interpretation being compared against.",
+      ),
+    gauges: zod
+      .array(
+        zod.object({
+          domain: zod.string(),
+          delta: zod.number(),
+          from: zod.number(),
+          to: zod.number(),
+        }),
+      )
+      .describe("Per-domain numeric movements, sorted by absolute delta desc."),
+    newConcerns: zod.array(zod.string()),
+    resolvedConcerns: zod.array(zod.string()),
+    newPositives: zod.array(zod.string()),
+  })
+  .describe(
+    '\"What changed\" diff between the patient\'s latest interpretation and\nthe immediately-prior one. Score and gauge fields are omitted when\nthe prior values are missing or non-numeric.\n',
+  );
+
+/**
+ * For the patient's latest interpretation, returns each lens's
+reasoning text and confidence (when available) for the supplied
+`finding` string. Match is best-effort substring (case-insensitive)
+against the decrypted lens output JSON. Lenses without a matching
+passage come back as `null`.
+
+ * @summary Get per-lens reasoning for a specific finding
+ */
+export const GetLatestInterpretationLensReasoningParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const GetLatestInterpretationLensReasoningQueryParams = zod.object({
+  finding: zod.coerce
+    .string()
+    .describe("The finding text to look up across the three lens outputs."),
+});
+
+export const GetLatestInterpretationLensReasoningResponse = zod
+  .object({
+    finding: zod.string(),
+    lensA: zod.union([
+      zod.object({
+        text: zod.string(),
+        confidence: zod.string().nullable(),
+      }),
+      zod.null(),
+    ]),
+    lensB: zod.union([
+      zod.object({
+        text: zod.string(),
+        confidence: zod.string().nullable(),
+      }),
+      zod.null(),
+    ]),
+    lensC: zod.union([
+      zod.object({
+        text: zod.string(),
+        confidence: zod.string().nullable(),
+      }),
+      zod.null(),
+    ]),
+    reconciliation: zod.object({
+      summary: zod.string().nullable(),
+      allLensesAgree: zod.boolean(),
+    }),
+  })
+  .describe(
+    "Enhancement E10 — per-lens reasoning extracted from the latest\ninterpretation for a given finding (e.g. one of `topConcerns` \/\n`topPositives`). Lens slots come back `null` when the lens output\ncontains no passage that matches the finding text.\n",
+  );
+
+/**
  * @summary Get a specific interpretation
  */
 export const GetInterpretationParams = zod.object({
@@ -748,6 +855,17 @@ export const ListGaugesResponseItem = zod.object({
   label: zod.string().nullish(),
   description: zod.string().nullish(),
   lastUpdated: zod.coerce.date(),
+  sparkline: zod
+    .array(
+      zod.object({
+        date: zod.coerce.date(),
+        value: zod.number(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Enhancement E3 — chronological history of `currentValue` from the last (up to 6) interpretations for this domain. Empty when fewer than 2 historical points are available.",
+    ),
 });
 export const ListGaugesResponse = zod.array(ListGaugesResponseItem);
 
@@ -776,6 +894,18 @@ export const ListBiomarkerResultsResponseItem = zod.object({
   optimalRangeLow: zod.number().nullish(),
   optimalRangeHigh: zod.number().nullish(),
   testDate: zod.string().nullish(),
+  manuallyEdited: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI.",
+    ),
+  originalValue: zod
+    .number()
+    .nullish()
+    .describe(
+      "Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited.",
+    ),
   createdAt: zod.coerce.date(),
 });
 export const ListBiomarkerResultsResponse = zod.array(
@@ -783,10 +913,60 @@ export const ListBiomarkerResultsResponse = zod.array(
 );
 
 /**
+ * Updates a single biomarker result's `value`. On the first edit the original LLM-extracted value is snapshotted to `originalValue` and `manuallyEdited` is flipped to true. Pass `?reinterpret=1` to also kick off a fresh interpretation pipeline run for the source record.
+
+ * @summary Enhancement E4 — manually edit an extracted biomarker value
+ */
+export const PatchBiomarkerResultParams = zod.object({
+  patientId: zod.coerce.number(),
+  biomarkerResultId: zod.coerce.number(),
+});
+
+export const PatchBiomarkerResultQueryParams = zod.object({
+  reinterpret: zod.union([zod.literal("1"), zod.literal(null)]).nullish(),
+});
+
+export const PatchBiomarkerResultBody = zod.object({
+  value: zod.number(),
+});
+
+export const PatchBiomarkerResultResponse = zod.object({
+  id: zod.number(),
+  patientId: zod.number(),
+  recordId: zod.number(),
+  biomarkerName: zod.string(),
+  category: zod.string().nullish(),
+  value: zod.number().nullish(),
+  unit: zod.string().nullish(),
+  labReferenceLow: zod.number().nullish(),
+  labReferenceHigh: zod.number().nullish(),
+  optimalRangeLow: zod.number().nullish(),
+  optimalRangeHigh: zod.number().nullish(),
+  testDate: zod.string().nullish(),
+  manuallyEdited: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI.",
+    ),
+  originalValue: zod
+    .number()
+    .nullish()
+    .describe(
+      "Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited.",
+    ),
+  createdAt: zod.coerce.date(),
+});
+
+/**
  * @summary List biomarker reference ranges
  */
 export const ListBiomarkerReferenceQueryParams = zod.object({
   category: zod.coerce.string().nullish(),
+  name: zod.coerce
+    .string()
+    .nullish()
+    .describe("Case-insensitive exact match on biomarkerName."),
 });
 
 export const ListBiomarkerReferenceResponseItem = zod.object({
@@ -1068,6 +1248,17 @@ export const GetDashboardResponse = zod.object({
       label: zod.string().nullish(),
       description: zod.string().nullish(),
       lastUpdated: zod.coerce.date(),
+      sparkline: zod
+        .array(
+          zod.object({
+            date: zod.coerce.date(),
+            value: zod.number(),
+          }),
+        )
+        .optional()
+        .describe(
+          "Enhancement E3 — chronological history of `currentValue` from the last (up to 6) interpretations for this domain. Empty when fewer than 2 historical points are available.",
+        ),
     }),
   ),
   patientNarrative: zod.string().nullish(),
@@ -1100,4 +1291,29 @@ export const GetDashboardResponse = zod.object({
     }),
   ),
   lensesCompleted: zod.number().nullish(),
+  executiveSummary: zod
+    .string()
+    .nullish()
+    .describe(
+      "One-paragraph summary of the latest comprehensive report (decrypted server-side). Null until a comprehensive report has been generated.",
+    ),
+  reportGeneratedAt: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO timestamp of the latest comprehensive report. Null until one exists.",
+    ),
+});
+
+/**
+ * Enhancement E12 — returns a square PNG containing the patient's
+unified health score, six mini-gauge dots, and top three concerns
+from the most recent comprehensive report. When the physician
+portal is enabled, a fresh 30-day share-link QR is embedded in the
+bottom-right; otherwise the QR is omitted.
+
+ * @summary Render a 1080x1080 share-card PNG for the patient's latest report
+ */
+export const GetPatientShareCardParams = zod.object({
+  patientId: zod.coerce.number(),
 });

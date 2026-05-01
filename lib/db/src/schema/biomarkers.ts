@@ -50,6 +50,13 @@ export const biomarkerResultsTable = pgTable("biomarker_results", {
   // performing lab. Both are nullable for backfill compatibility.
   methodology: text("methodology"),
   labName: text("lab_name"),
+  // Enhancement E4 — Manual edits.
+  // `manuallyEdited` flips to true the first time a user overrides the
+  //   extracted value through the records detail UI; the original LLM
+  //   extraction is then snapshotted to `originalValue` so we never lose
+  //   the lab-reported number. Subsequent edits keep `originalValue`.
+  manuallyEdited: boolean("manually_edited").notNull().default(false),
+  originalValue: numeric("original_value"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

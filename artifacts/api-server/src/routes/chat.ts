@@ -247,8 +247,94 @@ Formatting:
 Patient data payload:
 ${contextBlock}`;
 
+    const model = process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6";
+    const acceptsSse = (req.headers.accept || "").includes("text/event-stream");
+
+    if (acceptsSse) {
+      // ── SSE streaming branch ─────────────────────────────────────────
+      // The frontend ChatPanel opts in by sending `Accept: text/event-stream`.
+      // Existing callers that still send the default `application/json`
+      // hit the legacy JSON branch below — response shape unchanged for them.
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      // Disable proxy/Nginx response buffering so chunks reach the browser
+      // as they are written instead of being held until the response ends.
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders?.();
+
+      let aborted = false;
+      const writeEvent = (payload: unknown) => {
+        if (aborted || res.writableEnded) return;
+        try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* socket closed */ }
+      };
+      // SSE keep-alive: send a comment frame every 15s so reverse proxies
+      // (Replit edge, Nginx, Cloudflare) don't idle-time the connection out
+      // during long generations. Comment frames are ignored by EventSource.
+      const heartbeat = setInterval(() => {
+        if (aborted || res.writableEnded) return;
+        try { res.write(`: ping\n\n`); } catch { /* socket closed */ }
+      }, 15_000);
+      const stopHeartbeat = () => clearInterval(heartbeat);
+
+      writeEvent({ type: "start", conversationId: activeConvId });
+
+      let assistantText = "";
+      req.on("close", () => { aborted = true; stopHeartbeat(); });
+
+      try {
+        const stream = anthropic.messages.stream({
+          model,
+          max_tokens: 800,
+          system,
+          messages,
+        });
+
+        for await (const event of stream) {
+          if (aborted) break;
+          if (
+            event.type === "content_block_delta" &&
+            event.delta.type === "text_delta"
+          ) {
+            const chunk = event.delta.text;
+            assistantText += chunk;
+            writeEvent({ type: "delta", text: chunk });
+          }
+        }
+      } catch (streamErr) {
+        req.log.error({ err: streamErr }, "Chat stream failed");
+        // Tell the client the stream errored so it can recover the UI.
+        writeEvent({ type: "error", error: "stream_failed" });
+      } finally {
+        stopHeartbeat();
+      }
+
+      // Persist the assistant message even if the client closed the
+      // connection mid-stream — we still received tokens worth saving.
+      let assistantMsg: typeof chatMessagesTable.$inferSelect | undefined;
+      if (assistantText.length > 0) {
+        const [row] = await db.insert(chatMessagesTable).values({
+          conversationId: activeConvId,
+          role: "assistant",
+          content: assistantText,
+        }).returning();
+        assistantMsg = row;
+      }
+
+      if (!aborted) {
+        writeEvent({
+          type: "done",
+          conversationId: activeConvId,
+          message: assistantMsg ?? null,
+        });
+        res.end();
+      }
+      return;
+    }
+
+    // ── Legacy JSON branch (unchanged response shape) ─────────────────
     const completion = await anthropic.messages.create({
-      model: process.env.LLM_CHAT_MODEL || process.env.LLM_RECONCILIATION_MODEL || "claude-sonnet-4-6",
+      model,
       max_tokens: 800,
       system,
       messages,
@@ -264,7 +350,11 @@ ${contextBlock}`;
     res.json({ conversationId: activeConvId, message: assistantMsg });
   } catch (err) {
     req.log.error({ err }, "Chat failed");
-    res.status(500).json({ error: "Failed to generate response" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to generate response" });
+    } else {
+      try { res.end(); } catch { /* already closed */ }
+    }
   }
 });
 

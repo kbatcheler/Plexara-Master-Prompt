@@ -9,6 +9,9 @@ import { UploadZone } from "../components/dashboard/UploadZone";
 import { RecordDetailModal } from "../components/dashboard/RecordDetailModal";
 import { UnifiedHealthScoreHero } from "../components/dashboard/UnifiedHealthScoreHero";
 import { IntelligenceSummary } from "../components/dashboard/IntelligenceSummary";
+import { ExecutiveSummaryCard } from "../components/dashboard/ExecutiveSummaryCard";
+import { WelcomeFirstUpload } from "../components/dashboard/WelcomeFirstUpload";
+import { WhatChanged } from "../components/dashboard/WhatChanged";
 import { SupplementImpactCard } from "../components/dashboard/SupplementImpactCard";
 import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard";
 import { SymptomLoggerCard } from "../components/dashboard/SymptomLoggerCard";
@@ -139,38 +142,57 @@ export default function Dashboard() {
       {/* ── Quick upload affordance ── */}
       <UploadZone />
 
-      {/* ── System domains (gauge grid) ── */}
-      <section aria-labelledby="domains-heading" className="space-y-5">
-        <div className="flex items-end justify-between">
-          <div>
-            <h3 id="domains-heading" className="font-heading text-xl font-semibold tracking-tight flex items-center gap-2">
-              System domains
-              <HelpHint topic="System domains" anchor="health-domains">
-                Eight body-system gauges. Each one is a 0-100 score
-                produced by the three-lens AI from your latest panel —
-                green optimal, yellow watch, orange concern, red urgent.
-              </HelpHint>
-            </h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              Each gauge synthesises one or more clinical signals into a 0-100 score.
-            </p>
-          </div>
-        </div>
+      {/* ── First-time onboarding (zero records only) ── */}
+      {dashboard.recordCount === 0 && <WelcomeFirstUpload />}
 
-        {dashboard.gauges && dashboard.gauges.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-8">
-            {dashboard.gauges.map((gauge, i) => (
-              <Card key={gauge.id} className="p-5 flex items-center justify-center">
-                <ArcGauge gauge={gauge} delay={i * 80} />
-              </Card>
-            ))}
+      {/* ── Executive summary (latest comprehensive report) ── */}
+      {dashboard.executiveSummary && (
+        <ExecutiveSummaryCard
+          summary={dashboard.executiveSummary}
+          generatedAt={dashboard.reportGeneratedAt ?? null}
+          patientId={patientId ?? undefined}
+        />
+      )}
+
+      {/* ── What changed since the previous panel ── */}
+      {dashboard.recordCount > 0 && patientId && (
+        <WhatChanged patientId={patientId} />
+      )}
+
+      {/* ── System domains (gauge grid) — hidden until the user has uploaded ── */}
+      {dashboard.recordCount > 0 && (
+        <section aria-labelledby="domains-heading" className="space-y-5">
+          <div className="flex items-end justify-between">
+            <div>
+              <h3 id="domains-heading" className="font-heading text-xl font-semibold tracking-tight flex items-center gap-2">
+                System domains
+                <HelpHint topic="System domains" anchor="health-domains">
+                  Eight body-system gauges. Each one is a 0-100 score
+                  produced by the three-lens AI from your latest panel —
+                  green optimal, yellow watch, orange concern, red urgent.
+                </HelpHint>
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                Each gauge synthesises one or more clinical signals into a 0-100 score.
+              </p>
+            </div>
           </div>
-        ) : (
-          <Card className="p-8 text-center text-muted-foreground text-sm">
-            Upload diagnostic records to populate system domains.
-          </Card>
-        )}
-      </section>
+
+          {dashboard.gauges && dashboard.gauges.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-8">
+              {dashboard.gauges.map((gauge, i) => (
+                <Card key={gauge.id} className="p-5 flex items-center justify-center">
+                  <ArcGauge gauge={gauge} delay={i * 80} />
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <Card className="p-8 text-center text-muted-foreground text-sm">
+              Upload diagnostic records to populate system domains.
+            </Card>
+          )}
+        </section>
+      )}
 
       {/* ── Intelligence summary (auto-generated post-interpretation) ── */}
       {patientId && <IntelligenceSummary patientId={patientId} />}

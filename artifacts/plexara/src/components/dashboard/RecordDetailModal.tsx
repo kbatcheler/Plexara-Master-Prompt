@@ -2,18 +2,29 @@ import { useState } from "react";
 import {
   useGetRecord,
   useReanalyzeRecord,
+  usePatchBiomarkerResult,
   getGetRecordQueryKey,
   getListRecordsQueryKey,
 } from "@workspace/api-client-react";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerBody } from "@/components/ui/drawer";
 import { useMode } from "../../context/ModeContext";
-import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw } from "lucide-react";
+import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw, Pencil, Check, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { AskAboutThis } from "../AskAboutThis";
+import { BiomarkerName } from "../biomarker/BiomarkerExplainPopover";
+
+// Enhancement E4 — extractionConfidence shape produced by the LLM. Lives
+// inside the encrypted structuredJson; we type it just enough to render
+// the amber low-confidence row without leaking unknowns into JSX.
+type ExtractionConfidenceBlock = {
+  overall?: number;
+  lowConfidenceItems?: Array<{ name?: string; reason?: string }>;
+};
 
 // Human-friendly label + colour for each backend status string. Kept here
 // (not in the badge component) so the rest of the app can stay agnostic to
@@ -50,6 +61,53 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
   });
 
   const reanalyze = useReanalyzeRecord();
+  const patchBiomarker = usePatchBiomarkerResult();
+  // Enhancement E4 — inline edit state. Only one row is editable at a time;
+  // the input mirrors the current value as a string so the user can backspace
+  // freely without React fighting the cursor.
+  const [editingBiomarkerId, setEditingBiomarkerId] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
+
+  const startEdit = (id: number, currentValue: number | null | undefined) => {
+    setEditingBiomarkerId(id);
+    setEditingValue(currentValue === null || currentValue === undefined ? "" : String(currentValue));
+  };
+  const cancelEdit = () => {
+    setEditingBiomarkerId(null);
+    setEditingValue("");
+  };
+  const saveEdit = (biomarkerResultId: number) => {
+    const numeric = Number(editingValue);
+    if (!Number.isFinite(numeric)) {
+      toast({ title: "Invalid value", description: "Enter a number.", variant: "destructive" });
+      return;
+    }
+    patchBiomarker.mutate(
+      {
+        patientId,
+        biomarkerResultId,
+        data: { value: numeric },
+        // Re-run the interpretation so downstream gauges/alerts pick up
+        // the corrected value automatically.
+        params: { reinterpret: "1" },
+      },
+      {
+        onSuccess: () => {
+          toast({ title: "Value updated", description: "Re-running interpretation in the background." });
+          if (recordId) {
+            queryClient.invalidateQueries({ queryKey: getGetRecordQueryKey(patientId, recordId) });
+          }
+          cancelEdit();
+        },
+        onError: (err: unknown) => {
+          const detail = (err as { detail?: { error?: string }; message?: string }).detail?.error
+            ?? (err as Error).message
+            ?? "Could not save the edit.";
+          toast({ title: "Save failed", description: detail, variant: "destructive" });
+        },
+      },
+    );
+  };
 
   const handleRetry = () => {
     if (!recordId) return;
@@ -237,6 +295,34 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                   </Tabs>
                 </div>
 
+                {/* Enhancement E4 — extraction confidence amber banner.
+                    Renders only when the LLM flagged any field as hard to read.
+                    Pulled from the decrypted structured payload, not from a
+                    new column, to avoid touching the records table schema. */}
+                {(() => {
+                  const conf = (record.extractedData as { extractionConfidence?: ExtractionConfidenceBlock } | null)?.extractionConfidence;
+                  const items = Array.isArray(conf?.lowConfidenceItems) ? conf!.lowConfidenceItems! : [];
+                  const overall = typeof conf?.overall === "number" ? conf!.overall : 100;
+                  if (items.length === 0 && overall >= 80) return null;
+                  return (
+                    <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-2" data-testid="extraction-confidence-banner">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span className="text-sm font-medium">Some values may need a second look</span>
+                        <Badge variant="outline" className="text-[10px] ml-auto">{overall}% confidence</Badge>
+                      </div>
+                      {items.length > 0 && (
+                        <ul className="text-xs text-muted-foreground list-disc pl-5 space-y-1">
+                          {items.slice(0, 6).map((it, i) => (
+                            <li key={i}><span className="text-foreground/80">{it.name ?? "Unnamed field"}:</span> {it.reason ?? "low confidence"}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="text-[11px] text-muted-foreground">You can correct any value below — we'll re-run the analysis automatically.</p>
+                    </div>
+                  );
+                })()}
+
                 {/* Biomarkers Table */}
                 {record.biomarkerResults && record.biomarkerResults.length > 0 && (
                   <div className="space-y-4">
@@ -252,6 +338,7 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                             )}
                             <th className="px-4 py-3">Optimal range</th>
                             <th className="px-4 py-3 text-right">Status</th>
+                            <th className="px-4 py-3 text-right w-10" aria-label="actions" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
@@ -273,11 +360,39 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                               }
                             }
 
+                            const isEditing = editingBiomarkerId === bm.id;
+                            const wasEdited = !!bm.manuallyEdited;
                             return (
                               <tr key={bm.id} className="hover:bg-secondary/30 transition-colors">
-                                <td className="px-4 py-3 font-medium text-foreground">{bm.biomarkerName}</td>
+                                <td className="px-4 py-3 font-medium text-foreground">
+                                  <div className="flex items-center gap-2">
+                                    <BiomarkerName name={bm.biomarkerName} />
+                                    {wasEdited && (
+                                      <Badge variant="outline" className="text-[9px] uppercase tracking-wide" title={bm.originalValue !== null && bm.originalValue !== undefined ? `Original lab value: ${bm.originalValue}` : "Edited by user"}>
+                                        edited
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="px-4 py-3 font-mono text-foreground tabular-nums">
-                                  {val !== null ? val : "--"} <span className="text-xs text-muted-foreground ml-1">{bm.unit}</span>
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <Input
+                                        type="number"
+                                        step="any"
+                                        value={editingValue}
+                                        onChange={(e) => setEditingValue(e.target.value)}
+                                        className="h-7 w-24 text-sm font-mono"
+                                        autoFocus
+                                        data-testid={`input-edit-biomarker-${bm.id}`}
+                                      />
+                                      <span className="text-xs text-muted-foreground">{bm.unit}</span>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {val !== null ? val : "--"} <span className="text-xs text-muted-foreground ml-1">{bm.unit}</span>
+                                    </>
+                                  )}
                                 </td>
                                 {mode === "clinician" && (
                                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums">
@@ -291,6 +406,43 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                                   <div className="inline-flex justify-end w-full">
                                     <div className={`w-2.5 h-2.5 rounded-full ${statusClass}`} aria-label="biomarker status" />
                                   </div>
+                                </td>
+                                <td className="px-2 py-3 text-right">
+                                  {isEditing ? (
+                                    <div className="inline-flex gap-1">
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-7 w-7"
+                                        onClick={() => saveEdit(bm.id)}
+                                        disabled={patchBiomarker.isPending}
+                                        data-testid={`button-save-biomarker-${bm.id}`}
+                                      >
+                                        {patchBiomarker.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5 text-status-optimal" />}
+                                      </Button>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-7 w-7"
+                                        onClick={cancelEdit}
+                                        disabled={patchBiomarker.isPending}
+                                        data-testid={`button-cancel-biomarker-${bm.id}`}
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7 opacity-60 hover:opacity-100"
+                                      onClick={() => startEdit(bm.id, val)}
+                                      title="Edit value"
+                                      data-testid={`button-edit-biomarker-${bm.id}`}
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </Button>
+                                  )}
                                 </td>
                               </tr>
                             );

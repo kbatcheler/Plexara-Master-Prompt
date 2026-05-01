@@ -5,6 +5,7 @@ import { getGetDashboardQueryKey, getListRecordsQueryKey } from "@workspace/api-
 import { useCurrentPatient } from "../../hooks/use-current-patient";
 import { api } from "../../lib/api";
 import { Link } from "wouter";
+import { ProcessingStages, type ProgressStages } from "./ProcessingStages";
 
 type FileStatus = "uploading" | "pending" | "processing" | "complete" | "error" | "consent_blocked";
 
@@ -16,6 +17,8 @@ interface FileEntry {
   recordId: number | null;
   status: FileStatus;
   errorMessage?: string;
+  /** Latest pipeline-stage flags from /records/:id/progress (per record). */
+  stages?: ProgressStages;
 }
 
 const PROGRESS_LABELS: Record<FileStatus, string> = {
@@ -26,6 +29,46 @@ const PROGRESS_LABELS: Record<FileStatus, string> = {
   error: "Failed",
   consent_blocked: "AI consent missing",
 };
+
+/**
+ * Best-effort browser notification when a record finishes processing.
+ * Silently no-ops if the Notification API is unavailable, permission
+ * has been denied, or the user hasn't granted permission yet.
+ */
+function maybeNotifyComplete(fileName: string): void {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+  try {
+    const n = new Notification("Plexara", {
+      body: `Your health analysis is ready: ${fileName}`,
+      icon: "/favicon.ico",
+      tag: `plexara-record-${fileName}`,
+    });
+    // Focus the tab if the user clicks the toast.
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch {
+    // Some browsers throw if called outside a user gesture; we don't
+    // want a notification failure to break the upload flow.
+  }
+}
+
+/**
+ * Ask for notification permission once per browser session, only when
+ * the user actually starts an upload. We never auto-ask on mount —
+ * unsolicited permission prompts feel hostile.
+ */
+function requestNotificationPermissionOnce(): void {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission !== "default") return;
+  try {
+    void Notification.requestPermission();
+  } catch {
+    /* older browsers using callback-style — ignore */
+  }
+}
 
 export function UploadZone() {
   const { patientId: currentPatientId } = useCurrentPatient();
@@ -54,16 +97,31 @@ export function UploadZone() {
 
     let cancelled = false;
     const id = window.setInterval(async () => {
-      const updates: Array<{ recordId: number; status: FileStatus }> = [];
+      const updates: Array<{ recordId: number; status: FileStatus; stages?: ProgressStages }> = [];
       await Promise.all(
         nonTerminal.map(async (e) => {
           try {
-            const rec = await api<{ id: number; status: string }>(
-              `/patients/${currentPatientId}/records/${e.recordId}`,
+            // The /progress endpoint returns both the record status and the
+            // pipeline stage booleans — single round-trip per record.
+            const prog = await api<{ status: string; lensesCompleted: number; stages: ProgressStages }>(
+              `/patients/${currentPatientId}/records/${e.recordId}/progress`,
             );
-            updates.push({ recordId: e.recordId!, status: (rec.status as FileStatus) ?? "processing" });
+            updates.push({
+              recordId: e.recordId!,
+              status: (prog.status as FileStatus) ?? "processing",
+              stages: prog.stages,
+            });
           } catch {
-            // transient — ignore for this tick
+            // transient — fall back to the lightweight record GET so we
+            // at least keep status fresh even if /progress is unreachable.
+            try {
+              const rec = await api<{ id: number; status: string }>(
+                `/patients/${currentPatientId}/records/${e.recordId}`,
+              );
+              updates.push({ recordId: e.recordId!, status: (rec.status as FileStatus) ?? "processing" });
+            } catch {
+              /* ignore tick */
+            }
           }
         }),
       );
@@ -73,16 +131,23 @@ export function UploadZone() {
           if (e.recordId === null) return e;
           const upd = updates.find((u) => u.recordId === e.recordId);
           if (!upd) return e;
-          if (e.status === upd.status) return e;
+          const statusChanged = e.status !== upd.status;
+          const stagesChanged = JSON.stringify(e.stages) !== JSON.stringify(upd.stages);
+          if (!statusChanged && !stagesChanged) return e;
           // Side-effect: when a record completes/errors, refresh dashboard +
-          // records list so other panels reflect it.
-          if (upd.status === "complete" || upd.status === "error" || upd.status === "consent_blocked") {
+          // records list so other panels reflect it; fire a browser
+          // notification on the processing→complete transition (E11).
+          if (statusChanged && (upd.status === "complete" || upd.status === "error" || upd.status === "consent_blocked")) {
             queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey(currentPatientId) });
             queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(currentPatientId) });
+          }
+          if (statusChanged && upd.status === "complete") {
+            maybeNotifyComplete(e.fileName);
           }
           return {
             ...e,
             status: upd.status,
+            stages: upd.stages ?? e.stages,
             errorMessage:
               upd.status === "error"
                 ? "We couldn't read this document — usually a low-quality scan or unsupported layout."
@@ -136,6 +201,11 @@ export function UploadZone() {
       setBatchError("");
       setShowCompleteCTA(false);
       completionAnnouncedRef.current = false;
+
+      // Ask once on first upload so the completion notification can fire
+      // when analysis finishes minutes later. The browser shows the
+      // permission UI only if it hasn't been answered yet.
+      requestNotificationPermissionOnce();
 
       const initial: FileEntry[] = arr.map((f) => ({
         localId: `${Date.now()}-${f.name}-${Math.random().toString(36).slice(2, 8)}`,
@@ -312,40 +382,62 @@ export function UploadZone() {
             )}
           </div>
           <ul className="space-y-1.5">
-            {entries.map((e) => (
-              <li
-                key={e.localId}
-                className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-card/50 text-sm"
-                data-testid={`upload-entry-${e.localId}`}
-              >
-                <div className="shrink-0">
-                  {e.status === "complete" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                  {(e.status === "uploading" || e.status === "pending" || e.status === "processing") && (
-                    <Loader2 className="w-4 h-4 text-primary animate-spin" />
+            {entries.map((e) => {
+              const showStages =
+                e.status === "pending" || e.status === "processing"
+                  ? true
+                  : false;
+              return (
+                <li
+                  key={e.localId}
+                  className="flex flex-col gap-2 px-3 py-2 rounded-lg border border-border bg-card/50 text-sm"
+                  data-testid={`upload-entry-${e.localId}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="shrink-0">
+                      {e.status === "complete" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                      {(e.status === "uploading" || e.status === "pending" || e.status === "processing") && (
+                        <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                      )}
+                      {(e.status === "error" || e.status === "consent_blocked") && (
+                        <XCircle className="w-4 h-4 text-red-500" />
+                      )}
+                    </div>
+                    <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-foreground">{e.fileName}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {e.errorMessage ?? PROGRESS_LABELS[e.status]}
+                      </p>
+                    </div>
+                    {(e.status === "complete" || e.status === "error" || e.status === "consent_blocked") && (
+                      <button
+                        type="button"
+                        onClick={() => removeEntry(e.localId)}
+                        className="text-muted-foreground hover:text-foreground shrink-0"
+                        aria-label="Remove from list"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  {showStages && (
+                    <ProcessingStages
+                      status={e.status}
+                      stages={
+                        e.stages ?? {
+                          extracted: false,
+                          lensA: false,
+                          lensB: false,
+                          lensC: false,
+                          reconciled: false,
+                        }
+                      }
+                    />
                   )}
-                  {(e.status === "error" || e.status === "consent_blocked") && (
-                    <XCircle className="w-4 h-4 text-red-500" />
-                  )}
-                </div>
-                <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-foreground">{e.fileName}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {e.errorMessage ?? PROGRESS_LABELS[e.status]}
-                  </p>
-                </div>
-                {(e.status === "complete" || e.status === "error" || e.status === "consent_blocked") && (
-                  <button
-                    type="button"
-                    onClick={() => removeEntry(e.localId)}
-                    className="text-muted-foreground hover:text-foreground shrink-0"
-                    aria-label="Remove from list"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

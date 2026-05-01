@@ -28,4 +28,14 @@ export interface Dashboard {
   recentRecords: Record[];
   /** @nullable */
   lensesCompleted?: number | null;
+  /**
+   * One-paragraph summary of the latest comprehensive report (decrypted server-side). Null until a comprehensive report has been generated.
+   * @nullable
+   */
+  executiveSummary?: string | null;
+  /**
+   * ISO timestamp of the latest comprehensive report. Null until one exists.
+   * @nullable
+   */
+  reportGeneratedAt?: string | null;
 }

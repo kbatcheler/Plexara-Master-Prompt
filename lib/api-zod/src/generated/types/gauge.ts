@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { GaugeConfidence } from "./gaugeConfidence";
+import type { GaugeSparklineItem } from "./gaugeSparklineItem";
 import type { GaugeTrend } from "./gaugeTrend";
 
 export interface Gauge {
@@ -33,4 +34,6 @@ export interface Gauge {
   /** @nullable */
   description?: string | null;
   lastUpdated: Date;
+  /** Enhancement E3 — chronological history of `currentValue` from the last (up to 6) interpretations for this domain. Empty when fewer than 2 historical points are available. */
+  sparkline?: GaugeSparklineItem[];
 }

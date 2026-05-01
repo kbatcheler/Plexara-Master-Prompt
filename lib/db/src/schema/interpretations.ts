@@ -26,6 +26,11 @@ export const interpretationsTable = pgTable("interpretations", {
   clinicalNarrative: text("clinical_narrative"),
   unifiedHealthScore: numeric("unified_health_score"),
   lensesCompleted: integer("lenses_completed").notNull().default(0),
+  // PHI envelope: { scoreDelta, since, gauges:[{domain,delta,from,to}],
+  //   newConcerns[], resolvedConcerns[], newPositives[] }. Computed by the
+  //   post-interpretation orchestrator against the prior interpretation.
+  //   Nullable on the very first interpretation for a patient.
+  deltaJson: jsonb("delta_json"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idempotencyKeyIdx: uniqueIndex("interp_idempotency_key_idx").on(t.idempotencyKey),

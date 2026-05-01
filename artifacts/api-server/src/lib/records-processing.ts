@@ -28,9 +28,11 @@ import {
   encryptJson,
   decryptStructuredJson,
 } from "./phi-crypto";
+import { parseExtractionConfidence, bucketConfidence } from "./extraction-confidence";
 import { buildEnrichedLensPayload } from "./enrichment";
 import { dispatchLenses } from "./lens-dispatch";
 import { persistInterpretation } from "./interpretation-persist";
+import { persistDeltaForInterpretation } from "./interpretation-delta";
 
 /**
  * Per-patient debounce map for the post-interpretation orchestrator.
@@ -161,13 +163,17 @@ export async function processUploadedDocument(opts: {
     if (!cachedExtraction) try {
       structuredData = await extractFromDocument(base64, mimeType, recordType);
 
+      // Enhancement E4 — derive the legacy text bucket from the LLM-reported
+      // numeric confidence so existing readers keep working, while the full
+      // structured `extractionConfidence` block remains inside structuredJson.
+      const conf = parseExtractionConfidence(structuredData);
       await db.insert(extractedDataTable).values({
         recordId,
         patientId,
         dataType: (structuredData.documentType as string) || recordType,
         structuredJson: encryptJson(structuredData) as object,
         extractionModel: "claude-sonnet-4-6",
-        extractionConfidence: "high",
+        extractionConfidence: bucketConfidence(conf.overall),
       });
 
       // ── Pharmacogenomics: severity-3 medication interactions become
@@ -786,6 +792,14 @@ export async function runInterpretationPipeline(
       recordId,
       reconciledOutput,
       lensResults.successfulCount,
+    );
+
+    // Compute "what changed" delta against the previous interpretation
+    // and write it onto this row. Best-effort, never blocks the pipeline.
+    await persistDeltaForInterpretation(
+      interpretationId,
+      patientId,
+      reconciledOutput,
     );
 
     // ── POST-INTERPRETATION INTELLIGENCE PIPELINE ──

@@ -24,9 +24,12 @@ import type {
   Dashboard,
   DismissAlertBody,
   Gauge,
+  GetLatestInterpretationLensReasoningParams,
   HealthStatus,
   Interpretation,
+  InterpretationDelta,
   InterpretationSummary,
+  LensReasoning,
   ListAlertsParams,
   ListBiomarkerReferenceParams,
   ListBiomarkerResultsParams,
@@ -35,6 +38,8 @@ import type {
   LookupMedications503,
   LookupMedicationsParams,
   MedicationLookupResponse,
+  PatchBiomarkerResultBody,
+  PatchBiomarkerResultParams,
   Patient,
   Record,
   RecordDetail,
@@ -1391,6 +1396,236 @@ export function useGetLatestInterpretation<
 }
 
 /**
+ * Returns the diff between the patient's latest interpretation and the
+immediately-prior one (score change, gauge movements, new/resolved
+concerns and new positives). 204 when no prior interpretation exists.
+
+ * @summary Get the "what changed" delta for the latest interpretation
+ */
+export const getGetLatestInterpretationDeltaUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/interpretations/latest/delta`;
+};
+
+export const getLatestInterpretationDelta = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<InterpretationDelta | void> => {
+  return customFetch<InterpretationDelta | void>(
+    getGetLatestInterpretationDeltaUrl(patientId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetLatestInterpretationDeltaQueryKey = (patientId: number) => {
+  return [`/api/patients/${patientId}/interpretations/latest/delta`] as const;
+};
+
+export const getGetLatestInterpretationDeltaQueryOptions = <
+  TData = Awaited<ReturnType<typeof getLatestInterpretationDelta>>,
+  TError = ErrorType<unknown>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLatestInterpretationDelta>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetLatestInterpretationDeltaQueryKey(patientId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getLatestInterpretationDelta>>
+  > = ({ signal }) =>
+    getLatestInterpretationDelta(patientId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!patientId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getLatestInterpretationDelta>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetLatestInterpretationDeltaQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getLatestInterpretationDelta>>
+>;
+export type GetLatestInterpretationDeltaQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the "what changed" delta for the latest interpretation
+ */
+
+export function useGetLatestInterpretationDelta<
+  TData = Awaited<ReturnType<typeof getLatestInterpretationDelta>>,
+  TError = ErrorType<unknown>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLatestInterpretationDelta>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetLatestInterpretationDeltaQueryOptions(
+    patientId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * For the patient's latest interpretation, returns each lens's
+reasoning text and confidence (when available) for the supplied
+`finding` string. Match is best-effort substring (case-insensitive)
+against the decrypted lens output JSON. Lenses without a matching
+passage come back as `null`.
+
+ * @summary Get per-lens reasoning for a specific finding
+ */
+export const getGetLatestInterpretationLensReasoningUrl = (
+  patientId: number,
+  params: GetLatestInterpretationLensReasoningParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/patients/${patientId}/interpretations/latest/lens-reasoning?${stringifiedParams}`
+    : `/api/patients/${patientId}/interpretations/latest/lens-reasoning`;
+};
+
+export const getLatestInterpretationLensReasoning = async (
+  patientId: number,
+  params: GetLatestInterpretationLensReasoningParams,
+  options?: RequestInit,
+): Promise<LensReasoning> => {
+  return customFetch<LensReasoning>(
+    getGetLatestInterpretationLensReasoningUrl(patientId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetLatestInterpretationLensReasoningQueryKey = (
+  patientId: number,
+  params?: GetLatestInterpretationLensReasoningParams,
+) => {
+  return [
+    `/api/patients/${patientId}/interpretations/latest/lens-reasoning`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetLatestInterpretationLensReasoningQueryOptions = <
+  TData = Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>,
+  TError = ErrorType<void>,
+>(
+  patientId: number,
+  params: GetLatestInterpretationLensReasoningParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetLatestInterpretationLensReasoningQueryKey(patientId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>
+  > = ({ signal }) =>
+    getLatestInterpretationLensReasoning(patientId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!patientId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetLatestInterpretationLensReasoningQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>
+>;
+export type GetLatestInterpretationLensReasoningQueryError = ErrorType<void>;
+
+/**
+ * @summary Get per-lens reasoning for a specific finding
+ */
+
+export function useGetLatestInterpretationLensReasoning<
+  TData = Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>,
+  TError = ErrorType<void>,
+>(
+  patientId: number,
+  params: GetLatestInterpretationLensReasoningParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLatestInterpretationLensReasoning>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetLatestInterpretationLensReasoningQueryOptions(
+    patientId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Get a specific interpretation
  */
 export const getGetInterpretationUrl = (
@@ -1708,6 +1943,148 @@ export function useListBiomarkerResults<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Updates a single biomarker result's `value`. On the first edit the original LLM-extracted value is snapshotted to `originalValue` and `manuallyEdited` is flipped to true. Pass `?reinterpret=1` to also kick off a fresh interpretation pipeline run for the source record.
+
+ * @summary Enhancement E4 — manually edit an extracted biomarker value
+ */
+export const getPatchBiomarkerResultUrl = (
+  patientId: number,
+  biomarkerResultId: number,
+  params?: PatchBiomarkerResultParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/patients/${patientId}/biomarkers/${biomarkerResultId}?${stringifiedParams}`
+    : `/api/patients/${patientId}/biomarkers/${biomarkerResultId}`;
+};
+
+export const patchBiomarkerResult = async (
+  patientId: number,
+  biomarkerResultId: number,
+  patchBiomarkerResultBody: PatchBiomarkerResultBody,
+  params?: PatchBiomarkerResultParams,
+  options?: RequestInit,
+): Promise<BiomarkerResult> => {
+  return customFetch<BiomarkerResult>(
+    getPatchBiomarkerResultUrl(patientId, biomarkerResultId, params),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(patchBiomarkerResultBody),
+    },
+  );
+};
+
+export const getPatchBiomarkerResultMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchBiomarkerResult>>,
+    TError,
+    {
+      patientId: number;
+      biomarkerResultId: number;
+      data: BodyType<PatchBiomarkerResultBody>;
+      params?: PatchBiomarkerResultParams;
+    },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof patchBiomarkerResult>>,
+  TError,
+  {
+    patientId: number;
+    biomarkerResultId: number;
+    data: BodyType<PatchBiomarkerResultBody>;
+    params?: PatchBiomarkerResultParams;
+  },
+  TContext
+> => {
+  const mutationKey = ["patchBiomarkerResult"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof patchBiomarkerResult>>,
+    {
+      patientId: number;
+      biomarkerResultId: number;
+      data: BodyType<PatchBiomarkerResultBody>;
+      params?: PatchBiomarkerResultParams;
+    }
+  > = (props) => {
+    const { patientId, biomarkerResultId, data, params } = props ?? {};
+
+    return patchBiomarkerResult(
+      patientId,
+      biomarkerResultId,
+      data,
+      params,
+      requestOptions,
+    );
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PatchBiomarkerResultMutationResult = NonNullable<
+  Awaited<ReturnType<typeof patchBiomarkerResult>>
+>;
+export type PatchBiomarkerResultMutationBody =
+  BodyType<PatchBiomarkerResultBody>;
+export type PatchBiomarkerResultMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Enhancement E4 — manually edit an extracted biomarker value
+ */
+export const usePatchBiomarkerResult = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchBiomarkerResult>>,
+    TError,
+    {
+      patientId: number;
+      biomarkerResultId: number;
+      data: BodyType<PatchBiomarkerResultBody>;
+      params?: PatchBiomarkerResultParams;
+    },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof patchBiomarkerResult>>,
+  TError,
+  {
+    patientId: number;
+    biomarkerResultId: number;
+    data: BodyType<PatchBiomarkerResultBody>;
+    params?: PatchBiomarkerResultParams;
+  },
+  TContext
+> => {
+  return useMutation(getPatchBiomarkerResultMutationOptions(options));
+};
 
 /**
  * @summary List biomarker reference ranges
@@ -2278,6 +2655,101 @@ export function useGetDashboard<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetDashboardQueryOptions(patientId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Enhancement E12 — returns a square PNG containing the patient's
+unified health score, six mini-gauge dots, and top three concerns
+from the most recent comprehensive report. When the physician
+portal is enabled, a fresh 30-day share-link QR is embedded in the
+bottom-right; otherwise the QR is omitted.
+
+ * @summary Render a 1080x1080 share-card PNG for the patient's latest report
+ */
+export const getGetPatientShareCardUrl = (patientId: number) => {
+  return `/api/patients/${patientId}/share-card.png`;
+};
+
+export const getPatientShareCard = async (
+  patientId: number,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getGetPatientShareCardUrl(patientId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPatientShareCardQueryKey = (patientId: number) => {
+  return [`/api/patients/${patientId}/share-card.png`] as const;
+};
+
+export const getGetPatientShareCardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPatientShareCard>>,
+  TError = ErrorType<void>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPatientShareCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPatientShareCardQueryKey(patientId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPatientShareCard>>
+  > = ({ signal }) =>
+    getPatientShareCard(patientId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!patientId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPatientShareCard>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPatientShareCardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPatientShareCard>>
+>;
+export type GetPatientShareCardQueryError = ErrorType<void>;
+
+/**
+ * @summary Render a 1080x1080 share-card PNG for the patient's latest report
+ */
+
+export function useGetPatientShareCard<
+  TData = Awaited<ReturnType<typeof getPatientShareCard>>,
+  TError = ErrorType<void>,
+>(
+  patientId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPatientShareCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPatientShareCardQueryOptions(patientId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

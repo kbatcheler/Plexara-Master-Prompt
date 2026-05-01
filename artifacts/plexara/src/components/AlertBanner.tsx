@@ -102,6 +102,13 @@ export function AlertBanner({
           prompt={`Help me understand this alert: "${title}"${description ? ` — ${description}` : ""}. What does it mean for me, and what should I consider doing?`}
           testId={`${testId}-ask`}
         />
+        <AskAboutThis
+          subjectType="alert"
+          subjectRef={title.slice(0, 80)}
+          label="What tests?"
+          prompt={`For the alert "${title}"${description ? ` (${description})` : ""}, what specific tests, panels, or follow-up investigations should I consider asking my doctor about? Please reference the relevant biomarkers and any functional medicine perspectives.`}
+          testId={`${testId}-tests`}
+        />
         {viewHref && (
           <Button
             variant="ghost"

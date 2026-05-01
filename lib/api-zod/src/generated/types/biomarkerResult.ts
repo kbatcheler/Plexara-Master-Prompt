@@ -27,5 +27,15 @@ export interface BiomarkerResult {
   optimalRangeHigh?: number | null;
   /** @nullable */
   testDate?: string | null;
+  /**
+   * Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI.
+   * @nullable
+   */
+  manuallyEdited?: boolean | null;
+  /**
+   * Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited.
+   * @nullable
+   */
+  originalValue?: number | null;
   createdAt: Date;
 }

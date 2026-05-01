@@ -345,6 +345,16 @@ export interface BiomarkerResult {
   optimalRangeHigh?: number | null;
   /** @nullable */
   testDate?: string | null;
+  /**
+   * Enhancement E4 — true once a user has overridden the LLM-extracted value via the records detail UI.
+   * @nullable
+   */
+  manuallyEdited?: boolean | null;
+  /**
+   * Enhancement E4 — snapshot of the first LLM-extracted value taken on the first manual edit; null if never edited.
+   * @nullable
+   */
+  originalValue?: number | null;
   createdAt: string;
 }
 
@@ -517,6 +527,64 @@ export interface Interpretation {
   createdAt: string;
 }
 
+export type InterpretationDeltaGaugesItem = {
+  domain: string;
+  delta: number;
+  from: number;
+  to: number;
+};
+
+/**
+ * "What changed" diff between the patient's latest interpretation and
+the immediately-prior one. Score and gauge fields are omitted when
+the prior values are missing or non-numeric.
+
+ */
+export interface InterpretationDelta {
+  /**
+   * Change in unifiedHealthScore (current minus previous), to 1 dp.
+   * @nullable
+   */
+  scoreDelta: number | null;
+  /**
+   * createdAt of the previous interpretation being compared against.
+   * @nullable
+   */
+  since: string | null;
+  /** Per-domain numeric movements, sorted by absolute delta desc. */
+  gauges: InterpretationDeltaGaugesItem[];
+  newConcerns: string[];
+  resolvedConcerns: string[];
+  newPositives: string[];
+}
+
+export type LensReasoningReconciliation = {
+  /** @nullable */
+  summary: string | null;
+  allLensesAgree: boolean;
+};
+
+export interface LensReasoningMatch {
+  text: string;
+  /** @nullable */
+  confidence: string | null;
+}
+
+/**
+ * Enhancement E10 — per-lens reasoning extracted from the latest
+interpretation for a given finding (e.g. one of `topConcerns` /
+`topPositives`). Lens slots come back `null` when the lens output
+contains no passage that matches the finding text.
+
+ */
+export interface LensReasoning {
+  finding: string;
+  lensA: LensReasoningMatch | null;
+  lensB: LensReasoningMatch | null;
+  lensC: LensReasoningMatch | null;
+  reconciliation: LensReasoningReconciliation;
+}
+
 /**
  * @nullable
  */
@@ -540,6 +608,11 @@ export const GaugeConfidence = {
   medium: "medium",
   low: "low",
 } as const;
+
+export type GaugeSparklineItem = {
+  date: string;
+  value: number;
+};
 
 export interface Gauge {
   id: number;
@@ -566,6 +639,8 @@ export interface Gauge {
   /** @nullable */
   description?: string | null;
   lastUpdated: string;
+  /** Enhancement E3 — chronological history of `currentValue` from the last (up to 6) interpretations for this domain. Empty when fewer than 2 historical points are available. */
+  sparkline?: GaugeSparklineItem[];
 }
 
 export interface BiomarkerReference {
@@ -690,6 +765,16 @@ export interface Dashboard {
   recentRecords: Record[];
   /** @nullable */
   lensesCompleted?: number | null;
+  /**
+   * One-paragraph summary of the latest comprehensive report (decrypted server-side). Null until a comprehensive report has been generated.
+   * @nullable
+   */
+  executiveSummary?: string | null;
+  /**
+   * ISO timestamp of the latest comprehensive report. Null until one exists.
+   * @nullable
+   */
+  reportGeneratedAt?: string | null;
 }
 
 export type ListRecordsParams = {
@@ -747,6 +832,13 @@ export type RegenerateInterpretation429 = {
   retryAfterSec: number;
 };
 
+export type GetLatestInterpretationLensReasoningParams = {
+  /**
+   * The finding text to look up across the three lens outputs.
+   */
+  finding: string;
+};
+
 export type ListBiomarkerResultsParams = {
   /**
    * @nullable
@@ -758,11 +850,35 @@ export type ListBiomarkerResultsParams = {
   category?: string | null;
 };
 
+export type PatchBiomarkerResultParams = {
+  /**
+   * @nullable
+   */
+  reinterpret?: PatchBiomarkerResultReinterpret;
+};
+
+export type PatchBiomarkerResultReinterpret =
+  | (typeof PatchBiomarkerResultReinterpret)[keyof typeof PatchBiomarkerResultReinterpret]
+  | null;
+
+export const PatchBiomarkerResultReinterpret = {
+  NUMBER_1: "1",
+} as const;
+
+export type PatchBiomarkerResultBody = {
+  value: number;
+};
+
 export type ListBiomarkerReferenceParams = {
   /**
    * @nullable
    */
   category?: string | null;
+  /**
+   * Case-insensitive exact match on biomarkerName.
+   * @nullable
+   */
+  name?: string | null;
 };
 
 export type ListAlertsParams = {
