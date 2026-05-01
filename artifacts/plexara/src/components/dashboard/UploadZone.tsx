@@ -228,7 +228,17 @@ export function UploadZone() {
             body: fd,
             credentials: "include",
           });
-          if (!resp.ok) throw new Error(resp.status === 413 ? "File too large." : "Upload failed.");
+          if (!resp.ok) {
+            let detail = "Upload failed.";
+            try {
+              const errBody = await resp.json();
+              detail = errBody.error || errBody.message || detail;
+            } catch {
+              /* non-JSON response — keep generic message */
+            }
+            if (resp.status === 413) detail = "File too large.";
+            throw new Error(detail);
+          }
           const row = await resp.json();
           setEntries((prev) =>
             prev.map((e) =>
@@ -244,7 +254,17 @@ export function UploadZone() {
             body: fd,
             credentials: "include",
           });
-          if (!resp.ok) throw new Error(resp.status === 413 ? "Files too large." : "Batch upload failed.");
+          if (!resp.ok) {
+            let detail = "Batch upload failed.";
+            try {
+              const errBody = await resp.json();
+              detail = errBody.error || errBody.message || detail;
+            } catch {
+              /* non-JSON response — keep generic message */
+            }
+            if (resp.status === 413) detail = "Files too large.";
+            throw new Error(detail);
+          }
           const data = (await resp.json()) as { records: Array<{ id: number; fileName: string }> };
           // Map server records back to our entries by file name & order.
           setEntries((prev) => {
