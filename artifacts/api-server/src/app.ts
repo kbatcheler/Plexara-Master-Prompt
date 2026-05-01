@@ -177,6 +177,32 @@ const llmLimiter = rateLimit({
   max: LLM_RATE_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  // Read-only methods don't trigger any LLM work — they're DB reads of
+  // already-persisted reports, interpretations, etc. Counting them against
+  // the LLM budget caused a real production bug: a user reloading the
+  // /report page (GET /comprehensive-report/latest), polling the dashboard
+  // (GET /interpretations), and then clicking "Generate" hit 429 because
+  // pure reads had already burned the 30/15min quota. Only POST/PUT/PATCH/
+  // DELETE on these surfaces actually fan out to a provider call.
+  //
+  // Note on the background orchestrator: post-record-upload synthesis
+  // (post-interpretation-orchestrator) calls runComprehensiveReport(),
+  // runReconciliation(), etc. directly as in-process functions. Those
+  // never traverse Express middleware and are therefore already exempt
+  // from this limiter — no additional skip needed for them. This skip
+  // only addresses user-initiated GET traffic.
+  //
+  // ⚠️  POLICY GUARDRAIL FOR FUTURE GET HANDLERS ON LLM_SEGMENTS:
+  // If you add a new GET endpoint under any path in LLM_SEGMENTS that
+  // ACTUALLY triggers a provider call (e.g. a streaming GET that opens
+  // an SSE channel and immediately fans out to Anthropic), this blanket
+  // GET skip will silently bypass the LLM budget for that route. In
+  // that case either (a) move the new route off an LLM_SEGMENTS prefix,
+  // (b) wrap it in its own dedicated rate limiter, or (c) refactor this
+  // skip to allow-list specific safe paths instead. The current shape
+  // (skip all GET) is correct for today's routes — every GET on every
+  // LLM_SEGMENT prefix is a pure DB read at time of writing.
+  skip: (req) => req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS",
   message: { error: "Too many AI requests" },
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRoute } from "wouter";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
@@ -114,11 +114,12 @@ function flagChip(flag: BiomarkerFlag): string {
   }
 }
 
-function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
+function ComprehensiveView({ report, onRegenerate, regenerating, patientId, retrySeconds }: {
   report: ComprehensiveReport;
   onRegenerate: () => void;
   regenerating: boolean;
   patientId: number;
+  retrySeconds: number;
 }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -168,8 +169,23 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId }: {
             glossary. Designed to be printed for a physician visit.
           </HelpHint>
         </h1>
-        <div className="flex gap-2">
-          <Button onClick={onRegenerate} variant="outline" size="sm" disabled={regenerating} data-testid="btn-regenerate-report">
+        <div className="flex gap-2 items-center">
+          {retrySeconds > 0 && (
+            <span
+              className="text-xs text-muted-foreground flex items-center gap-1.5"
+              data-testid="regenerate-rate-limited"
+            >
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Capacity busy — auto-retrying in {retrySeconds}s
+            </span>
+          )}
+          <Button
+            onClick={onRegenerate}
+            variant="outline"
+            size="sm"
+            disabled={regenerating || retrySeconds > 0}
+            data-testid="btn-regenerate-report"
+          >
             {regenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
             {regenerating ? "Regenerating…" : "Regenerate"}
           </Button>
@@ -498,6 +514,27 @@ export default function Report() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [emptyReason, setEmptyReason] = useState<string | null>(null);
+  // Friendly 429 handling — when the server (or upstream) reports we're
+  // over the LLM budget, we surface a countdown + auto-retry instead of
+  // showing the raw "Too many AI requests" JSON. `retrySeconds` ticks
+  // down to 0; the timer ref lets us cancel cleanly on unmount or when
+  // the user switches patient. `inFlightRef` prevents a double-fire when
+  // the auto-retry timer races with a manual click on Generate.
+  const [retrySeconds, setRetrySeconds] = useState(0);
+  const retryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inFlightRef = useRef(false);
+  useEffect(() => {
+    // Cleanup runs on unmount AND when patientId changes (because it's
+    // in the deps array). Without this, switching patients mid-countdown
+    // would fire generate() against the now-stale patientId closure.
+    return () => {
+      if (retryTimerRef.current) {
+        clearInterval(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      setRetrySeconds(0);
+    };
+  }, [patientId]);
 
   const loadLatest = useCallback(async () => {
     if (!patientId) return;
@@ -523,17 +560,67 @@ export default function Report() {
 
   const generate = useCallback(async () => {
     if (!patientId) return;
+    // In-flight guard: prevents double-fire when the auto-retry timer
+    // ticks to zero AND the user clicks Generate at roughly the same
+    // moment, which would otherwise queue two concurrent expensive
+    // POSTs against /comprehensive-report and double-bill the LLM
+    // budget. The ref (not state) is updated synchronously so a second
+    // call within the same tick is correctly rejected.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setGenerating(true);
     setCompError(null);
     try {
       const data = await api<ComprehensiveReport>(`/patients/${patientId}/comprehensive-report`, { method: "POST" });
       setComp(data);
       setEmptyReason(null);
+      // Cancel any pending auto-retry — we got through.
+      if (retryTimerRef.current) {
+        clearInterval(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      setRetrySeconds(0);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to generate";
-      setCompError(msg);
+      const status = (err as { status?: number } | null)?.status;
+      // 429 = Plexara LLM-budget limiter OR upstream Anthropic rate-limit
+      // that already exhausted withLLMRetry. Either way the right UX is a
+      // countdown + auto-retry, not the raw "Too many AI requests" JSON.
+      if (status === 429) {
+        setCompError(null);
+        const COUNTDOWN_SECONDS = 60;
+        setRetrySeconds(COUNTDOWN_SECONDS);
+        if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+        retryTimerRef.current = setInterval(() => {
+          setRetrySeconds((s) => {
+            if (s <= 1) {
+              if (retryTimerRef.current) {
+                clearInterval(retryTimerRef.current);
+                retryTimerRef.current = null;
+              }
+              // Fire the auto-retry on the next tick so React state has
+              // settled. Wrapped so the closure captures the latest
+              // generate ref via setTimeout (no stale-closure risk
+              // because `generate` is stable per patientId).
+              setTimeout(() => { void generate(); }, 0);
+              return 0;
+            }
+            return s - 1;
+          });
+        }, 1000);
+      } else {
+        const msg = err instanceof Error ? err.message : "Failed to generate";
+        setCompError(msg);
+      }
     } finally {
       setGenerating(false);
+      // Release in-flight guard. The retry timer (if armed by the 429
+      // branch above) will eventually call generate() again; that call
+      // is allowed because by then this finally has already cleared
+      // the ref. Manual user clicks during the countdown are also
+      // re-permitted, which matches the expected UX (the empty-state
+      // hides the Generate button while the countdown is active, and
+      // the in-report Regenerate button is `disabled={retrySeconds > 0}`).
+      inFlightRef.current = false;
     }
   }, [patientId]);
 
@@ -559,22 +646,37 @@ export default function Report() {
   }
 
   if (!comp) {
+    const isRateLimited = retrySeconds > 0;
     return (
       <div className="max-w-2xl mx-auto p-12 text-center space-y-4" data-testid="report-empty">
         <FileText className="w-10 h-10 text-muted-foreground mx-auto" />
         <h2 className="text-xl font-heading font-semibold">Comprehensive report</h2>
-        <p className="text-sm text-muted-foreground max-w-md mx-auto">
-          {emptyReason ?? compError ??
-            "Once you've uploaded at least one panel, generate a synthesised cross-panel report."}
-        </p>
-        <Button onClick={generate} disabled={generating} data-testid="btn-generate-report">
-          {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-          {generating ? "Generating (15-30s)…" : "Generate comprehensive report"}
-        </Button>
-        {compError && <p className="text-xs text-destructive">{compError}</p>}
+        {isRateLimited ? (
+          <div className="space-y-3" data-testid="report-rate-limited">
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              The system is processing other requests. Your report will be ready shortly — auto-retrying in {retrySeconds} second{retrySeconds === 1 ? "" : "s"}.
+            </p>
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Waiting for capacity…
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              {emptyReason ?? compError ??
+                "Once you've uploaded at least one panel, generate a synthesised cross-panel report."}
+            </p>
+            <Button onClick={generate} disabled={generating} data-testid="btn-generate-report">
+              {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+              {generating ? "Generating (15-30s)…" : "Generate comprehensive report"}
+            </Button>
+            {compError && <p className="text-xs text-destructive">{compError}</p>}
+          </>
+        )}
       </div>
     );
   }
 
-  return <ComprehensiveView report={comp} onRegenerate={generate} regenerating={generating} patientId={patientId!} />;
+  return <ComprehensiveView report={comp} onRegenerate={generate} regenerating={generating} patientId={patientId!} retrySeconds={retrySeconds} />;
 }

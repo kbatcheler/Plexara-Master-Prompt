@@ -372,80 +372,100 @@ export async function processUploadedDocument(opts: {
         // those tables were therefore manually entered and must be left
         // alone (they have no source tag and won't match the LIKE filter).
         const sourceTag = `[src:rec=${recordId}]`;
-        try {
-          await db
-            .delete(supplementsTable)
-            .where(
-              and(
-                eq(supplementsTable.patientId, patientId),
-                sql`${supplementsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
-              ),
-            );
-          await db
-            .delete(medicationsTable)
-            .where(
-              and(
-                eq(medicationsTable.patientId, patientId),
-                sql`${medicationsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
-              ),
-            );
-        } catch (err) {
-          logger.warn({ err, recordId }, "Failed to clear prior stack-import rows; proceeding with insert (may duplicate)");
-        }
-
         let suppInserted = 0;
         let medInserted = 0;
-        for (const s of supplements) {
-          if (!s?.name) continue;
-          try {
-            const noteParts = [
-              s.brand ? `Brand: ${s.brand}` : null,
-              s.form ? `Form: ${s.form}` : null,
-              s.timing ? `Timing: ${s.timing}` : null,
-              s.notes || null,
-              sourceTag,
-            ].filter(Boolean) as string[];
-            await db.insert(supplementsTable).values({
-              patientId,
-              name: s.name,
-              dosage: s.dosage ?? null,
-              frequency: s.frequency ?? null,
-              startedAt: s.startDate ?? null,
-              notes: noteParts.join(" · "),
-              // Active when there's no end date (still on the stack).
-              active: !s.endDate,
-            });
-            suppInserted++;
-          } catch (err) {
-            logger.warn({ err, supplement: s.name, recordId }, "Failed to insert supplement from stack document");
-          }
-        }
-        for (const m of medications) {
-          if (!m?.name) continue;
-          try {
-            // Combine generic+brand into the single `name` column.
-            const combinedName = m.brandName && m.brandName !== m.name
-              ? `${m.name} (${m.brandName})`
-              : m.name;
-            const noteParts = [
-              m.prescribedFor ? `For: ${m.prescribedFor}` : null,
-              m.notes || null,
-              sourceTag,
-            ].filter(Boolean) as string[];
-            await db.insert(medicationsTable).values({
-              patientId,
-              name: combinedName,
-              drugClass: m.drugClass ?? null,
-              dosage: m.dosage ?? null,
-              frequency: m.frequency ?? null,
-              startedAt: m.startDate ?? null,
-              notes: noteParts.join(" · "),
-              active: true,
-            });
-            medInserted++;
-          } catch (err) {
-            logger.warn({ err, medication: m.name, recordId }, "Failed to insert medication from stack document");
-          }
+
+        // Concurrency hardening: the delete-then-insert pattern is only
+        // idempotent if no second processor is running for the same record
+        // at the same time (otherwise both would delete each other's just-
+        // inserted rows, then both would insert, leaving 2x rows). Wrap
+        // the whole [delete prior tagged rows + insert fresh ones] in a
+        // single transaction and serialise concurrent reprocessing of the
+        // same record by taking a Postgres advisory transaction lock keyed
+        // off (recordId, namespace). pg_advisory_xact_lock auto-releases
+        // on COMMIT/ROLLBACK so we can never leak a lock. Per-row try/catch
+        // is preserved for the inserts so one bad item still doesn't fail
+        // the rest of the batch.
+        try {
+          await db.transaction(async (tx) => {
+            // Namespace = arbitrary 32-bit constant unique to this code
+            // path (chosen so it can't collide with other features that
+            // might later adopt advisory locks for different reasons).
+            const STACK_IMPORT_LOCK_NS = 0x70_6c_78_72; // "plxr"
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(${STACK_IMPORT_LOCK_NS}, ${recordId})`);
+
+            await tx
+              .delete(supplementsTable)
+              .where(
+                and(
+                  eq(supplementsTable.patientId, patientId),
+                  sql`${supplementsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
+                ),
+              );
+            await tx
+              .delete(medicationsTable)
+              .where(
+                and(
+                  eq(medicationsTable.patientId, patientId),
+                  sql`${medicationsTable.notes} LIKE ${"%" + sourceTag + "%"}`,
+                ),
+              );
+
+            for (const s of supplements) {
+              if (!s?.name) continue;
+              try {
+                const noteParts = [
+                  s.brand ? `Brand: ${s.brand}` : null,
+                  s.form ? `Form: ${s.form}` : null,
+                  s.timing ? `Timing: ${s.timing}` : null,
+                  s.notes || null,
+                  sourceTag,
+                ].filter(Boolean) as string[];
+                await tx.insert(supplementsTable).values({
+                  patientId,
+                  name: s.name,
+                  dosage: s.dosage ?? null,
+                  frequency: s.frequency ?? null,
+                  startedAt: s.startDate ?? null,
+                  notes: noteParts.join(" · "),
+                  // Active when there's no end date (still on the stack).
+                  active: !s.endDate,
+                });
+                suppInserted++;
+              } catch (err) {
+                logger.warn({ err, supplement: s.name, recordId }, "Failed to insert supplement from stack document");
+              }
+            }
+            for (const m of medications) {
+              if (!m?.name) continue;
+              try {
+                // Combine generic+brand into the single `name` column.
+                const combinedName = m.brandName && m.brandName !== m.name
+                  ? `${m.name} (${m.brandName})`
+                  : m.name;
+                const noteParts = [
+                  m.prescribedFor ? `For: ${m.prescribedFor}` : null,
+                  m.notes || null,
+                  sourceTag,
+                ].filter(Boolean) as string[];
+                await tx.insert(medicationsTable).values({
+                  patientId,
+                  name: combinedName,
+                  drugClass: m.drugClass ?? null,
+                  dosage: m.dosage ?? null,
+                  frequency: m.frequency ?? null,
+                  startedAt: m.startDate ?? null,
+                  notes: noteParts.join(" · "),
+                  active: true,
+                });
+                medInserted++;
+              } catch (err) {
+                logger.warn({ err, medication: m.name, recordId }, "Failed to insert medication from stack document");
+              }
+            }
+          });
+        } catch (err) {
+          logger.warn({ err, recordId }, "supplement_stack import transaction failed — stack rows may not be persisted for this record");
         }
         logger.info(
           { patientId, recordId, suppInserted, medInserted },

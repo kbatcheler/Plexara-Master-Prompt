@@ -360,6 +360,11 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 
     const ctx: PatientContext = buildPatientContext(patient);
 
+    // NOTE: runComprehensiveReport internally wraps its anthropic.messages.create
+    // call in withLLMRetry (see lib/reports-ai.ts), so transient upstream
+    // 429s / 5xx / network blips from the provider are retried with
+    // jittered exponential backoff before bubbling up here. No additional
+    // retry wrapping is needed at this layer.
     const report = await runComprehensiveReport({
       patientCtx: ctx,
       panelReconciled: inputs.panelReconciled,
