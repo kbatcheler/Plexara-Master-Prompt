@@ -15,6 +15,11 @@ import crypto from "crypto";
 import { stripPII } from "./pii";
 import { getAllBiomarkerReferences } from "./biomarker-cache";
 import {
+  validateExtractedBiomarkers,
+  type ExtractedBiomarker,
+  type ExtractionValidationSummary,
+} from "./extraction-validator";
+import {
   runReconciliation,
   extractFromDocument,
   buildPatientContext,
@@ -355,6 +360,53 @@ export async function processUploadedDocument(opts: {
       {
         const sd = structuredData as Record<string, unknown>;
         const detectedType = (sd.documentType as string | undefined) || activeRecordType;
+
+        // ── Extraction validator ────────────────────────────────────────
+        // Three-layer biomarker QA (unit auto-correction → physiological
+        // limits → statistical deviation scoring). Run BEFORE we count
+        // biomarkers or persist anything: rejected rows must vanish from
+        // the in-memory `structuredData.biomarkers` so every downstream
+        // consumer (the extracted_data cache write, the biomarker batch
+        // insert, the lens dispatch that reads structuredData) operates
+        // on the cleaned list. Corrected rows have their value+unit
+        // rewritten to the canonical unit so reference-range comparisons
+        // and trend lines line up regardless of which unit the lab used.
+        let validationSummary: ExtractionValidationSummary | null = null;
+        if (Array.isArray(sd.biomarkers) && sd.biomarkers.length > 0) {
+          try {
+            const refMap = await getAllBiomarkerReferences();
+            const result = validateExtractedBiomarkers(
+              sd.biomarkers as ExtractedBiomarker[],
+              refMap,
+            );
+            // Mutate in place so the encrypted extracted_data row, the
+            // biomarker insert below, and any cached re-reads all see the
+            // post-validation payload.
+            sd.biomarkers = result.validatedBiomarkers;
+            validationSummary = result.summary;
+            if (result.summary.rejected.length > 0 || result.summary.corrected.length > 0) {
+              logger.info(
+                {
+                  recordId,
+                  patientId,
+                  qualityScore: result.summary.qualityScore,
+                  totalSeen: result.summary.totalSeen,
+                  totalAccepted: result.summary.totalAccepted,
+                  rejectedCount: result.summary.rejected.length,
+                  correctedCount: result.summary.corrected.length,
+                  flaggedCount: result.summary.flagged.length,
+                },
+                "Extraction validator filtered biomarkers",
+              );
+            }
+          } catch (vErr) {
+            // Non-fatal: a validator bug must not block the upload. We
+            // keep the raw biomarkers and surface the failure in logs so
+            // the issue is observable without losing user data.
+            logger.error({ recordId, patientId, err: vErr }, "Extraction validator threw");
+          }
+        }
+
         const biomarkerCount = Array.isArray(sd.biomarkers) ? sd.biomarkers.length : 0;
         const supplementCount = Array.isArray(sd.supplements) ? sd.supplements.length : 0;
         const medicationCount = Array.isArray(sd.medications) ? sd.medications.length : 0;
@@ -388,6 +440,10 @@ export async function processUploadedDocument(opts: {
           userSelectedType: recordType,
           typeMatch,
           reclassified: activeRecordType !== recordType,
+          // Validator output (null when the record had no biomarkers or
+          // the validator threw). The UI surfaces qualityScore + counts
+          // so users see why an upload was partially rejected.
+          validation: validationSummary,
         };
 
         await db
@@ -408,6 +464,10 @@ export async function processUploadedDocument(opts: {
             confidence,
             typeMatch,
             reclassified: extractionSummary.reclassified,
+            validationQualityScore: validationSummary?.qualityScore ?? null,
+            validationRejectedCount: validationSummary?.rejected.length ?? 0,
+            validationCorrectedCount: validationSummary?.corrected.length ?? 0,
+            validationFlaggedCount: validationSummary?.flagged.length ?? 0,
           },
           "Extraction verification summary",
         );
