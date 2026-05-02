@@ -69,6 +69,112 @@ export interface ComprehensiveReportOutput {
    * the LLM. Empty array when no evidence rows are available.
    */
   evidenceBase: ComprehensiveReportEvidenceEntry[];
+  /**
+   * Deepened conditional sections (May 2026 — see
+   * `attached_assets/plexara-deepened-report-sections_*.md`). Each is
+   * OPTIONAL and is populated by the synthesist ONLY when the corresponding
+   * evidence type exists in the patient's record. When the field is
+   * missing or `included: false`, downstream renderers (web + PDF) skip
+   * the section entirely. Adding these is fully back-compat — pre-deepening
+   * reports simply have all seven fields undefined.
+   */
+  bodyComposition?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    metrics: Array<{ name: string; value: string; interpretation: string; flag: string }>;
+    recommendations: string[];
+  };
+  imagingSummary?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    studies: Array<{
+      modality: string;
+      date: string;
+      region: string;
+      keyFindings: string;
+      contrastUsed: boolean;
+      contrastType: string | null;
+      contrastImplications: string | null;
+    }>;
+    recommendations: string[];
+  };
+  cancerSurveillance?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    markers: Array<{ name: string; value: string; date: string; status: string; interpretation: string }>;
+    overallAssessment: string;
+    recommendations: string[];
+  };
+  pharmacogenomicProfile?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    keyPhenotypes: Array<{
+      gene: string;
+      phenotype: string;
+      activityScore: string | null;
+      clinicalImpact: string;
+    }>;
+    drugAlerts: Array<{
+      drug: string;
+      severity: string;
+      gene: string;
+      recommendation: string;
+      source: string;
+    }>;
+    currentMedicationAssessment: string | null;
+    recommendations: string[];
+  };
+  wearablePhysiology?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    metrics: Array<{
+      name: string;
+      latest: string;
+      weeklyAverage: string | null;
+      trend: string;
+      interpretation: string;
+      flag: string;
+    }>;
+    crossCorrelations: Array<{
+      wearable: string;
+      otherDataSource: string;
+      interpretation: string;
+      coherence: string;
+    }>;
+    recommendations: string[];
+  };
+  metabolomicAssessment?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    pathways: Array<{
+      name: string;
+      status: string;
+      keyMarkers: string;
+      interpretation: string;
+      cofactorDeficiencies: string | null;
+      interlacedFindings: string;
+    }>;
+    gutBrainAxis: string | null;
+    recommendations: string[];
+  };
+  integratedSummary?: {
+    included: boolean;
+    title: string;
+    narrative: string;
+    keyConnections: Array<{ dataTypes: string[]; finding: string }>;
+    prioritisedActionPlan: Array<{
+      priority: number;
+      action: string;
+      rationale: string;
+      timeframe: string;
+    }>;
+  };
 }
 
 const COMPREHENSIVE_REPORT_PROMPT = `You are the Chief Medical Synthesist — producing the patient's complete medical-grade health report by integrating EVERY blood panel, imaging report, genetics result, and wearable summary they have on file.
@@ -111,6 +217,73 @@ Body systems to cover (omit any with truly no data; mark "insufficient_data" if 
 - Kidney & Liver (creatinine, eGFR, BUN, ALT, AST, ALP, bilirubin, GGT)
 - Inflammatory (CRP, hs-CRP, ESR, ferritin in inflammatory context)
 - Other (anything that doesn't fit but is clinically meaningful)
+
+ADDITIONAL CONDITIONAL SECTIONS — include each ONLY when the corresponding data exists in the patient's evidence map. Set "included": false (or omit the field entirely) when the data type is absent — DO NOT emit empty placeholder sections.
+
+CROSS-SECTION INTERLACING — THE MOST IMPORTANT INSTRUCTION:
+
+Every section MUST reference findings from OTHER sections, not just blood panels. These are facets of ONE patient viewed from different angles. When writing Body Composition, you already know the pharmacogenomics, imaging, wearables, and metabolomics. Use that knowledge.
+
+RULE: EVERY section narrative MUST contain at least 2 explicit references to findings from OTHER sections. A section that only references its own data type and blood panels is incomplete.
+
+Good interlacing example: "Your appendicular lean mass of 6.8 kg/m2 is approaching the sarcopenia threshold. In the context of your SLCO1B1 decreased function genotype, your statin exposure is higher than average — statin-associated myopathy can accelerate lean mass loss. Your organic acid panel confirms impaired Krebs cycle at Complex II (elevated succinate), exactly where CoQ10 acts. And your wearable VO2max has declined 8% over 6 months. Four sources converging on one story."
+
+Bad siloed example: "Your DEXA shows T-score -1.2, indicating osteopenia. Consider vitamin D and calcium." — Ignores testosterone, SLCO1B1, wearable exercise data, and metabolomic energy production.
+
+--- BODY COMPOSITION & BONE DENSITY (when DEXA / body composition data exists) ---
+Bone density T-scores: > -1.0 normal; -1.0 to -2.5 osteopenia (early, reversible); < -2.5 osteoporosis. Z-score is more relevant for premenopausal women and men <50. Cross-reference with vitamin D (target 100-200 nmol/L for bone), testosterone (low T is independent male osteoporosis risk), calcium, PTH, magnesium, K2. INTERLACE: SLCO1B1+statin from PGx may drive myopathy affecting bone. Declining VO2max on wearables + osteopenia = compounding functional decline. Krebs cycle impairment from OAT reduces osteoblast energy. A man with T-score -1.2, testosterone 17 nmol/L, vitamin D 172 nmol/L: testosterone is the likely bone loss driver, not vitamin D. Say so.
+Body fat % targets: men 20-39 optimal 8-19%, 40-59 11-21%; women 20-39 21-32%, 40-59 23-33%. Cross-reference with fasting insulin, HbA1c, triglycerides, testosterone (low T in men causes increased visceral fat → increased aromatase → more oestrogen → more fat storage — a vicious cycle). INTERLACE: impaired beta-oxidation on OAT (elevated adipic + suberic) explains inability to burn fat despite exercise. Poor sleep on wearables drives insulin resistance and fat accumulation.
+Visceral adipose tissue: <100 cm2 low risk, 100-160 moderate, >160 high. More predictive of metabolic disease than BMI. INTERLACE: if imaging shows hepatic steatosis, correlate with VAT — same metabolic story.
+Lean mass / sarcopenia: ALMI <7.0 kg/m2 men or <5.5 women indicates sarcopenia (EWGSOP2). Declining lean mass is the single biggest predictor of functional decline and all-cause mortality. INTERLACE: SLCO1B1+statin+declining ALMI = three-way myopathy convergence. Declining VO2max + declining lean mass = compounding loss. Krebs cycle impairment reduces ATP for muscle synthesis.
+Android:Gynoid ratio: <1.0 favourable, >1.0 central fat predominance with higher metabolic and CV risk.
+
+--- IMAGING & PROCEDURES (when imaging records exist) ---
+For every study: what was found, what it means, what it connects to ACROSS ALL sections.
+Iodinated contrast (CT): thyroid disruption for 4-8 weeks. Iodine overload suppresses thyroid hormone production, feedback loop elevates TSH. TSH elevation 2-6 weeks post-contrast is almost certainly contrast-induced thyroiditis, NOT autoimmune thyroid disease. State this clearly with resolution timeline ("Expected to resolve within 8-12 weeks. Repeat TSH then."). Cross-reference renal function (creatinine, eGFR) for contrast-induced nephropathy risk. INTERLACE: if RHR changed on wearables after CT, note thyroid-heart connection. If body composition changed on follow-up DEXA, note timeline relative to contrast.
+Gadolinium (MRI): renal clearance (check eGFR, nephrogenic systemic fibrosis risk at eGFR <30). Note cumulative exposure if multiple enhanced MRIs.
+Procedure effects on blood: surgery/anaesthesia causes transient liver enzyme elevation 2-4 weeks. Transfusion makes ferritin and iron studies unreliable 4-8 weeks. Steroids elevate glucose and suppress HPA axis 2-8 weeks.
+INTERLACING REQUIREMENT: For EVERY contrast study, trace its effects through blood panel timeline, wearable trends, and body composition. Imaging explains WHY values changed.
+
+--- CANCER SURVEILLANCE (when tumour markers or screening exist) ---
+GROUNDING: ONLY discuss surveillance for DOCUMENTED conditions. Never invent diagnoses.
+CA 19-9: <37 U/mL normal. False elevations from cholestasis, pancreatitis, cirrhosis. Lewis-antigen-negative individuals (5-10%) always <2 regardless. INTERLACE with GGT/ALP from blood and biliary imaging.
+PSA: age-adjusted (40-49 <2.5, 50-59 <3.5, 60-69 <4.5). Velocity >0.75/year warrants investigation. Free PSA ratio <10% higher risk, >25% lower risk. Statin suppresses PSA 10-15%. INTERLACE: SLCO1B1 variant means higher statin exposure and potentially greater PSA suppression. Higher body fat from DEXA lowers PSA via haemodilution.
+CEA: <3.0 non-smokers, <5.0 smokers. False elevations from inflammation, liver disease, hypothyroidism. INTERLACE with CRP/ESR — if both elevated, CEA may be inflammatory not oncological.
+AFP: <10 ng/mL. INTERLACE with liver imaging and hepatic markers.
+CA-125: <35 U/mL. False elevations from endometriosis, cirrhosis, pleural effusion.
+Normal markers: frame as REASSURING. "All tumour markers within normal limits — broad oncological reassurance."
+
+--- PHARMACOGENOMIC PROFILE (when PGx data exists) ---
+CYP2D6: Poor Metabolizer means drug accumulates, codeine/tramadol ineffective, TCAs need 50% reduction. Ultrarapid means codeine causes dangerous morphine overproduction.
+CYP2C19: Poor means clopidogrel INEFFECTIVE (use prasugrel/ticagrelor), PPIs accumulate.
+CYP2C9: Poor means warfarin dose reduction, NSAID accumulation.
+SLCO1B1 decreased function: AVOID simvastatin/lovastatin. Atorvastatin max 40 mg. Rosuvastatin max 20 mg. INTERLACE: +declining ALMI on DEXA = myopathy convergence. +elevated succinate on OAT = CoQ10 depletion at metabolomic level. +declining VO2max on wearables = mitochondrial limitation confirmed.
+TPMT/NUDT15 poor: thiopurines cause fatal myelosuppression without 90% dose reduction. SERIOUS flag for autoimmune patients.
+DPYD reduced: 5-FU/capecitabine cause potentially fatal toxicity. Flag even if not currently prescribed.
+COMT slow (Met/Met): anxiety sensitivity, lower methylfolate tolerance. Start methylfolate at 200 mcg not 800 mcg. INTERLACE: +elevated HVA on OAT = dopamine clearance confirmed. +poor HRV on wearables = catecholamine autonomic imbalance.
+MTHFR TT: 70% reduced enzyme activity, use methylfolate not folic acid. INTERLACE: +elevated FIGLU on OAT = functional folate deficiency confirmed. +elevated MMA + homocysteine = full methylation picture across genetics, metabolomics, and blood.
+ALWAYS assess every CURRENT medication against the patient's PGx profile in currentMedicationAssessment.
+
+--- CONTINUOUS PHYSIOLOGY (when wearable data exists) ---
+HRV (SDNN): age targets 20-29 >100 ms, 40-49 >80 ms, 60-69 >60 ms. Declining trend suggests increasing allostatic load. INTERLACE: low HRV + elevated CRP from blood = consistent inflammation from two sources. +elevated quinolinic on OAT = neuroinflammation suppressing vagal tone. +COMT slow from PGx = catecholamine autonomic imbalance.
+RHR: optimal 50-65 bpm, >75 investigate. INTERLACE: rising RHR + low ferritin from blood = anaemia-driven tachycardia. RHR change after CT from imaging = thyroid disruption.
+Sleep: optimal 7-9 hours, 1.5h+ deep, 1.5h+ REM. <6 h chronic causes insulin resistance, cortisol elevation, immune suppression. INTERLACE: poor sleep + elevated glucose/insulin from blood = sleep-driven metabolic dysfunction (fix sleep first, no supplement compensates). +increasing body fat on DEXA = sleep → insulin resistance → fat accumulation. +elevated cortisol metabolites on OAT = HPA axis confirmation.
+VO2max: the single strongest predictor of all-cause mortality. Men 20-29 >45, 30-39 >42, 40-49 >38, 50-59 >35, 60-69 >30. Women subtract 5. INTERLACE: +declining ALMI on DEXA = compounding aerobic + musculoskeletal decline. +impaired Krebs cycle on OAT = mitochondrial limitation at cellular level. +SLCO1B1+statin from PGx = CoQ10 depletion mechanism. +low ferritin from blood = iron limiting oxygen capacity.
+Steps: 7000-10000/day for mortality benefit. INTERLACE: high steps but low lean mass on DEXA suggests needs resistance training not more walking.
+
+--- METABOLOMIC PATHWAY ASSESSMENT (when OAT data exists) ---
+Krebs cycle: early block (citrate, alpha-KG) = NAD+/iron/B1 deficiency. Late block (succinate, fumarate, malate) = CoQ10/B2/iron deficiency. INTERLACE: SLCO1B1+statin from PGx → CoQ10 depletion → succinate block = three-way confirmation. +declining lean mass on DEXA = reduced ATP for muscle synthesis. +declining VO2max on wearables = reduced aerobic capacity. +elevated LDH from blood = tissue-level energy deficit.
+Beta-oxidation: elevated adipic + suberic = impaired fat burning. INTERLACE: +elevated body fat on DEXA despite exercise = cellular explanation for weight loss resistance. +adequate steps on wearables but declining body composition = exercising but cannot metabolise fat. Actionable: carnitine and riboflavin can restore the pathway.
+Methylation: elevated MMA = functional B12 deficiency even if serum B12 normal. Elevated FIGLU = functional folate deficiency. INTERLACE: +MTHFR variant from PGx = genetic cause confirmed. +COMT slow = needs cautious methylation support. +elevated homocysteine from blood = cardiovascular risk.
+Neurotransmitters: low 5-HIAA + elevated quinolinic = tryptophan diverted to inflammatory kynurenine pathway instead of serotonin. INTERLACE: +declining HRV on wearables = vagal tone suppression confirmed. +elevated CRP from blood = inflammation is the driver (treat inflammation not neurotransmitter). +COMT slow from PGx + elevated HVA = dopamine clearance confirmed by genetics and metabolomics.
+Dysbiosis: D-arabinitol = yeast, 4-hydroxyphenylacetic = pathogenic bacteria. INTERLACE: +elevated CRP from blood = gut is inflammatory source. +B12 deficiency = SIBO consuming B12. +iron deficiency = gut inflammation impairing absorption. Trace the full cycle when supported: dysbiosis → inflammation → IDO activation → tryptophan → kynurenine → quinolinic → neuroinflammation → low HRV → poor sleep → elevated cortisol → more gut inflammation.
+Detoxification: elevated pyroglutamic = glutathione depletion. INTERLACE: +elevated GGT from blood = glutathione turnover confirmed. +multiple CYP variants from PGx = altered Phase I increasing Phase II burden.
+
+--- INTEGRATED HEALTH SUMMARY (ALWAYS include when 2+ DISTINCT data types exist in the evidence map) ---
+This answers: "What would a senior functional medicine practitioner say after reviewing the ENTIRE file?" Trace causal chains across ALL data: e.g., DEXA lean mass decline + blood testosterone decline + wearable VO2max decline + SLCO1B1 statin genotype + OAT Krebs cycle impairment = five-source convergent story about statin-driven mitochondrial dysfunction affecting muscle, energy, and exercise capacity.
+keyConnections lists insights impossible from any single data type. prioritisedActionPlan is MAXIMUM 8 numbered items drawing from ALL sources, ranked by impact, each citing the supporting data sources in its rationale.
+
+NO EMPTY PLACEHOLDERS: omit any conditional section whose data type is absent from the evidence map. Set "included": true ONLY when you actually populated meaningful clinical content for that section. Setting "included": false (or omitting the field entirely) is the explicit signal to the renderer to skip the section.
 
 Critical: ANONYMISED data only. NEVER include patient names or identifiers.
 

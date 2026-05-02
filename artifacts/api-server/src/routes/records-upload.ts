@@ -1,30 +1,18 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import {
-  recordsTable,
-  extractedDataTable,
-  biomarkerResultsTable,
-  biomarkerReferenceTable,
-} from "@workspace/db";
+import { recordsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import multer from "multer";
-import fs from "fs";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
-import { extractFromDocument } from "../lib/ai";
 import { logger } from "../lib/logger";
-import { isProviderAllowed } from "../lib/consent";
-import { UPLOADS_DIR, assertWithinUploads, sanitiseUploadFilename } from "../lib/uploads";
-import { encryptJson } from "../lib/phi-crypto";
-import { parseExtractionConfidence, bucketConfidence } from "../lib/extraction-confidence";
+import { UPLOADS_DIR, sanitiseUploadFilename } from "../lib/uploads";
 import { validate } from "../middlewares/validate";
 import { HttpError } from "../middlewares/errorHandler";
 import { recordCreateBody } from "../lib/validators";
 import {
   getPatientLimiter,
   processUploadedDocument,
-  recordTypeRequiresBiomarkers,
-  runInterpretationPipeline,
 } from "../lib/records-processing";
 
 /**
@@ -111,132 +99,34 @@ router.post(
 
     res.status(201).json(record);
 
-    setImmediate(async () => {
-      try {
-        const fileBuffer = fs.readFileSync(assertWithinUploads(req.file!.path));
-        const base64 = fileBuffer.toString("base64");
-        const mimeType = req.file!.mimetype;
-
-        let structuredData: Record<string, unknown> = {};
-
-        // Consent-gate document extraction (Anthropic) — fail closed if patient revoked AI consent.
-        const { patientsTable: ptOwnerCheck } = await import("@workspace/db");
-        const [ownerForExtract] = await db.select().from(ptOwnerCheck).where(eq(ptOwnerCheck.id, patientId));
-        const extractAllowed = ownerForExtract ? await isProviderAllowed(ownerForExtract.accountId, "anthropic") : false;
-        if (!extractAllowed) {
-          logger.warn({ patientId, recordId: record.id }, "Skipping document extraction — Anthropic AI consent not granted");
-          await db.update(recordsTable).set({ status: "consent_blocked" }).where(eq(recordsTable.id, record.id));
-          return;
-        }
-
-        let extractionFailed = false;
-        let extractionErrorMessage: string | null = null;
-
+    // Beta-tester regression (May 2026): the legacy single-upload path used
+    // to inline its own extraction + biomarker-insert logic, which silently
+    // bypassed the shared `processUploadedDocument` pipeline. As a result,
+    // four real fixes only worked when uploading via /batch:
+    //   - per-row biomarker testDate (multi-date trend reports)
+    //   - supplement_stack import for "Other" PDFs
+    //   - imaging contrast → evidence_registry surface
+    //   - downstream temporal-correlation hooks for the lens pipeline
+    // Routing single uploads through the same shared function gives parity
+    // with /batch and keeps future enhancements in one place.
+    const file = req.file;
+    const limiter = getPatientLimiter(patientId);
+    setImmediate(() => {
+      void limiter(async () => {
         try {
-          structuredData = await extractFromDocument(base64, mimeType, recordType);
-
-          // Defect-B follow-up (May 2026): extractFromDocument's inner catch
-          // returns `{extractionError: true, note: ...}` instead of throwing
-          // when the upstream LLM call fails (e.g. APIConnectionTimeoutError
-          // on dense multi-page PDFs). For recordType="other" the existing
-          // `recordTypeRequiresBiomarkers` gate is FALSE, so the empty
-          // payload would silently fall through to runInterpretationPipeline
-          // and burn three lens calls on nothing. Throwing here funnels the
-          // failure into the existing catch-block, which sets the failure
-          // flag, logs once, and skips the lens pipeline below — AND
-          // critically prevents the poisoned payload from being inserted
-          // into extracted_data, where the reanalyze cache would later
-          // pick it up and pretend it was a successful extraction.
-          if (structuredData.extractionError === true) {
-            const note = (structuredData.note as string | undefined) || "Extraction failed";
-            throw new Error(note);
-          }
-
-          // Enhancement E4 — derive the legacy text bucket from the LLM-reported
-          // numeric confidence; full structured block stays inside structuredJson.
-          const conf = parseExtractionConfidence(structuredData);
-          await db.insert(extractedDataTable).values({
-            recordId: record.id,
+          await processUploadedDocument({
             patientId,
-            dataType: (structuredData.documentType as string) || recordType,
-            structuredJson: encryptJson(structuredData) as object,
-            extractionModel: "claude-sonnet-4-6",
-            extractionConfidence: bucketConfidence(conf.overall),
+            recordId: record.id,
+            filePath: file.path,
+            mimeType: file.mimetype,
+            recordType,
+            testDate: testDate ?? null,
           });
-
-          const biomarkers = (structuredData.biomarkers as Array<{
-            name: string;
-            value: number;
-            unit: string;
-            labRefLow?: number;
-            labRefHigh?: number;
-            category?: string;
-          }>) || [];
-
-          // B6 — backfill records.testDate from extraction when not user-provided.
-          const extractedTestDate = typeof structuredData.testDate === "string" && structuredData.testDate.trim().length > 0
-            ? structuredData.testDate.trim()
-            : null;
-          if (extractedTestDate && !testDate) {
-            try {
-              await db.update(recordsTable).set({ testDate: extractedTestDate }).where(eq(recordsTable.id, record.id));
-            } catch (err) {
-              logger.warn({ recordId: record.id, extractedTestDate, err }, "Failed to backfill records.testDate");
-            }
-          }
-
-          if (biomarkers.length > 0) {
-            const refData = await db.select().from(biomarkerReferenceTable);
-            const refMap = new Map(refData.map(r => [r.biomarkerName.toLowerCase(), r]));
-
-            for (const bm of biomarkers) {
-              const ref = refMap.get(bm.name.toLowerCase());
-              await db.insert(biomarkerResultsTable).values({
-                patientId,
-                recordId: record.id,
-                biomarkerName: bm.name,
-                category: bm.category || ref?.category || null,
-                value: bm.value ? bm.value.toString() : null,
-                unit: bm.unit || ref?.unit || null,
-                labReferenceLow: bm.labRefLow ? bm.labRefLow.toString() : null,
-                labReferenceHigh: bm.labRefHigh ? bm.labRefHigh.toString() : null,
-                optimalRangeLow: ref?.optimalRangeLow ? ref.optimalRangeLow.toString() : null,
-                optimalRangeHigh: ref?.optimalRangeHigh ? ref.optimalRangeHigh.toString() : null,
-                testDate: (structuredData.testDate as string) || testDate || null,
-              });
-            }
-          } else if (recordTypeRequiresBiomarkers(recordType)) {
-            extractionFailed = true;
-            extractionErrorMessage = "Extraction returned no biomarkers";
-          }
-        } catch (extractErr) {
-          extractionFailed = true;
-          extractionErrorMessage = (extractErr as Error)?.message || "Extraction failed";
-          // PHI safety: log only the .message (parseJSONFromLLM redacts response snippets).
-          logger.error(
-            { recordId: record.id, recordType, message: extractionErrorMessage },
-            "Extraction failed",
-          );
-        }
-
-        // Skip the 3-lens pipeline entirely if extraction failed —
-        // running lenses on empty data wastes ~30s of LLM calls and
-        // produces a misleading "DATA EXTRACTION FAILURE" alert that
-        // pollutes the dashboard. Surface the failure to the UI instead.
-        if (extractionFailed) {
+        } catch (err) {
+          logger.error({ err, recordId: record.id }, "Single-upload processing task failed");
           await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
-          logger.warn(
-            { recordId: record.id, reason: extractionErrorMessage },
-            "Marking record as error — skipping 3-lens analysis",
-          );
-          return;
         }
-
-        await runInterpretationPipeline(patientId, record.id, structuredData);
-      } catch (bgErr) {
-        logger.error({ bgErr }, "Background processing failed");
-        await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
-      }
+      });
     });
   } catch (err) {
     req.log.error({ err }, "Failed to upload record");

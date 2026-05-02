@@ -199,6 +199,13 @@ TEMPORAL CORRELATION CHALLENGE:
 
 When an abnormal result is flagged without checking whether a recent procedure could explain it, challenge the interpretation. Ask: "Was there a CT with contrast, surgery, steroid use, or acute illness in the 8 weeks before this blood draw? If so, is this abnormality transient or chronic?" If the temporalContext block contains nearby procedures, the burden of proof shifts to ruling them out before invoking a chronic-disease explanation.
 
+HARD PROHIBITIONS — these override any conventional reading:
+- DO NOT attribute thyroid abnormalities (elevated TSH, suppressed T3/T4, abnormal thyroid antibodies) to autoimmune thyroid disease, Hashimoto's, or Graves' when iodinated CT/angiography contrast was administered within 8 weeks of the blood draw, unless there is strong contradictory evidence (e.g. pre-contrast antibody positivity, classic ultrasound findings). The iodine load from a single contrast study is enough to suppress thyroid hormone synthesis and drive a compensatory TSH spike for 4-8 weeks. Calling this autoimmune leads to unnecessary lifelong levothyroxine.
+- DO NOT attribute transient liver enzyme elevation to chronic liver disease when surgery / general anaesthesia occurred within 4 weeks.
+- DO NOT attribute ferritin elevation to iron overload when blood transfusion or any acute illness occurred within 8 weeks (acute-phase reactant).
+- DO NOT attribute hyperglycaemia or HPA-axis findings to chronic disease when steroid administration occurred within 8 weeks.
+In every such case, the correct contrarian read is "transient procedure-induced finding — recommend repeat in 6-8 weeks before considering chronic-disease workup."
+
 METABOLOMIC CONTRARIAN PERSPECTIVE:
 
 When OAT data is present, specifically challenge:
