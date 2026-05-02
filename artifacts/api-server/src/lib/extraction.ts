@@ -644,6 +644,14 @@ If BLOOD PANEL, return the standard blood panel format with documentType "blood_
 
 If any other type, use your best judgement for structured extraction and set documentType to a descriptive slug.
 
+IMPORTANT FALLBACK RULES (apply when classification feels uncertain):
+1. NEVER return an empty object. If you can read ANY structured data — names, dates, numbers, dosages — extract it. Empty extractions are a hard failure for the patient; partial extractions with low confidence are recoverable.
+2. If the document contains ANY list of substances with dosages (vitamins, minerals, herbs, medicinal plant extracts, branded supplement names, nutraceuticals), classify it as "supplement_stack" regardless of formatting — table, bullet list, paragraph, time-period columns, branded health-coach plan, anything.
+3. If the document contains ANY numerical lab values with units and/or reference ranges, classify it as "blood_panel" regardless of language (Arabic, Spanish, Mandarin, …) and regardless of layout (single row, single cell, full report, cropped screenshot).
+4. A single-row or few-row table with biomarker name + value + unit IS a blood panel — extract the values into the standard biomarkers array. Even one biomarker (e.g. just CA 19-9) is valid, useful data — extract it.
+5. NEVER return {"documentType": "unknown"} or an empty biomarkers / supplements / medications array if there is readable structured data in the document. Extract what you can and set per-field confidence low for uncertain values.
+6. If the document mixes types (e.g. clinical letter that lists both biomarkers AND supplements), pick the dominant type by content volume and put the secondary content in keyFindings as descriptive strings.
+
 Anonymise: [PATIENT] for name, [FACILITY] for lab/clinic, [PHYSICIAN] for doctor.
 Return ONLY valid JSON. No markdown, no preamble.`;
   }

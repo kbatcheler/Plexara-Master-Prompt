@@ -44,6 +44,7 @@ import {
   publicInvitationsRouter,
 } from "./invitations";
 import lookupRouter from "./lookup";
+import patientSummaryRouter from "./patient-summary";
 import { logger } from "../lib/logger";
 
 /**
@@ -102,6 +103,8 @@ router.use("/patients/:patientId/notes", notesRouter);
 router.use("/patients/:patientId/alert-preferences", alertPrefsRouter);
 router.use("/patients/:patientId/chat", chatRouter);
 router.use("/patients/:patientId/journal", journalRouter);
+// Auditability Fix 2a — patient data summary ("My Data" backing endpoint).
+router.use("/patients/:patientId/summary", patientSummaryRouter);
 
 // Predictive trajectories — gated on ENABLE_PREDICTIVE_TRAJECTORIES.
 // When disabled, the route table simply doesn't include the predictions

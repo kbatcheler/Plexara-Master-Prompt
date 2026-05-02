@@ -160,6 +160,114 @@ router.post("/reprocess-stuck", requireAuth, async (req, res): Promise<void> => 
   }
 });
 
+/**
+ * Auditability Fix 2c — Retry an errored record.
+ *
+ * Thin wrapper over the existing `/reanalyze` logic, scoped specifically
+ * to records currently in `error` status. Powers the "Retry" button on
+ * the My Data page (Fix 2b). Distinguished from `/reanalyze` because:
+ *   - `/reanalyze` reprocesses ANY record (including completed ones, e.g.
+ *     after a prompt change) and is a clinician/power-user surface.
+ *   - `/:recordId/retry` is the patient-facing "this failed, try again"
+ *     button — it 409s on records that aren't in error so the UI never
+ *     accidentally re-runs a successful extraction.
+ *
+ * Sets status back to `pending` and dispatches via the per-patient
+ * concurrency limiter so a click-storm on retry doesn't fan out into
+ * unbounded LLM calls.
+ */
+router.post("/:recordId/retry", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = req as AuthenticatedRequest;
+  const patientId = parseInt(req.params.patientId as string, 10);
+  const recordId = parseInt(req.params.recordId as string, 10);
+
+  if (!Number.isFinite(patientId) || !Number.isFinite(recordId)) {
+    res.status(400).json({ error: "Invalid patientId or recordId" });
+    return;
+  }
+  if (!(await verifyPatientAccess(patientId, userId))) {
+    res.status(404).json({ error: "Patient not found" });
+    return;
+  }
+
+  try {
+    const [record] = await db
+      .select()
+      .from(recordsTable)
+      .where(and(eq(recordsTable.id, recordId), eq(recordsTable.patientId, patientId)));
+
+    if (!record) {
+      res.status(404).json({ error: "Record not found" });
+      return;
+    }
+    if (record.status !== "error") {
+      res.status(409).json({
+        error: "Only records in error status can be retried",
+        currentStatus: record.status,
+      });
+      return;
+    }
+
+    // Flip to pending immediately so the UI shows "Processing" while
+    // the background work runs. The same advisory-locked transactional
+    // import path used by first-time uploads handles re-runs idempotently
+    // (supplement_stack rows are tagged with [src:rec=<id>] and replaced).
+    await db
+      .update(recordsTable)
+      .set({ status: "pending" })
+      .where(eq(recordsTable.id, recordId));
+
+    if (!record.filePath) {
+      // No file to re-extract from — surface clearly rather than leaving
+      // the record stuck in pending forever.
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+      res.status(409).json({
+        error: "Original file is no longer available — please re-upload the document.",
+      });
+      return;
+    }
+    try {
+      assertWithinUploads(record.filePath);
+      if (!fs.existsSync(record.filePath)) {
+        await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        res.status(409).json({
+          error: "Original file is no longer available — please re-upload the document.",
+        });
+        return;
+      }
+    } catch {
+      await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+      res.status(409).json({ error: "Stored file path is invalid — please re-upload." });
+      return;
+    }
+
+    const mimeType = inferMimeFromFileName(record.fileName);
+    const limiter = getPatientLimiter(patientId);
+    setImmediate(() => {
+      limiter(async () => {
+        try {
+          await processUploadedDocument({
+            patientId,
+            recordId,
+            filePath: record.filePath!,
+            mimeType,
+            recordType: record.recordType,
+            testDate: record.testDate,
+          });
+        } catch (err) {
+          logger.error({ err, recordId }, "Retry extraction failed");
+          await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        }
+      }).catch(() => undefined);
+    });
+
+    res.status(202).json({ message: "Retrying extraction", recordId, patientId });
+  } catch (err) {
+    req.log.error({ err, recordId }, "Failed to trigger retry");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void> => {
   const { userId } = req as AuthenticatedRequest;
   const patientId = parseInt((req.params.patientId as string));

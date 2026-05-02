@@ -32,6 +32,7 @@ const NAV: NavGroup[] = [
   { label: "Journal", href: "/journal", icon: BookOpen },
   {
     label: "My data", icon: FileText, items: [
+      { label: "Overview",       href: "/my-data",   hint: "Everything Plexara knows about you" },
       { label: "Upload records", href: "/records",   hint: "Lab reports, scans, tests" },
       { label: "Timeline",       href: "/timeline",  hint: "Chronological history" },
       { label: "Wearables",      href: "/wearables", hint: "Apple Health, Oura, Fitbit" },

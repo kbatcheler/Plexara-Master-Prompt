@@ -165,6 +165,46 @@ export async function processUploadedDocument(opts: {
     if (!cachedExtraction) try {
       structuredData = await extractFromDocument(base64, mimeType, recordType);
 
+      // ── Auditability Fix 1a — Extraction audit log ───────────────────────
+      // Log what the LLM returned so we can debug extraction failures from
+      // the production log stream alone, without re-uploading the document.
+      // This is the single most useful debug line in the entire pipeline:
+      // when a beta tester says "my supplement PDF didn't show up", this
+      // line tells us whether the LLM detected the document type correctly,
+      // whether it found the supplements at all, and whether confidence
+      // was high enough to trust the extraction. Logged BEFORE any
+      // downstream branching so even rows that get rejected later still
+      // appear in the audit trail.
+      {
+        const sd = structuredData as Record<string, unknown>;
+        const docType = (sd.documentType as string | undefined) || "unknown";
+        const biomarkerCount = Array.isArray(sd.biomarkers) ? sd.biomarkers.length : 0;
+        const supplementCount = Array.isArray(sd.supplements) ? sd.supplements.length : 0;
+        const medicationCount = Array.isArray(sd.medications) ? sd.medications.length : 0;
+        const keyFindingsCount = Array.isArray(sd.keyFindings) ? sd.keyFindings.length : 0;
+        const extractionConfidenceRaw = sd.extractionConfidence;
+        const extractionConfidence = (
+          extractionConfidenceRaw && typeof extractionConfidenceRaw === "object"
+            ? (extractionConfidenceRaw as { overall?: unknown }).overall
+            : null
+        ) ?? null;
+        logger.info(
+          {
+            recordId,
+            patientId,
+            recordType,
+            detectedDocumentType: docType,
+            biomarkerCount,
+            supplementCount,
+            medicationCount,
+            keyFindingsCount,
+            hasTestDate: typeof sd.testDate === "string" && sd.testDate.length > 0,
+            extractionConfidence,
+          },
+          "Extraction complete — document analysis summary",
+        );
+      }
+
       // Enhancement E4 — derive the legacy text bucket from the LLM-reported
       // numeric confidence so existing readers keep working, while the full
       // structured `extractionConfidence` block remains inside structuredJson.
@@ -295,6 +335,13 @@ export async function processUploadedDocument(opts: {
           },
         );
       } else if (recordTypeRequiresBiomarkers(recordType)) {
+        // Auditability Fix 3c — accept single-biomarker uploads. The check
+        // here is `biomarkers.length > 0` (above), NOT `>= N`. A cropped
+        // screenshot of a single tumour-marker row (e.g. just CA 19-9) is
+        // valid, useful data and must extract cleanly. Only ZERO biomarkers
+        // on a record explicitly declared as `blood_panel` is a failure.
+        // Other recordTypes (imaging, dexa, etc.) are exempt entirely via
+        // recordTypeRequiresBiomarkers and may legitimately return 0.
         extractionFailed = true;
         extractionFailureReason = "Extraction returned no biomarkers";
       }
@@ -467,9 +514,64 @@ export async function processUploadedDocument(opts: {
         } catch (err) {
           logger.warn({ err, recordId }, "supplement_stack import transaction failed — stack rows may not be persisted for this record");
         }
+        // ── Auditability Fix 1b — Stack import audit log ────────────────────
+        // Pair the LLM-returned counts (from Fix 1a above) with the actual
+        // INSERT counts so we can tell at a glance whether the LLM found
+        // 12 supplements but only 3 made it into the table (per-row insert
+        // failures, missing names, idempotency clashes etc.). Without this,
+        // a beta tester whose Care Plan stays empty has no way to tell
+        // whether the bug is in extraction, normalisation, or persistence.
         logger.info(
-          { patientId, recordId, suppInserted, medInserted },
-          "Populated supplements/medications from uploaded stack document",
+          {
+            patientId,
+            recordId,
+            supplementsInserted: suppInserted,
+            medicationsInserted: medInserted,
+            supplementsInDocument: supplements.length,
+            medicationsInDocument: medications.length,
+          },
+          "Supplement stack import complete",
+        );
+      }
+
+      // ── Auditability Fix 3b — Unknown documentType warning ───────────────
+      // The "other" smart-detection prompt asks the LLM to self-identify
+      // the document into one of a known set of types. If it returns a
+      // type we don't have a downstream processor for, the data silently
+      // drops on the floor — the record gets cached in extractedDataTable
+      // but never surfaces in supplementsTable, biomarker_results, or
+      // evidence_registry as the right kind of evidence. Logging a warning
+      // here means we'll see "we got documentType=fitness_assessment but
+      // have no handler" in the production logs the next morning, instead
+      // of waiting for a beta tester to ask "where did my upload go?".
+      // The known list mirrors the documentTypes the prompt asks for AND
+      // the records-processing/evidence-registry branches further down.
+      const KNOWN_DOCUMENT_TYPES = new Set([
+        "supplement_stack",
+        "clinical_letter",
+        "blood_panel",
+        "imaging",
+        "pharmacogenomics",
+        "pathology_report",
+        "cancer_screening",
+        "organic_acid_test",
+        "fatty_acid_profile",
+        "dexa_scan",
+      ]);
+      if (
+        typeof sd.documentType === "string" &&
+        sd.documentType.length > 0 &&
+        !KNOWN_DOCUMENT_TYPES.has(sd.documentType)
+      ) {
+        logger.warn(
+          {
+            recordId,
+            patientId,
+            recordType,
+            detectedDocumentType: sd.documentType,
+            structuredDataKeys: Object.keys(sd).join(", "),
+          },
+          "Unknown documentType from extraction — data may not be processed by any downstream handler",
         );
       }
     }
