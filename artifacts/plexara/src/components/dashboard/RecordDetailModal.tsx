@@ -8,15 +8,17 @@ import {
 } from "@workspace/api-client-react";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerBody } from "@/components/ui/drawer";
 import { useMode } from "../../context/ModeContext";
-import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw, Pencil, Check, X } from "lucide-react";
+import { Loader2, Activity, Brain, Beaker, ShieldAlert, Cpu, AlertTriangle, RotateCw, Pencil, Check, X, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { AskAboutThis } from "../AskAboutThis";
 import { BiomarkerName } from "../biomarker/BiomarkerExplainPopover";
+import { ExtractionSummaryBlock, type ExtractionSummary } from "./ExtractionSummaryBlock";
+import { api } from "../../lib/api";
 
 // Enhancement E4 — extractionConfidence shape produced by the LLM. Lives
 // inside the encrypted structuredJson; we type it just enough to render
@@ -62,6 +64,40 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
 
   const reanalyze = useReanalyzeRecord();
   const patchBiomarker = usePatchBiomarkerResult();
+  // Verification spec (Fix 1c) — "Retry with different type" UX. We pop a
+  // small inline picker, the user chooses the corrected type, and we
+  // POST it to the existing /retry endpoint (extended in Fix 2b to
+  // accept a recordType body). The endpoint resets the cached
+  // extraction + reextract guard, so this triggers a true fresh run
+  // against the user-chosen prompt.
+  const [retryTypeOpen, setRetryTypeOpen] = useState(false);
+  const retryWithType = useMutation({
+    mutationFn: async (recordType: string) => {
+      if (!recordId) throw new Error("No record selected");
+      return api(`/patients/${patientId}/records/${recordId}/retry`, {
+        method: "POST",
+        body: JSON.stringify({ recordType }),
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    onSuccess: () => {
+      toast({
+        title: "Retry queued",
+        description: "We'll re-extract this document with the corrected type.",
+      });
+      setRetryTypeOpen(false);
+      if (recordId) {
+        queryClient.invalidateQueries({ queryKey: getGetRecordQueryKey(patientId, recordId) });
+      }
+      queryClient.invalidateQueries({ queryKey: getListRecordsQueryKey(patientId) });
+    },
+    onError: (err: unknown) => {
+      const detail = (err as { detail?: { error?: string }; message?: string }).detail?.error
+        ?? (err as Error).message
+        ?? "Could not start retry.";
+      toast({ title: "Retry failed", description: detail, variant: "destructive" });
+    },
+  });
   // Enhancement E4 — inline edit state. Only one row is editable at a time;
   // the input mirrors the current value as a string so the user can backspace
   // freely without React fighting the cursor.
@@ -179,17 +215,26 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
                 </div>
                 <h3 className="text-lg font-medium text-foreground">Analysis failed</h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  Something went wrong while analyzing this record. This usually means the document was hard to read or one of the AI lenses returned an error. You can re-run the analysis below.
+                  Something went wrong while analyzing this record. This usually means the document was hard to read or one of the AI lenses returned an error. You can re-run the analysis below, or retry with a different document type if the type Plexara picked was wrong.
                 </p>
-                <Button
-                  onClick={handleRetry}
-                  disabled={reanalyze.isPending}
-                  className="gap-2"
-                  data-testid="button-retry-record-modal"
-                >
-                  {reanalyze.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCw className="w-4 h-4" />}
-                  Retry analysis
-                </Button>
+                <div className="flex flex-wrap items-center gap-2 justify-center">
+                  <Button
+                    onClick={handleRetry}
+                    disabled={reanalyze.isPending}
+                    className="gap-2"
+                    data-testid="button-retry-record-modal"
+                  >
+                    {reanalyze.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCw className="w-4 h-4" />}
+                    Retry analysis
+                  </Button>
+                  <RetryWithTypePicker
+                    isOpen={retryTypeOpen}
+                    onToggle={() => setRetryTypeOpen((o) => !o)}
+                    busy={retryWithType.isPending}
+                    onPick={(type) => retryWithType.mutate(type)}
+                    currentType={record.recordType}
+                  />
+                </div>
               </div>
             ) : record.status === "consent_blocked" ? (
               <div className="flex flex-col items-center text-center py-12 px-6 space-y-3 max-w-md mx-auto">
@@ -211,6 +256,32 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
               </div>
             ) : (
               <div className="space-y-8">
+                {/* Verification spec (Fix 1c + 2b) — "what did we actually
+                    capture" block at the top of the modal. Renders the
+                    reclassification banner (Fix 2b) when applicable, plus
+                    a "Retry with different type" affordance so the user
+                    can self-correct the upload type even on completed
+                    records. */}
+                {(() => {
+                  const summary = (record as unknown as { extractionSummary?: ExtractionSummary | null }).extractionSummary;
+                  if (!summary) return null;
+                  return (
+                    <div className="space-y-3">
+                      <ExtractionSummaryBlock summary={summary} variant="modal" />
+                      <div className="flex items-center justify-end">
+                        <RetryWithTypePicker
+                          isOpen={retryTypeOpen}
+                          onToggle={() => setRetryTypeOpen((o) => !o)}
+                          busy={retryWithType.isPending}
+                          onPick={(type) => retryWithType.mutate(type)}
+                          currentType={record.recordType}
+                          subtle
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Three-lens synthesis with tabbed view */}
                 <div className="space-y-4">
                   <h3 className="text-base font-heading font-semibold flex items-center gap-2">
@@ -480,5 +551,79 @@ export function RecordDetailModal({ patientId, recordId, open, onOpenChange }: {
         </div>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+// Verification spec (Fix 1c) — small inline dropdown for "Retry with a
+// different document type". Lives next to the modal so it can be reused
+// from both the error-state CTA and the success-state header without
+// pulling in a heavyweight Popover component.
+function RetryWithTypePicker({
+  isOpen,
+  onToggle,
+  onPick,
+  busy,
+  currentType,
+  subtle = false,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  onPick: (type: string) => void;
+  busy: boolean;
+  currentType: string;
+  subtle?: boolean;
+}) {
+  const TYPES: Array<{ value: string; label: string }> = [
+    { value: "blood_panel", label: "Blood Panel" },
+    { value: "mri_report", label: "MRI Report" },
+    { value: "scan_report", label: "CT / Scan Report" },
+    { value: "ultrasound", label: "Ultrasound" },
+    { value: "pathology_report", label: "Pathology Report" },
+    { value: "dexa_scan", label: "DEXA Scan" },
+    { value: "cancer_screening", label: "Cancer Screening" },
+    { value: "pharmacogenomics", label: "Pharmacogenomics" },
+    { value: "genetic_test", label: "Genetic Test" },
+    { value: "epigenomics", label: "Epigenomics" },
+    { value: "wearable_data", label: "Wearable Data" },
+    { value: "specialized_panel", label: "Specialized Panel" },
+    { value: "organic_acid_test", label: "Organic Acid Test" },
+    { value: "fatty_acid_profile", label: "Fatty Acid Profile" },
+    { value: "other", label: "Other" },
+  ];
+  return (
+    <div className="relative inline-block">
+      <Button
+        type="button"
+        variant={subtle ? "ghost" : "outline"}
+        size={subtle ? "sm" : "default"}
+        onClick={onToggle}
+        disabled={busy}
+        className="gap-1.5"
+        data-testid="button-retry-with-type"
+      >
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+        Retry with different type
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </Button>
+      {isOpen && (
+        <div
+          className="absolute right-0 top-full mt-1 z-50 w-64 max-h-72 overflow-y-auto rounded-md border border-border bg-popover shadow-lg p-1"
+          data-testid="retry-type-picker"
+        >
+          {TYPES.filter((t) => t.value !== currentType).map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              onClick={() => onPick(t.value)}
+              disabled={busy}
+              className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-secondary text-foreground disabled:opacity-50"
+              data-testid={`retry-type-${t.value}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

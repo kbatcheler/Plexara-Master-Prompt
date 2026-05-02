@@ -22,6 +22,13 @@
       "when": 1777203058029,
       "tag": "0002_red_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778803200000,
+      "tag": "0003_verification_columns",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,9 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Database, FileText, Activity, Pill, Stethoscope, AlertCircle,
   CheckCircle2, Clock, RefreshCw, Trash2, FlaskConical, FileCheck,
+  TrendingUp, MinusCircle, Loader2, XCircle,
 } from "lucide-react";
+import type { ExtractionSummary } from "../components/dashboard/ExtractionSummaryBlock";
 
 /**
  * Auditability Fix 2b — "My Data" page.
@@ -40,6 +42,16 @@ type SummaryResponse = {
       testDate: string | null;
       status: string;
       uploadedAt: string;
+      // Verification spec (Fix 3a/3b) — these come from the patient
+      // summary route which now joins extractionSummary + computes a
+      // contributionStatus per row. Optional so older snapshots and
+      // records that pre-date the schema migration still render.
+      detectedType?: string | null;
+      extractionSummary?: ExtractionSummary | null;
+      contributionStatus?: {
+        status: "contributing" | "partial" | "not_contributing" | "processing" | "error";
+        reason: string;
+      } | null;
     }>;
   };
   biomarkers: {
@@ -121,6 +133,120 @@ function StatusBadge({ status }: { status: string }) {
       <Icon className="w-3 h-3" />
       {v.label}
     </span>
+  );
+}
+
+/**
+ * Verification spec (Fix 3a/3b) — one collapsible visual group inside the
+ * Records section. Renders nothing when the bucket is empty so the page
+ * stays clean for new accounts. Tone drives the accent strip + icon
+ * tint so the eye can scan groups in milliseconds without reading
+ * labels.
+ */
+function ContributionGroup({
+  kind,
+  icon: Icon,
+  title,
+  description,
+  records,
+  tone,
+  onRetry,
+  onDelete,
+  retryBusy,
+  deleteBusy,
+  hideRetry = false,
+}: {
+  kind: string;
+  icon: typeof CheckCircle2;
+  title: string;
+  description: string;
+  records: Array<{
+    id: number;
+    type: string;
+    fileName: string;
+    testDate: string | null;
+    status: string;
+    uploadedAt: string;
+    detectedType?: string | null;
+    contributionStatus?: { status: string; reason: string } | null;
+  }>;
+  tone: "success" | "warn" | "muted" | "info" | "error";
+  onRetry: (id: number) => void;
+  onDelete: (id: number, name: string) => void;
+  retryBusy: boolean;
+  deleteBusy: boolean;
+  hideRetry?: boolean;
+}) {
+  if (records.length === 0) return null;
+  const toneCls: Record<typeof tone, { stripe: string; icon: string; pill: string }> = {
+    success: { stripe: "border-l-emerald-500", icon: "text-emerald-600", pill: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300" },
+    warn: { stripe: "border-l-amber-500", icon: "text-amber-600", pill: "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300" },
+    muted: { stripe: "border-l-muted-foreground/40", icon: "text-muted-foreground", pill: "bg-secondary text-muted-foreground" },
+    info: { stripe: "border-l-blue-500", icon: "text-blue-600", pill: "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300" },
+    error: { stripe: "border-l-rose-500", icon: "text-rose-600", pill: "bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-300" },
+  };
+  const t = toneCls[tone];
+  return (
+    <div className={`pl-4 border-l-2 ${t.stripe}`} data-testid={`contribution-group-${kind}`}>
+      <div className="flex items-center gap-2 mb-1">
+        <Icon className={`w-4 h-4 ${t.icon} ${kind === "processing" ? "animate-spin" : ""}`} />
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        <span className={`ml-auto text-[11px] font-medium px-2 py-0.5 rounded-full ${t.pill}`}>
+          {records.length}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">{description}</p>
+      <div className="divide-y divide-border">
+        {records.map((r) => (
+          <div key={r.id} className="py-2.5 flex items-start gap-4" data-testid={`record-row-${r.id}`}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium text-sm text-foreground truncate">{r.fileName}</span>
+                <StatusBadge status={r.status} />
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {r.type}
+                {r.detectedType && r.detectedType !== r.type && (
+                  <span className="ml-1 text-amber-700 dark:text-amber-400">
+                    (detected as {r.detectedType.replace(/_/g, " ")})
+                  </span>
+                )}
+                {" · "}Test {formatDate(r.testDate)} · Uploaded {formatDate(r.uploadedAt)}
+              </div>
+              {r.contributionStatus?.reason && (
+                <div className="text-[11px] text-muted-foreground mt-0.5 italic">
+                  {r.contributionStatus.reason}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {!hideRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(r.id)}
+                  disabled={retryBusy}
+                  className="inline-flex items-center gap-1 px-2.5 h-8 rounded-md border border-border bg-card hover:bg-secondary text-xs font-medium text-foreground disabled:opacity-50"
+                  data-testid={`retry-record-${r.id}`}
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Retry
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onDelete(r.id, r.fileName)}
+                disabled={deleteBusy}
+                className="inline-flex items-center gap-1 px-2.5 h-8 rounded-md border border-border bg-card hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 text-xs font-medium text-muted-foreground disabled:opacity-50"
+                data-testid={`delete-record-${r.id}`}
+              >
+                <Trash2 className="w-3 h-3" />
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -208,6 +334,31 @@ export default function MyData() {
 
   const erroredRecords = data.records.list.filter((r) => r.status === "error");
 
+  // Verification spec (Fix 3a/3b) — group records by contributionStatus
+  // so the user can scan "what's actually feeding my health picture" vs
+  // "what's stuck or empty". We fall back to a synthesized status from
+  // the raw record.status when the server hasn't backfilled
+  // contributionStatus yet (older rows).
+  const groupedRecords = (() => {
+    const buckets: Record<string, typeof data.records.list> = {
+      contributing: [],
+      partial: [],
+      not_contributing: [],
+      processing: [],
+      error: [],
+    };
+    for (const r of data.records.list) {
+      const status = r.contributionStatus?.status
+        ?? (r.status === "error" || r.status === "consent_blocked"
+              ? "error"
+              : r.status === "processing" || r.status === "pending"
+                ? "processing"
+                : "not_contributing");
+      (buckets[status] ?? buckets.not_contributing).push(r);
+    }
+    return buckets;
+  })();
+
   return (
     <div className="space-y-8" data-testid="my-data-page">
       {/* ── Hero ───────────────────────────────────────────────────────── */}
@@ -257,59 +408,96 @@ export default function MyData() {
         </dl>
       </section>
 
-      {/* ── Records ────────────────────────────────────────────────────── */}
+      {/* ── Records ──
+          Verification spec (Fix 3a/3b) — grouped by contribution status
+          so the user immediately sees which uploads are actually feeding
+          their health intelligence vs which ones landed silently. Each
+          group renders the same inline action set (Retry / Delete) so
+          users can self-correct without leaving the page. */}
       <section className="rounded-lg border border-border bg-card p-6">
         <SectionHeader
           icon={FileText}
           title="Records"
           total={data.records.total}
-          subtitle={`${data.records.byStatus.complete} complete · ${data.records.byStatus.processing} processing · ${data.records.byStatus.error} error`}
+          subtitle={`${groupedRecords.contributing.length} contributing · ${groupedRecords.partial.length} partial · ${groupedRecords.not_contributing.length} not contributing · ${groupedRecords.processing.length} processing · ${groupedRecords.error.length} error`}
         />
         {data.records.list.length === 0 ? (
           <p className="text-sm text-muted-foreground italic">No records uploaded yet.</p>
         ) : (
-          <div className="divide-y divide-border">
-            {data.records.list.map((r) => (
-              <div key={r.id} className="py-3 flex items-center gap-4" data-testid={`record-row-${r.id}`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm text-foreground truncate">{r.fileName}</span>
-                    <StatusBadge status={r.status} />
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-0.5">
-                    {r.type} · Test date {formatDate(r.testDate)} · Uploaded {formatDate(r.uploadedAt)}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {r.status === "error" && (
-                    <button
-                      type="button"
-                      onClick={() => retryMutation.mutate(r.id)}
-                      disabled={retryMutation.isPending}
-                      className="inline-flex items-center gap-1 px-2.5 h-8 rounded-md border border-border bg-card hover:bg-secondary text-xs font-medium text-foreground disabled:opacity-50"
-                      data-testid={`retry-record-${r.id}`}
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Retry
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm(`Delete record "${r.fileName}"? This removes the file and all extracted biomarkers.`)) {
-                        deleteMutation.mutate(r.id);
-                      }
-                    }}
-                    disabled={deleteMutation.isPending}
-                    className="inline-flex items-center gap-1 px-2.5 h-8 rounded-md border border-border bg-card hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 text-xs font-medium text-muted-foreground disabled:opacity-50"
-                    data-testid={`delete-record-${r.id}`}
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="space-y-6">
+            <ContributionGroup
+              kind="contributing"
+              icon={TrendingUp}
+              title="Contributing to your health picture"
+              description="These records are actively feeding gauges, alerts, and reports."
+              records={groupedRecords.contributing}
+              tone="success"
+              onRetry={(id) => retryMutation.mutate(id)}
+              onDelete={(id, name) => {
+                if (confirm(`Delete record "${name}"? This removes the file and all extracted biomarkers.`)) {
+                  deleteMutation.mutate(id);
+                }
+              }}
+              retryBusy={retryMutation.isPending}
+              deleteBusy={deleteMutation.isPending}
+            />
+            <ContributionGroup
+              kind="partial"
+              icon={AlertCircle}
+              title="Partially contributing"
+              description="We extracted some data but confidence was low — review and consider retrying with a different document type."
+              records={groupedRecords.partial}
+              tone="warn"
+              onRetry={(id) => retryMutation.mutate(id)}
+              onDelete={(id, name) => {
+                if (confirm(`Delete record "${name}"?`)) deleteMutation.mutate(id);
+              }}
+              retryBusy={retryMutation.isPending}
+              deleteBusy={deleteMutation.isPending}
+            />
+            <ContributionGroup
+              kind="not_contributing"
+              icon={MinusCircle}
+              title="Not contributing yet"
+              description="These records were processed but no structured data made it through. Try again or pick a different type."
+              records={groupedRecords.not_contributing}
+              tone="muted"
+              onRetry={(id) => retryMutation.mutate(id)}
+              onDelete={(id, name) => {
+                if (confirm(`Delete record "${name}"?`)) deleteMutation.mutate(id);
+              }}
+              retryBusy={retryMutation.isPending}
+              deleteBusy={deleteMutation.isPending}
+            />
+            <ContributionGroup
+              kind="processing"
+              icon={Loader2}
+              title="Still processing"
+              description="The three lenses are still analysing — this page auto-refreshes."
+              records={groupedRecords.processing}
+              tone="info"
+              onRetry={(id) => retryMutation.mutate(id)}
+              onDelete={(id, name) => {
+                if (confirm(`Delete record "${name}"?`)) deleteMutation.mutate(id);
+              }}
+              retryBusy={retryMutation.isPending}
+              deleteBusy={deleteMutation.isPending}
+              hideRetry
+            />
+            <ContributionGroup
+              kind="error"
+              icon={XCircle}
+              title="Errors needing attention"
+              description="These uploads failed to process. Retry or delete to clean up."
+              records={groupedRecords.error}
+              tone="error"
+              onRetry={(id) => retryMutation.mutate(id)}
+              onDelete={(id, name) => {
+                if (confirm(`Delete record "${name}"?`)) deleteMutation.mutate(id);
+              }}
+              retryBusy={retryMutation.isPending}
+              deleteBusy={deleteMutation.isPending}
+            />
           </div>
         )}
       </section>

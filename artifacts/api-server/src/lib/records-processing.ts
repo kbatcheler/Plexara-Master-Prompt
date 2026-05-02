@@ -253,6 +253,166 @@ export async function processUploadedDocument(opts: {
         );
       }
 
+      // ── Fix 2a — Auto-correct misclassified record types (single-shot)
+      // If the LLM detected a different document type than what the user
+      // chose at upload time, re-extract once with the corrected prompt
+      // so downstream code sees biomarker/supplement/imaging fields that
+      // match the actual document. Recursion is fenced by the
+      // records.reextracted boolean: we set it to true BEFORE the second
+      // extraction so a crash mid-re-extract still bars infinite loops.
+      // Skip when the user explicitly chose "other" (smart detection
+      // already ran and the prompt is generic) or when there's no sensible
+      // mapping for the detected type.
+      const TYPE_CORRECTION_MAP: Record<string, string> = {
+        imaging: "mri_report",
+        blood_panel: "blood_panel",
+        pharmacogenomics: "pharmacogenomics",
+        supplement_stack: "other",
+        clinical_letter: "other",
+        pathology_report: "pathology_report",
+        organic_acid_test: "organic_acid_test",
+        fatty_acid_profile: "fatty_acid_profile",
+        dexa_scan: "dexa_scan",
+        cancer_screening: "cancer_screening",
+      };
+      let activeRecordType = recordType;
+      {
+        const sd = structuredData as Record<string, unknown>;
+        const detectedDocType = typeof sd.documentType === "string" ? sd.documentType : null;
+        const mappedType = detectedDocType ? TYPE_CORRECTION_MAP[detectedDocType] : null;
+
+        // Recursion guard — read fresh so the boolean reflects any value
+        // a prior retry/reanalyze pass may have set.
+        const reextractRows = await db
+          .select({ reextracted: recordsTable.reextracted })
+          .from(recordsTable)
+          .where(eq(recordsTable.id, recordId));
+        const alreadyReextracted = reextractRows[0]?.reextracted ?? false;
+
+        const shouldReextract =
+          !alreadyReextracted &&
+          detectedDocType !== null &&
+          detectedDocType !== recordType &&
+          recordType !== "other" &&
+          mappedType !== null &&
+          mappedType !== recordType;
+
+        if (shouldReextract && mappedType) {
+          logger.warn(
+            {
+              recordId,
+              patientId,
+              userSelectedType: recordType,
+              detectedDocType,
+              correctedType: mappedType,
+            },
+            "Record type mismatch — re-extracting once with corrected prompt",
+          );
+          // Persist correction + recursion guard FIRST so a crash mid-
+          // re-extract leaves us in a self-consistent state.
+          await db
+            .update(recordsTable)
+            .set({ recordType: mappedType, detectedType: detectedDocType, reextracted: true })
+            .where(eq(recordsTable.id, recordId));
+
+          try {
+            const reExtracted = await extractFromDocument(base64, mimeType, mappedType);
+            // Reject a second-pass extractionError payload — keep the
+            // original structuredData so the rest of the pipeline still
+            // has something to chew on.
+            if (
+              reExtracted &&
+              (reExtracted as Record<string, unknown>).extractionError !== true &&
+              Object.keys(reExtracted as Record<string, unknown>).length > 0
+            ) {
+              structuredData = reExtracted;
+              activeRecordType = mappedType;
+              logger.info(
+                { recordId, patientId, mappedType },
+                "Re-extraction with corrected prompt succeeded",
+              );
+            } else {
+              logger.warn(
+                { recordId, patientId, mappedType },
+                "Re-extraction returned extractionError or empty payload — keeping original",
+              );
+            }
+          } catch (reErr) {
+            logger.warn(
+              { err: reErr, recordId, patientId, mappedType },
+              "Re-extraction threw — keeping original payload",
+            );
+          }
+        }
+      }
+
+      // ── Fix 1a — Compute + persist post-extraction verification summary
+      // Stored on the record row (non-PHI) so UploadZone, RecordDetailModal
+      // and MyData can render "what did Plexara actually capture?" without
+      // re-decrypting the structured payload. We compute it AFTER the
+      // potential re-extract above so the summary reflects the final
+      // accepted extraction, not the misclassified first attempt.
+      {
+        const sd = structuredData as Record<string, unknown>;
+        const detectedType = (sd.documentType as string | undefined) || activeRecordType;
+        const biomarkerCount = Array.isArray(sd.biomarkers) ? sd.biomarkers.length : 0;
+        const supplementCount = Array.isArray(sd.supplements) ? sd.supplements.length : 0;
+        const medicationCount = Array.isArray(sd.medications) ? sd.medications.length : 0;
+        const keyFindingsAll: string[] = Array.isArray(sd.keyFindings)
+          ? (sd.keyFindings as unknown[]).filter((s): s is string => typeof s === "string")
+          : [];
+        const extractionConfidenceRaw = sd.extractionConfidence;
+        const overallRaw = extractionConfidenceRaw && typeof extractionConfidenceRaw === "object"
+          ? (extractionConfidenceRaw as { overall?: unknown }).overall
+          : null;
+        const confidence = typeof overallRaw === "number" && Number.isFinite(overallRaw) ? overallRaw : null;
+
+        // typeMatch: did what the user picked match what the LLM saw?
+        // - exact match → match
+        // - user picked "other" and LLM gave a concrete type → match
+        //   (smart-detection produced a useful classification)
+        // Anything else (incl. auto-corrected reclassifications) is a
+        // mismatch; the `reclassified` flag below explains why.
+        const typeMatch =
+          detectedType === recordType ||
+          (recordType === "other" && detectedType !== "other");
+
+        const extractionSummary = {
+          biomarkerCount,
+          supplementCount,
+          medicationCount,
+          keyFindingsCount: keyFindingsAll.length,
+          keyFindings: keyFindingsAll.slice(0, 5),
+          confidence,
+          detectedType,
+          userSelectedType: recordType,
+          typeMatch,
+          reclassified: activeRecordType !== recordType,
+        };
+
+        await db
+          .update(recordsTable)
+          .set({ detectedType, extractionSummary })
+          .where(eq(recordsTable.id, recordId));
+
+        logger.info(
+          {
+            recordId,
+            patientId,
+            userSelectedType: recordType,
+            detectedType,
+            biomarkerCount,
+            supplementCount,
+            medicationCount,
+            keyFindingsCount: keyFindingsAll.length,
+            confidence,
+            typeMatch,
+            reclassified: extractionSummary.reclassified,
+          },
+          "Extraction verification summary",
+        );
+      }
+
       // Enhancement E4 — derive the legacy text bucket from the LLM-reported
       // numeric confidence so existing readers keep working, while the full
       // structured `extractionConfidence` block remains inside structuredJson.
@@ -260,7 +420,11 @@ export async function processUploadedDocument(opts: {
       await db.insert(extractedDataTable).values({
         recordId,
         patientId,
-        dataType: (structuredData.documentType as string) || recordType,
+        // Verification spec (Fix 2a) — use the post-correction type so the
+        // cached extracted_data row matches the prompt that actually
+        // produced it. Otherwise a reanalyse from cache would dispatch
+        // against the original (wrong) document type.
+        dataType: (structuredData.documentType as string) || activeRecordType,
         structuredJson: encryptJson(structuredData) as object,
         extractionModel: "claude-sonnet-4-6",
         extractionConfidence: bucketConfidence(conf.overall),
@@ -382,7 +546,13 @@ export async function processUploadedDocument(opts: {
             throw err;
           },
         );
-      } else if (recordTypeRequiresBiomarkers(recordType)) {
+      } else if (recordTypeRequiresBiomarkers(activeRecordType)) {
+        // Verification spec (Fix 2a) — gate on the POST-correction type.
+        // If the user uploaded an MRI as `blood_panel` and the auto-
+        // correct mapped it to `mri_report`, an empty biomarkers array
+        // is the CORRECT outcome (imaging has no biomarkers) and must
+        // not flip the record to `error`. Using `recordType` here would
+        // re-introduce that bug.
         // Auditability Fix 3c — accept single-biomarker uploads. The check
         // here is `biomarkers.length > 0` (above), NOT `>= N`. A cropped
         // screenshot of a single tumour-marker row (e.g. just CA 19-9) is

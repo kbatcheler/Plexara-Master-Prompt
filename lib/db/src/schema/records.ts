@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { patientsTable } from "./patients";
@@ -18,6 +18,23 @@ export const recordsTable = pgTable("records", {
   // values rather than alert on them.
   drawTime: text("draw_time"),
   status: text("status").notNull().default("pending"),
+  // Verification spec (Fix 1a) — what the LLM actually saw vs. what the
+  // user picked at upload time. Stored explicitly so the dashboard can
+  // show "uploaded as X but detected as Y, reclassified" without re-
+  // decrypting structured payloads.
+  detectedType: text("detected_type"),
+  // Verification spec (Fix 1a) — denormalised post-extraction summary
+  // surfaced in UploadZone, RecordDetailModal and MyData. Schema:
+  //   { biomarkerCount, supplementCount, medicationCount,
+  //     keyFindings: string[] (top 5), confidence: number,
+  //     detectedType, userSelectedType, typeMatch }
+  // Stored as plain (non-PHI) jsonb so it can be queried/aggregated
+  // for the contribution-status helper without decrypt.
+  extractionSummary: jsonb("extraction_summary"),
+  // Auto-correct spec (Fix 2a) — recursion guard. Set to true after a
+  // single re-extract triggered by detected/userSelected type mismatch
+  // so we never loop on a misclassified document. Defaults to false.
+  reextracted: boolean("reextracted").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

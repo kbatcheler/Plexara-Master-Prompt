@@ -17,7 +17,7 @@ import { BiomarkerRatiosCard } from "../components/dashboard/BiomarkerRatiosCard
 import { SymptomLoggerCard } from "../components/dashboard/SymptomLoggerCard";
 import { EvidenceMap } from "../components/dashboard/EvidenceMap";
 import { AlertBanner, type AlertSeverity } from "../components/AlertBanner";
-import { ChevronRight, FileText, Activity, BookOpen, Upload, MessageSquare } from "lucide-react";
+import { ChevronRight, FileText, Activity, BookOpen, Upload, MessageSquare, BarChart3 } from "lucide-react";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { HelpHint } from "@/components/help/HelpHint";
+
+/**
+ * Verification spec (Fix 3c) — minimal subset of /patients/:id/summary
+ * we need to compute the data-completeness pill. Full type lives in
+ * MyData.tsx; we only consume contributionStatus here.
+ */
+type ContributionPillSummary = {
+  records: {
+    total: number;
+    list: Array<{
+      contributionStatus?: {
+        status: "contributing" | "partial" | "not_contributing" | "processing" | "error";
+        reason: string;
+      } | null;
+    }>;
+  };
+};
 
 export default function Dashboard() {
   const { patientId, isLoading: patientLoading } = useCurrentPatient();
@@ -43,6 +60,18 @@ export default function Dashboard() {
 
   const dismissAlert = useDismissAlert();
   const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
+
+  // Verification spec (Fix 3c) — small data-completeness summary used
+  // for the "X of Y records contributing" pill above the hero. Same
+  // endpoint MyData uses; keyed separately so cache invalidation in
+  // MyData propagates here. 30s refetch keeps the pill fresh after
+  // uploads without piling on requests.
+  const contributionSummary = useQuery<ContributionPillSummary>({
+    queryKey: ["my-data-summary", patientId],
+    queryFn: () => api<ContributionPillSummary>(`/patients/${patientId}/summary`),
+    enabled: !!patientId,
+    refetchInterval: 30_000,
+  });
 
   const baselineQuery = useQuery({
     queryKey: ["baseline", patientId],
@@ -109,8 +138,59 @@ export default function Dashboard() {
       }
     : null;
 
+  // Verification spec (Fix 3c) — derive contribution counts from the
+  // summary. We skip rendering the pill entirely when there are zero
+  // records (the "WelcomeFirstUpload" CTA already covers that surface)
+  // and when the API has not yet backfilled contributionStatus.
+  const contributionPill = (() => {
+    const summary = contributionSummary.data;
+    if (!summary || summary.records.total === 0) return null;
+    let contributing = 0;
+    let needsAttention = 0;
+    let scored = 0;
+    for (const r of summary.records.list) {
+      const status = r.contributionStatus?.status;
+      if (!status) continue;
+      scored += 1;
+      if (status === "contributing") contributing += 1;
+      else if (status === "error" || status === "not_contributing" || status === "partial") {
+        needsAttention += 1;
+      }
+    }
+    if (scored === 0) return null;
+    return { contributing, total: summary.records.total, needsAttention };
+  })();
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-6">
+      {/* Verification spec (Fix 3c) — Health-data completeness pill.
+          Sits above alerts so the user always knows whether what they
+          uploaded is actually feeding the picture below. Hidden when
+          there are no records or no scored records. */}
+      {contributionPill && (
+        <Link
+          to="/my-data"
+          className="block"
+          data-testid="dashboard-contribution-pill"
+        >
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-secondary/50 transition-colors px-4 py-2 text-xs">
+            <BarChart3 className="w-3.5 h-3.5 text-primary" />
+            <span className="text-foreground font-medium">
+              Health data: {contributionPill.contributing} of {contributionPill.total} record{contributionPill.total === 1 ? "" : "s"} contributing
+            </span>
+            {contributionPill.needsAttention > 0 && (
+              <span className="text-amber-600 dark:text-amber-400 font-medium">
+                · {contributionPill.needsAttention} need{contributionPill.needsAttention === 1 ? "s" : ""} attention
+              </span>
+            )}
+            <span className="text-muted-foreground inline-flex items-center gap-0.5">
+              View in My Data
+              <ChevronRight className="w-3 h-3" />
+            </span>
+          </div>
+        </Link>
+      )}
+
       {/* ── Alerts (proportionate, never panic-inducing) ── */}
       {alerts && alerts.length > 0 && (
         <div className="space-y-2" data-testid="alerts-list">

@@ -210,12 +210,55 @@ router.post("/:recordId/retry", requireAuth, async (req, res): Promise<void> => 
       res.status(404).json({ error: "Record not found" });
       return;
     }
-    if (record.status !== "error") {
+    // Verification spec (Fix 1c) — "Retry with different type" widens the
+    // retry surface beyond the strict-error case: when the user supplies
+    // an explicit `recordType` in the body, we accept the retry on ANY
+    // status, drop the cached extraction, reset the auto-correct guard,
+    // and run the pipeline against the user-chosen prompt. Without an
+    // explicit type override we keep the original behaviour (error-only)
+    // so a click-storm on stale UI can't re-run a successful record.
+    const requestedTypeRaw = (req.body as { recordType?: unknown } | undefined)?.recordType;
+    const requestedType =
+      typeof requestedTypeRaw === "string" && requestedTypeRaw.length > 0
+        ? requestedTypeRaw
+        : null;
+
+    if (record.status !== "error" && !requestedType) {
       res.status(409).json({
         error: "Only records in error status can be retried",
         currentStatus: record.status,
       });
       return;
+    }
+
+    // When the user is forcing a different type, wipe the prior cached
+    // extraction so processUploadedDocument runs a fresh OCR against the
+    // new prompt. We also reset the auto-correct guard so the new
+    // extraction can itself trigger a one-shot reclassification if the
+    // user picked the wrong type a second time.
+    //
+    // Verification spec (Fix 2b) — also delete prior biomarker_results
+    // for this record. Without this, switching from `blood_panel` →
+    // `mri_report` would leave stale biomarker rows behind that
+    // contaminate trend lines, ratios, and the orchestrator's view of
+    // the patient. The /retry surface promises a fresh second chance,
+    // so we honour that across every derived row.
+    if (requestedType && requestedType !== record.recordType) {
+      await db
+        .delete(biomarkerResultsTable)
+        .where(eq(biomarkerResultsTable.recordId, recordId));
+      await db
+        .delete(extractedDataTable)
+        .where(eq(extractedDataTable.recordId, recordId));
+      await db
+        .update(recordsTable)
+        .set({
+          recordType: requestedType,
+          reextracted: false,
+          detectedType: null,
+          extractionSummary: null,
+        })
+        .where(eq(recordsTable.id, recordId));
     }
 
     // Flip to pending immediately so the UI shows "Processing" while
@@ -226,6 +269,12 @@ router.post("/:recordId/retry", requireAuth, async (req, res): Promise<void> => 
       .update(recordsTable)
       .set({ status: "pending" })
       .where(eq(recordsTable.id, recordId));
+
+    // Use the freshly-set recordType (above) for the worker invocation
+    // when the user forced a type, otherwise fall back to whatever the
+    // record was created with. Re-read once we've mutated to avoid a
+    // stale-snapshot race.
+    const effectiveRecordType = requestedType ?? record.recordType;
 
     if (!record.filePath) {
       // No file to re-extract from — surface clearly rather than leaving
@@ -261,7 +310,7 @@ router.post("/:recordId/retry", requireAuth, async (req, res): Promise<void> => 
             recordId,
             filePath: record.filePath!,
             mimeType,
-            recordType: record.recordType,
+            recordType: effectiveRecordType,
             testDate: record.testDate,
           });
         } catch (err) {

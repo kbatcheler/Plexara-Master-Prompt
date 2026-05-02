@@ -13,6 +13,7 @@ import {
 import { eq, desc, sql } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
 import { verifyPatientAccess } from "../lib/patient-access";
+import { getContributionStatus, type ExtractionSummaryShape } from "../lib/contribution-status";
 
 /**
  * Auditability Fix 2a — Patient data summary endpoint.
@@ -65,6 +66,11 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
           testDate: recordsTable.testDate,
           status: recordsTable.status,
           createdAt: recordsTable.createdAt,
+          // Verification spec (Fix 3a) — surface so the "My Data"
+          // contribution-status grouping can tell the user whether each
+          // file is actively contributing to their analysis.
+          detectedType: recordsTable.detectedType,
+          extractionSummary: recordsTable.extractionSummary,
         })
         .from(recordsTable)
         .where(eq(recordsTable.patientId, patientId))
@@ -195,6 +201,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
           testDate: r.testDate,
           status: r.status,
           uploadedAt: r.createdAt,
+          // Verification spec (Fix 1a) — denormalised summary.
+          detectedType: r.detectedType,
+          extractionSummary: (r.extractionSummary ?? null) as ExtractionSummaryShape | null,
+          // Verification spec (Fix 3a) — derived contribution state for
+          // the My Data grouping (contributing / partial / not / processing
+          // / error). Computed on the server so the same logic powers the
+          // Dashboard pill (Fix 3c) without duplicating it client-side.
+          contributionStatus: getContributionStatus(r.status, r.extractionSummary),
         })),
       },
       biomarkers: {

@@ -6,6 +6,7 @@ import { useCurrentPatient } from "../../hooks/use-current-patient";
 import { api } from "../../lib/api";
 import { Link } from "wouter";
 import { ProcessingStages, type ProgressStages } from "./ProcessingStages";
+import { ExtractionSummaryBlock, type ExtractionSummary } from "./ExtractionSummaryBlock";
 
 type FileStatus = "uploading" | "pending" | "processing" | "complete" | "error" | "consent_blocked";
 
@@ -19,6 +20,13 @@ interface FileEntry {
   errorMessage?: string;
   /** Latest pipeline-stage flags from /records/:id/progress (per record). */
   stages?: ProgressStages;
+  /**
+   * Verification spec (Fix 1b) — fetched once when the entry flips to
+   * `complete`. Surfaces "we got X biomarkers and these top findings"
+   * inside the upload row so the user doesn't have to open the modal
+   * to confirm the extraction worked.
+   */
+  extractionSummary?: ExtractionSummary | null;
 }
 
 const PROGRESS_LABELS: Record<FileStatus, string> = {
@@ -165,6 +173,52 @@ export function UploadZone() {
       window.clearInterval(id);
     };
   }, [entries, currentPatientId, queryClient]);
+
+  /**
+   * Verification spec (Fix 1b) — once an entry flips to `complete`, fetch
+   * the record ONCE to read its `extractionSummary` so we can render
+   * what was actually captured. Kept in a separate effect so the polling
+   * loop above stays cheap (no unconditional record fetches), and so a
+   * one-shot fetch failure doesn't retry on every 2.5s tick.
+   */
+  useEffect(() => {
+    if (!currentPatientId) return;
+    const needsSummary = entries.filter(
+      (e) => e.status === "complete" && e.recordId !== null && e.extractionSummary === undefined,
+    );
+    if (needsSummary.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const fetched: Array<{ recordId: number; summary: ExtractionSummary | null }> = [];
+      await Promise.all(
+        needsSummary.map(async (e) => {
+          try {
+            const rec = await api<{ id: number; extractionSummary?: ExtractionSummary | null }>(
+              `/patients/${currentPatientId}/records/${e.recordId}`,
+            );
+            fetched.push({ recordId: e.recordId!, summary: rec.extractionSummary ?? null });
+          } catch {
+            // Mark as null so we stop retrying — UI just won't render
+            // the summary block for this row.
+            fetched.push({ recordId: e.recordId!, summary: null });
+          }
+        }),
+      );
+      if (cancelled || fetched.length === 0) return;
+      setEntries((prev) =>
+        prev.map((e) => {
+          if (e.recordId === null) return e;
+          const hit = fetched.find((f) => f.recordId === e.recordId);
+          return hit ? { ...e, extractionSummary: hit.summary } : e;
+        }),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [entries, currentPatientId]);
+
+  // (cleanup of the polling interval lives at the end of the polling effect above)
 
   /**
    * When all entries reach a terminal state AND at least one is `complete`,
@@ -455,6 +509,14 @@ export function UploadZone() {
                           reconciled: false,
                         }
                       }
+                    />
+                  )}
+                  {/* Verification spec (Fix 1b + 2b) — inline summary +
+                      reclassification banner once the analysis is done. */}
+                  {e.status === "complete" && e.extractionSummary && (
+                    <ExtractionSummaryBlock
+                      summary={e.extractionSummary}
+                      variant="inline"
                     />
                   )}
                 </li>

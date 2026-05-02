@@ -14,6 +14,7 @@ import {
   decryptStructuredJson,
 } from "../lib/phi-crypto";
 import { sanitiseUploadFilename } from "../lib/uploads";
+import { getContributionStatus } from "../lib/contribution-status";
 
 /**
  * Read-only sub-router — GET `/` (list) + GET `/:recordId` (detail).
@@ -42,7 +43,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     // Decode legacy form-urlencoded filenames (iOS Safari multipart quirk —
     // see sanitiseUploadFilename for details). New uploads are sanitised on
     // insert; this mapping covers existing rows without a data migration.
-    const sanitised = filtered.map(r => ({ ...r, fileName: sanitiseUploadFilename(r.fileName) }));
+    // We also attach the verification-spec contribution status (Fix 3a)
+    // so the frontend can render the "X of Y contributing" pill without
+    // a second roundtrip.
+    const sanitised = filtered.map(r => ({
+      ...r,
+      fileName: sanitiseUploadFilename(r.fileName),
+      contributionStatus: getContributionStatus(r.status, r.extractionSummary),
+    }));
     res.json(sanitised);
   } catch (err) {
     req.log.error({ err }, "Failed to list records");
@@ -100,6 +108,8 @@ router.get("/:recordId", requireAuth, async (req, res): Promise<void> => {
       lensCOutput: decryptedInterp?.lensCOutput || null,
       reconciledOutput: decryptedInterp?.reconciledOutput || null,
       biomarkerResults,
+      // Verification spec (Fix 3a) — same derivation as the list route.
+      contributionStatus: getContributionStatus(record.status, record.extractionSummary),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to get record");
