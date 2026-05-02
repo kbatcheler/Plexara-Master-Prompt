@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { useRoute } from "wouter";
 import { useCurrentPatient } from "../hooks/use-current-patient";
 import { api } from "../lib/api";
@@ -50,6 +50,126 @@ interface CrossPanelPattern {
   significance: PatternSig;
 }
 
+/* Deepened conditional sections (May 2026 — see
+   `attached_assets/plexara-deepened-report-sections_*.md`). Each is
+   OPTIONAL: the synthesist populates them only when the underlying
+   evidence type exists in the patient's record. We render only when
+   `included === true`. Shapes mirror `reports-ai.ts` exactly. */
+interface BodyCompositionSection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  metrics: Array<{ name: string; value: string; interpretation: string; flag: string }>;
+  recommendations: string[];
+}
+
+interface ImagingStudy {
+  modality: string;
+  date: string;
+  region: string;
+  keyFindings: string;
+  contrastUsed: boolean;
+  contrastType: string | null;
+  contrastImplications: string | null;
+}
+interface ImagingSummarySection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  studies: ImagingStudy[];
+  recommendations: string[];
+}
+
+interface CancerSurveillanceSection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  markers: Array<{ name: string; value: string; date: string; status: string; interpretation: string }>;
+  overallAssessment: string;
+  recommendations: string[];
+}
+
+interface PgxPhenotype {
+  gene: string;
+  phenotype: string;
+  activityScore: string | null;
+  clinicalImpact: string;
+}
+interface PgxDrugAlert {
+  drug: string;
+  severity: string;
+  gene: string;
+  recommendation: string;
+  source: string;
+}
+interface PharmacogenomicProfileSection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  keyPhenotypes: PgxPhenotype[];
+  drugAlerts: PgxDrugAlert[];
+  currentMedicationAssessment: string | null;
+  recommendations: string[];
+}
+
+interface WearableMetric {
+  name: string;
+  latest: string;
+  weeklyAverage: string | null;
+  trend: string;
+  interpretation: string;
+  flag: string;
+}
+interface WearableCorrelation {
+  wearable: string;
+  otherDataSource: string;
+  interpretation: string;
+  coherence: string;
+}
+interface WearablePhysiologySection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  metrics: WearableMetric[];
+  crossCorrelations: WearableCorrelation[];
+  recommendations: string[];
+}
+
+interface MetabolomicPathway {
+  name: string;
+  status: string;
+  keyMarkers: string;
+  interpretation: string;
+  cofactorDeficiencies: string | null;
+  interlacedFindings: string;
+}
+interface MetabolomicAssessmentSection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  pathways: MetabolomicPathway[];
+  gutBrainAxis: string | null;
+  recommendations: string[];
+}
+
+interface IntegratedKeyConnection {
+  dataTypes: string[];
+  finding: string;
+}
+interface IntegratedActionPlanItem {
+  priority: number;
+  action: string;
+  rationale: string;
+  timeframe: string;
+}
+interface IntegratedSummarySection {
+  included: boolean;
+  title: string;
+  narrative: string;
+  keyConnections: IntegratedKeyConnection[];
+  prioritisedActionPlan: IntegratedActionPlanItem[];
+}
+
 interface ComprehensiveReport {
   id: number;
   generatedAt: string;
@@ -67,6 +187,14 @@ interface ComprehensiveReport {
   recommendedNextSteps: string[];
   followUpTesting: string[];
   patient: { displayName: string; sex: string | null; ethnicity: string | null };
+  // Deepened conditional sections — all optional, render only when included.
+  bodyComposition?: BodyCompositionSection;
+  imagingSummary?: ImagingSummarySection;
+  cancerSurveillance?: CancerSurveillanceSection;
+  pharmacogenomicProfile?: PharmacogenomicProfileSection;
+  wearablePhysiology?: WearablePhysiologySection;
+  metabolomicAssessment?: MetabolomicAssessmentSection;
+  integratedSummary?: IntegratedSummarySection;
 }
 
 interface LegacyReport {
@@ -112,6 +240,63 @@ function flagChip(flag: BiomarkerFlag): string {
     case "normal": return "text-muted-foreground";
     default:       return "text-muted-foreground";
   }
+}
+
+/* Color map for the deepened-section flag/status strings (the AI emits
+   short tokens like "optimal" / "watch" / "elevated" / "low" / "borderline"
+   / "normal"). Anything unrecognised falls through to muted. */
+function deepFlagChip(flag: string | null | undefined): string {
+  const f = (flag ?? "").toLowerCase();
+  if (f === "urgent" || f === "elevated" || f === "high") return "text-red-600 dark:text-red-400 font-medium";
+  if (f === "watch" || f === "borderline" || f === "low") return "text-amber-600 dark:text-amber-400 font-medium";
+  if (f === "optimal" || f === "good") return "text-green-600 dark:text-green-400 font-medium";
+  return "text-muted-foreground";
+}
+
+/* Tiny shared shell used by every deepened conditional section. Title +
+   AINarrative-rendered narrative + optional structured children + an
+   optional Recommendations list at the bottom. Kept intentionally simple
+   so each section can drop in its own table / card grid as `children`. */
+function ConditionalSection({
+  title,
+  narrative,
+  recommendations,
+  children,
+  testId,
+}: {
+  title: string;
+  narrative: string;
+  recommendations?: string[];
+  children?: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <section
+      className="rounded-xl border border-border/60 p-5 print:break-inside-avoid"
+      data-testid={testId}
+    >
+      <h3 className="font-heading font-semibold text-lg mb-3 flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-primary" />
+        {title}
+      </h3>
+      {narrative && (
+        <div className="mb-4">
+          <AINarrative text={narrative} variant="serif" />
+        </div>
+      )}
+      {children}
+      {recommendations && recommendations.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
+            Recommendations
+          </p>
+          <ul className="list-disc pl-5 text-sm space-y-0.5">
+            {recommendations.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function ComprehensiveView({ report, onRegenerate, regenerating, patientId, retrySeconds }: {
@@ -271,26 +456,66 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId, retr
         <AINarrative text={report.clinicalNarrative} variant="clinical" />
       </section>
 
-      {report.crossPanelPatterns.length > 0 && (
-        <section>
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-3 font-semibold">Cross-panel patterns</h3>
-          <div className="space-y-3">
-            {report.crossPanelPatterns.map((p, i) => (
-              <div key={i} className={`rounded-lg border p-4 ${PATTERN_STYLES[p.significance] ?? "border-border"}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-medium">{p.title}</p>
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{p.significance}</span>
-                </div>
-                <p className="text-sm leading-relaxed">{p.description}</p>
-                {p.biomarkersInvolved && p.biomarkersInvolved.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    <strong>Markers:</strong> {p.biomarkersInvolved.join(", ")}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
+      {/* Integrated summary — big-picture cross-data synthesis. Sits
+          AFTER the executive/clinical narratives and BEFORE the body-system
+          breakdown so the reader gets the convergent insights first, then
+          dives into per-system detail. */}
+      {report.integratedSummary?.included && (
+        <ConditionalSection
+          title={report.integratedSummary.title}
+          narrative={report.integratedSummary.narrative}
+          testId="section-integrated-summary"
+        >
+          {report.integratedSummary.keyConnections.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                Key connections
+              </p>
+              <ul className="space-y-2">
+                {report.integratedSummary.keyConnections.map((kc, i) => (
+                  <li key={i} className="rounded-lg border border-border/60 p-3 text-sm">
+                    {kc.dataTypes.length > 0 && (
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        {kc.dataTypes.join(" · ")}
+                      </p>
+                    )}
+                    <p className="leading-relaxed">{kc.finding}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {report.integratedSummary.prioritisedActionPlan.length > 0 && (
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                Prioritised action plan
+              </p>
+              <ol className="space-y-2">
+                {[...report.integratedSummary.prioritisedActionPlan]
+                  .sort((a, b) => a.priority - b.priority)
+                  .map((a, i) => (
+                    <li
+                      key={i}
+                      className="rounded-lg border border-border/60 p-3 text-sm flex gap-3"
+                    >
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center">
+                        {a.priority}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-medium">{a.action}</p>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{a.rationale}</p>
+                        {a.timeframe && (
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
+                            Timeframe: {a.timeframe}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+              </ol>
+            </div>
+          )}
+        </ConditionalSection>
       )}
 
       <section>
@@ -355,6 +580,327 @@ function ComprehensiveView({ report, onRegenerate, regenerating, patientId, retr
           })}
         </div>
       </section>
+
+      {/* Deepened conditional sections — render in this order: body
+          composition, imaging, cancer surveillance, pharmacogenomics,
+          wearables, metabolomics. Each is gated on `included === true`
+          so reports without that data type skip the section entirely. */}
+      {report.bodyComposition?.included && (
+        <ConditionalSection
+          title={report.bodyComposition.title}
+          narrative={report.bodyComposition.narrative}
+          recommendations={report.bodyComposition.recommendations}
+          testId="section-body-composition"
+        >
+          {report.bodyComposition.metrics.length > 0 && (
+            <div className="overflow-x-auto mb-2">
+              <table className="w-full text-xs border border-border/40">
+                <thead className="bg-secondary/40">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-medium">Metric</th>
+                    <th className="text-left px-2 py-1 font-medium">Value</th>
+                    <th className="text-left px-2 py-1 font-medium">Interpretation</th>
+                    <th className="text-left px-2 py-1 font-medium">Flag</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.bodyComposition.metrics.map((m, i) => (
+                    <tr key={i} className="border-t border-border/40">
+                      <td className="px-2 py-1">{m.name}</td>
+                      <td className="px-2 py-1">{m.value || "—"}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{m.interpretation}</td>
+                      <td className={`px-2 py-1 capitalize ${deepFlagChip(m.flag)}`}>{m.flag || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {report.imagingSummary?.included && (
+        <ConditionalSection
+          title={report.imagingSummary.title}
+          narrative={report.imagingSummary.narrative}
+          recommendations={report.imagingSummary.recommendations}
+          testId="section-imaging-summary"
+        >
+          {report.imagingSummary.studies.length > 0 && (
+            <div className="space-y-3 mb-2">
+              {report.imagingSummary.studies.map((st, i) => (
+                <div key={i} className="rounded-lg border border-border/60 p-3 text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="font-medium">
+                      {st.modality}
+                      {st.region ? ` · ${st.region}` : ""}
+                    </p>
+                    {st.date && (
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{st.date}</span>
+                    )}
+                  </div>
+                  <p className="text-sm leading-relaxed">{st.keyFindings}</p>
+                  {st.contrastUsed && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      <strong>Contrast:</strong> {st.contrastType ?? "yes"}
+                      {st.contrastImplications ? ` — ${st.contrastImplications}` : ""}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {report.cancerSurveillance?.included && (
+        <ConditionalSection
+          title={report.cancerSurveillance.title}
+          narrative={report.cancerSurveillance.narrative}
+          recommendations={report.cancerSurveillance.recommendations}
+          testId="section-cancer-surveillance"
+        >
+          {report.cancerSurveillance.markers.length > 0 && (
+            <div className="overflow-x-auto mb-3">
+              <table className="w-full text-xs border border-border/40">
+                <thead className="bg-secondary/40">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-medium">Marker</th>
+                    <th className="text-left px-2 py-1 font-medium">Value</th>
+                    <th className="text-left px-2 py-1 font-medium">Date</th>
+                    <th className="text-left px-2 py-1 font-medium">Status</th>
+                    <th className="text-left px-2 py-1 font-medium">Interpretation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.cancerSurveillance.markers.map((mk, i) => (
+                    <tr key={i} className="border-t border-border/40">
+                      <td className="px-2 py-1">{mk.name}</td>
+                      <td className="px-2 py-1">{mk.value || "—"}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{mk.date || "—"}</td>
+                      <td className={`px-2 py-1 capitalize ${deepFlagChip(mk.status)}`}>{mk.status || "—"}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{mk.interpretation}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {report.cancerSurveillance.overallAssessment && (
+            <div className="rounded-lg border border-border/60 p-3 mb-2 bg-secondary/30">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
+                Overall assessment
+              </p>
+              <p className="text-sm leading-relaxed">{report.cancerSurveillance.overallAssessment}</p>
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {report.pharmacogenomicProfile?.included && (
+        <ConditionalSection
+          title={report.pharmacogenomicProfile.title}
+          narrative={report.pharmacogenomicProfile.narrative}
+          recommendations={report.pharmacogenomicProfile.recommendations}
+          testId="section-pharmacogenomic-profile"
+        >
+          {report.pharmacogenomicProfile.keyPhenotypes.length > 0 && (
+            <div className="mb-3">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                Key phenotypes
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border border-border/40">
+                  <thead className="bg-secondary/40">
+                    <tr>
+                      <th className="text-left px-2 py-1 font-medium">Gene</th>
+                      <th className="text-left px-2 py-1 font-medium">Phenotype</th>
+                      <th className="text-left px-2 py-1 font-medium">Activity</th>
+                      <th className="text-left px-2 py-1 font-medium">Clinical impact</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.pharmacogenomicProfile.keyPhenotypes.map((p, i) => (
+                      <tr key={i} className="border-t border-border/40">
+                        <td className="px-2 py-1 font-mono">{p.gene}</td>
+                        <td className="px-2 py-1">{p.phenotype}</td>
+                        <td className="px-2 py-1 text-muted-foreground">{p.activityScore ?? "—"}</td>
+                        <td className="px-2 py-1 text-muted-foreground">{p.clinicalImpact}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {report.pharmacogenomicProfile.drugAlerts.length > 0 && (
+            <div className="mb-3">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                Drug alerts
+              </p>
+              <div className="space-y-2">
+                {report.pharmacogenomicProfile.drugAlerts.map((d, i) => (
+                  <div key={i} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="font-medium">
+                        {d.drug} <span className="text-xs text-muted-foreground font-normal">({d.gene})</span>
+                      </p>
+                      <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${deepFlagChip(d.severity)}`}>
+                        {d.severity}
+                      </span>
+                    </div>
+                    <p className="text-sm leading-relaxed">{d.recommendation}</p>
+                    {d.source && (
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
+                        Source: {d.source}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {report.pharmacogenomicProfile.currentMedicationAssessment && (
+            <div className="rounded-lg border border-border/60 p-3 mb-2 bg-secondary/30">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
+                Current medication assessment
+              </p>
+              <p className="text-sm leading-relaxed">{report.pharmacogenomicProfile.currentMedicationAssessment}</p>
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {report.wearablePhysiology?.included && (
+        <ConditionalSection
+          title={report.wearablePhysiology.title}
+          narrative={report.wearablePhysiology.narrative}
+          recommendations={report.wearablePhysiology.recommendations}
+          testId="section-wearable-physiology"
+        >
+          {report.wearablePhysiology.metrics.length > 0 && (
+            <div className="overflow-x-auto mb-3">
+              <table className="w-full text-xs border border-border/40">
+                <thead className="bg-secondary/40">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-medium">Metric</th>
+                    <th className="text-left px-2 py-1 font-medium">Latest</th>
+                    <th className="text-left px-2 py-1 font-medium">Weekly avg</th>
+                    <th className="text-left px-2 py-1 font-medium">Trend</th>
+                    <th className="text-left px-2 py-1 font-medium">Interpretation</th>
+                    <th className="text-left px-2 py-1 font-medium">Flag</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.wearablePhysiology.metrics.map((m, i) => (
+                    <tr key={i} className="border-t border-border/40">
+                      <td className="px-2 py-1">{m.name}</td>
+                      <td className="px-2 py-1">{m.latest || "—"}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{m.weeklyAverage ?? "—"}</td>
+                      <td className="px-2 py-1 capitalize text-muted-foreground">{m.trend}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{m.interpretation}</td>
+                      <td className={`px-2 py-1 capitalize ${deepFlagChip(m.flag)}`}>{m.flag || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {report.wearablePhysiology.crossCorrelations.length > 0 && (
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                Cross-correlations
+              </p>
+              <ul className="space-y-2">
+                {report.wearablePhysiology.crossCorrelations.map((c, i) => (
+                  <li key={i} className="rounded-lg border border-border/60 p-3 text-sm">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {c.wearable} ↔ {c.otherDataSource}
+                      </p>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {c.coherence}
+                      </span>
+                    </div>
+                    <p className="leading-relaxed">{c.interpretation}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {report.metabolomicAssessment?.included && (
+        <ConditionalSection
+          title={report.metabolomicAssessment.title}
+          narrative={report.metabolomicAssessment.narrative}
+          recommendations={report.metabolomicAssessment.recommendations}
+          testId="section-metabolomic-assessment"
+        >
+          {report.metabolomicAssessment.pathways.length > 0 && (
+            <div className="space-y-3 mb-3">
+              {report.metabolomicAssessment.pathways.map((p, i) => (
+                <div key={i} className="rounded-lg border border-border/60 p-3 text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="font-medium">{p.name}</p>
+                    <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${deepFlagChip(p.status)}`}>
+                      {p.status}
+                    </span>
+                  </div>
+                  {p.keyMarkers && (
+                    <p className="text-xs text-muted-foreground mb-1">
+                      <strong>Key markers:</strong> {p.keyMarkers}
+                    </p>
+                  )}
+                  <p className="text-sm leading-relaxed">{p.interpretation}</p>
+                  {p.cofactorDeficiencies && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      <strong>Cofactor deficiencies:</strong> {p.cofactorDeficiencies}
+                    </p>
+                  )}
+                  {p.interlacedFindings && (
+                    <p className="text-xs text-muted-foreground mt-2 italic">{p.interlacedFindings}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {report.metabolomicAssessment.gutBrainAxis && (
+            <div className="rounded-lg border border-border/60 p-3 mb-2 bg-secondary/30">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
+                Gut–brain axis
+              </p>
+              <p className="text-sm leading-relaxed">{report.metabolomicAssessment.gutBrainAxis}</p>
+            </div>
+          )}
+        </ConditionalSection>
+      )}
+
+      {/* Cross-panel patterns — relocated to AFTER the body-system and
+          deepened sections so it sits as the closing pattern-recognition
+          layer over everything above it. */}
+      {report.crossPanelPatterns.length > 0 && (
+        <section>
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-3 font-semibold">Cross-panel patterns</h3>
+          <div className="space-y-3">
+            {report.crossPanelPatterns.map((p, i) => (
+              <div key={i} className={`rounded-lg border p-4 ${PATTERN_STYLES[p.significance] ?? "border-border"}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-medium">{p.title}</p>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{p.significance}</span>
+                </div>
+                <p className="text-sm leading-relaxed">{p.description}</p>
+                {p.biomarkersInvolved && p.biomarkersInvolved.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    <strong>Markers:</strong> {p.biomarkersInvolved.join(", ")}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {report.topConcerns.length > 0 && (

@@ -161,6 +161,43 @@ export function renderReportPdf(args: RenderReportPdfArgs): NodeJS.ReadableStrea
     doc.y = Math.max(scoreBlockBottom, summaryBottom) + 18;
   }
 
+  // ── Integrated summary (deepened section #7) ──────────────────────────
+  // Big-picture cross-data synthesis. Per spec, sits AFTER the executive
+  // summary so the reader gets the convergent insights before urgent flags
+  // and per-narrative blocks.
+  if (args.report.integratedSummary?.included) {
+    deepenedSection(doc, {
+      title: args.report.integratedSummary.title,
+      narrative: args.report.integratedSummary.narrative,
+    });
+    if (args.report.integratedSummary.keyConnections?.length) {
+      bulletCard(doc, {
+        title: "Key connections",
+        titleColor: C.ink,
+        bg: C.cardBg,
+        border: C.cardBorder,
+        items: args.report.integratedSummary.keyConnections.map((kc) =>
+          kc.dataTypes?.length ? `${kc.dataTypes.join(" · ")} — ${kc.finding}` : kc.finding,
+        ),
+      });
+    }
+    if (args.report.integratedSummary.prioritisedActionPlan?.length) {
+      bulletCard(doc, {
+        title: "Prioritised action plan",
+        titleColor: C.primary,
+        bg: C.primarySoft,
+        border: C.cardBorder,
+        bulletColor: C.primary,
+        items: [...args.report.integratedSummary.prioritisedActionPlan]
+          .sort((a, b) => a.priority - b.priority)
+          .map((a) => {
+            const tf = a.timeframe ? ` (${a.timeframe})` : "";
+            return `${a.priority}. ${a.action}${tf} — ${a.rationale}`;
+          }),
+      });
+    }
+  }
+
   // ── Urgent flags (red card) ───────────────────────────────────────────
   if (args.report.urgentFlags && args.report.urgentFlags.length > 0) {
     bulletCard(doc, {
@@ -194,6 +231,85 @@ export function renderReportPdf(args: RenderReportPdfArgs): NodeJS.ReadableStrea
       systemCard(doc, s);
     }
     doc.moveDown(0.2);
+  }
+
+  // ── Deepened conditional sections (1-6) ───────────────────────────────
+  // Per spec these sit AFTER the body-system breakdown and BEFORE the
+  // cross-panel patterns. Each is gated on `included === true`; absent
+  // data types simply skip rendering.
+  if (args.report.bodyComposition?.included) {
+    deepenedSection(doc, {
+      title: args.report.bodyComposition.title,
+      narrative: args.report.bodyComposition.narrative,
+      recommendations: args.report.bodyComposition.recommendations,
+    });
+  }
+  if (args.report.imagingSummary?.included) {
+    deepenedSection(doc, {
+      title: args.report.imagingSummary.title,
+      narrative: args.report.imagingSummary.narrative,
+      recommendations: args.report.imagingSummary.recommendations,
+    });
+  }
+  if (args.report.cancerSurveillance?.included) {
+    deepenedSection(doc, {
+      title: args.report.cancerSurveillance.title,
+      narrative: args.report.cancerSurveillance.narrative,
+      recommendations: args.report.cancerSurveillance.recommendations,
+    });
+    if (args.report.cancerSurveillance.overallAssessment) {
+      paragraph(doc, `Overall assessment: ${args.report.cancerSurveillance.overallAssessment}`, {
+        fontSize: 10, color: C.body, lineGap: 1.5,
+      });
+      doc.moveDown(0.4);
+    }
+  }
+  if (args.report.pharmacogenomicProfile?.included) {
+    deepenedSection(doc, {
+      title: args.report.pharmacogenomicProfile.title,
+      narrative: args.report.pharmacogenomicProfile.narrative,
+      recommendations: args.report.pharmacogenomicProfile.recommendations,
+    });
+    if (args.report.pharmacogenomicProfile.drugAlerts?.length) {
+      bulletCard(doc, {
+        title: "Drug alerts",
+        titleColor: C.amber,
+        bg: C.amberSoft,
+        border: C.amberBorder,
+        bulletColor: C.amber,
+        items: args.report.pharmacogenomicProfile.drugAlerts.map(
+          (d) => `${d.drug} (${d.gene}) — ${d.severity.toUpperCase()}: ${d.recommendation}`,
+        ),
+      });
+    }
+    if (args.report.pharmacogenomicProfile.currentMedicationAssessment) {
+      paragraph(
+        doc,
+        `Current medications: ${args.report.pharmacogenomicProfile.currentMedicationAssessment}`,
+        { fontSize: 10, color: C.body, lineGap: 1.5 },
+      );
+      doc.moveDown(0.4);
+    }
+  }
+  if (args.report.wearablePhysiology?.included) {
+    deepenedSection(doc, {
+      title: args.report.wearablePhysiology.title,
+      narrative: args.report.wearablePhysiology.narrative,
+      recommendations: args.report.wearablePhysiology.recommendations,
+    });
+  }
+  if (args.report.metabolomicAssessment?.included) {
+    deepenedSection(doc, {
+      title: args.report.metabolomicAssessment.title,
+      narrative: args.report.metabolomicAssessment.narrative,
+      recommendations: args.report.metabolomicAssessment.recommendations,
+    });
+    if (args.report.metabolomicAssessment.gutBrainAxis) {
+      paragraph(doc, `Gut–brain axis: ${args.report.metabolomicAssessment.gutBrainAxis}`, {
+        fontSize: 10, color: C.body, lineGap: 1.5,
+      });
+      doc.moveDown(0.4);
+    }
   }
 
   // ── Cross-panel patterns ──────────────────────────────────────────────
@@ -325,6 +441,37 @@ function paragraph(
 ): void {
   doc.fillColor(opts.color).font("Helvetica").fontSize(opts.fontSize)
     .text(text, M, doc.y, { width: CONTENT_W, align: "left", lineGap: opts.lineGap ?? 1.5 });
+}
+
+/**
+ * Render a deepened conditional section: title (as section label) +
+ * narrative paragraph + optional recommendations bullet card. The title
+ * comes from the AI's section title (uppercased to match house style)
+ * so we don't hardcode any of the seven section names here.
+ */
+function deepenedSection(
+  doc: PDFKit.PDFDocument,
+  args: { title: string; narrative: string; recommendations?: string[] },
+): void {
+  if (!args.title && !args.narrative) return;
+  if (args.title) {
+    sectionLabel(doc, args.title.toUpperCase());
+  }
+  if (args.narrative) {
+    paragraph(doc, args.narrative, { fontSize: 10, color: C.body, lineGap: 2 });
+    doc.moveDown(0.5);
+  }
+  if (args.recommendations && args.recommendations.length > 0) {
+    bulletCard(doc, {
+      title: "Recommendations",
+      titleColor: C.ink,
+      bg: C.cardBg,
+      border: C.cardBorder,
+      items: args.recommendations,
+    });
+  } else {
+    doc.moveDown(0.2);
+  }
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, needed: number): void {
