@@ -3,6 +3,7 @@ import multer from "multer";
 import fs from "fs";
 import { Readable } from "stream";
 import { createReadStream } from "fs";
+import unzipper from "unzipper";
 import { db, wearableConnectionsTable, wearableMetricsTable, wearableIngestsTable, patientsTable } from "@workspace/db";
 import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { requireAuth, type AuthenticatedRequest } from "../lib/auth";
@@ -62,8 +63,49 @@ router.post("/wearables/apple/import/:patientId",
     let parseResult: { totalParsed: number } | null = null;
     let importErr: unknown = null;
     try {
-      const stream = createReadStream(assertWithinUploads(filePath));
-      parseResult = await parseAppleHealthXml(stream, (batch) => ingestBatch(ctx, batch));
+      // Apple Health ALWAYS exports as a `.zip` containing `export.xml`
+      // (plus an optional `export_cda.xml` and a `workout-routes/` folder).
+      // The previous implementation piped the uploaded file straight to a
+      // streaming SAX parser, which crashed instantly on the binary zip
+      // header before any data flowed through. Detect zip uploads by
+      // filename or MIME (Safari iOS sends `application/zip`, Chrome on
+      // macOS occasionally sends `application/x-zip-compressed`) and
+      // stream `export.xml` out of the archive directly into the parser
+      // — no temp extraction step, no extra disk usage. Falls back to
+      // raw-XML behaviour so a hand-extracted `export.xml` still works.
+      const safePath = assertWithinUploads(filePath);
+      const isZip =
+        req.file.originalname?.toLowerCase().endsWith(".zip") ||
+        req.file.mimetype === "application/zip" ||
+        req.file.mimetype === "application/x-zip-compressed";
+
+      let xmlStream: Readable;
+      if (isZip) {
+        const directory = await unzipper.Open.file(safePath);
+        const exportEntry = directory.files.find(
+          (f) =>
+            f.path === "export.xml" ||
+            f.path.endsWith("/export.xml") ||
+            f.path === "apple_health_export/export.xml",
+        );
+        if (!exportEntry) {
+          await finishIngest(ctx, new Error("No export.xml in zip")).catch(() => undefined);
+          try {
+            await fs.promises.unlink(safePath);
+          } catch (e) {
+            logger.warn({ e, filePath: safePath }, "temp file cleanup failed after invalid-zip rejection");
+          }
+          res.status(400).json({
+            error:
+              "No export.xml found inside the zip. Please upload the Apple Health export directly from your iPhone (Settings → Health → Profile → Export All Health Data).",
+          });
+          return;
+        }
+        xmlStream = exportEntry.stream() as unknown as Readable;
+      } else {
+        xmlStream = createReadStream(safePath);
+      }
+      parseResult = await parseAppleHealthXml(xmlStream, (batch) => ingestBatch(ctx, batch));
 
       // Mark connection (file-based: no token).
       await db.insert(wearableConnectionsTable).values({

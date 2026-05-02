@@ -1,0 +1,53 @@
+*"The Apple Health wearable import is broken because Apple Health always exports as a .zip file containing `export.xml`, but the backend pipes the uploaded file directly to the SAX XML parser without unzipping. The parser crashes immediately on binary zip data.*
+
+*Fix:*
+
+*1. Install unzipper: `pnpm --filter @workspace/api-server add unzipper`*
+
+*2. In `artifacts/api-server/src/routes/wearables.ts`, update the Apple Health import handler (around line 65). Before calling `parseAppleHealthXml`, detect if the file is a zip and extract `export.xml` from it:*
+
+```typescript
+import unzipper from "unzipper";
+```
+
+*Replace the line `const stream = createReadStream(assertWithinUploads(filePath));` with:*
+
+```typescript
+const safePath = assertWithinUploads(filePath);
+const isZip = req.file.originalname?.toLowerCase().endsWith(".zip") 
+  || req.file.mimetype === "application/zip"
+  || req.file.mimetype === "application/x-zip-compressed";
+
+let xmlStream: Readable;
+if (isZip) {
+  const directory = await unzipper.Open.file(safePath);
+  const exportEntry = directory.files.find(f =>
+    f.path === "export.xml" 
+    || f.path.endsWith("/export.xml") 
+    || f.path === "apple_health_export/export.xml"
+  );
+  if (!exportEntry) {
+    res.status(400).json({ 
+      error: "No export.xml found inside the zip. Please upload the Apple Health export directly from your iPhone (Settings → Health → Profile → Export All Health Data)." 
+    });
+    return;
+  }
+  xmlStream = exportEntry.stream() as unknown as Readable;
+} else {
+  xmlStream = createReadStream(safePath);
+}
+```
+
+*Then pass `xmlStream` to `parseAppleHealthXml` instead of the previous `stream` variable.*
+
+*3. In `artifacts/plexara/src/pages/Wearables.tsx`, update the help text under the upload button to:*
+
+```tsx
+<p className="text-[10px] text-muted-foreground italic">
+  How to export: on your iPhone go to Settings → Health → tap your profile photo → Export All Health Data. Upload the resulting .zip file directly — no need to unzip. Large exports (50-200 MB) may take 1-2 minutes to process.
+</p>
+```
+
+*4. Add `@types/unzipper` if needed for TypeScript: `pnpm --filter @workspace/api-server add -D @types/unzipper`*
+
+*Run `pnpm tsc --noEmit` after. Test by uploading an actual Apple Health export.zip file from an iPhone.*

@@ -145,8 +145,11 @@ export default function Wearables() {
                     />
                     <Button size="sm" disabled={!patientId || uploading} onClick={() => fileRef.current?.click()} data-testid="apple-health-upload">
                       {uploading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                      Upload export.xml
+                      Upload export.zip
                     </Button>
+                    <p className="text-[10px] text-muted-foreground italic">
+                      How to export: on your iPhone go to Settings → Health → tap your profile photo → Export All Health Data. Upload the resulting .zip file directly — no need to unzip. Large exports (50-200 MB) may take 1-2 minutes to process.
+                    </p>
                     {conn?.lastSyncAt && <div className="text-xs text-muted-foreground">Last sync: {new Date(conn.lastSyncAt).toLocaleString()}</div>}
                     {conn && (
                       <Button size="sm" variant="ghost" onClick={() => disconnectMut.mutate("apple_health")} className="text-destructive">
