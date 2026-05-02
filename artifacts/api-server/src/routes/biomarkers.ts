@@ -107,12 +107,27 @@ biomarkerResultsRouter.patch("/:biomarkerResultId", requireAuth, async (req, res
         .from(extractedDataTable)
         .where(eq(extractedDataTable.recordId, recordId));
       const cached = decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson);
-      if (cached) {
+      // Defect-B follow-up (May 2026): exclude poisoned `{extractionError:true}`
+      // and empty cache rows. The reinterpret-on-edit path used to feed the
+      // raw decoded payload into runInterpretationPipeline whenever the
+      // cache row existed at all — even if the cache was a prior failure.
+      // That burnt three lens calls on a non-existent document each time
+      // the user nudged a biomarker on a record whose extraction had failed.
+      if (
+        cached &&
+        Object.keys(cached).length > 0 &&
+        cached.extractionError !== true
+      ) {
         setImmediate(() => {
           runInterpretationPipeline(patientId, recordId, cached).catch((err) => {
             req.log.error({ err, recordId }, "Reinterpretation after manual edit failed");
           });
         });
+      } else if (cached?.extractionError === true) {
+        req.log.warn(
+          { recordId },
+          "Skipping reinterpret-on-edit: cached extraction is a prior failure payload",
+        );
       }
     }
 

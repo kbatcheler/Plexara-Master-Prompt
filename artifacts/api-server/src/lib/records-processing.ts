@@ -154,16 +154,64 @@ export async function processUploadedDocument(opts: {
       .select()
       .from(extractedDataTable)
       .where(eq(extractedDataTable.recordId, recordId));
+    // Tracks whether the cached extraction row was actually accepted as
+    // usable input for the lens pipeline. Set explicitly in the cache-hit
+    // branch — do NOT derive it from `!!structuredData`, because
+    // structuredData is initialized to `{}` (truthy) so a `!!structuredData`
+    // check would always be true and silently defeat the poison-rejection
+    // logic below.
+    let cacheUsable = false;
     if (cachedExtraction) {
       const decoded = decryptStructuredJson<Record<string, unknown>>(cachedExtraction.structuredJson);
-      if (decoded && typeof decoded === "object") {
+      // Defect-B follow-up (May 2026): a poisoned cache row from a prior
+      // failed extraction (`{extractionError: true, ...}`) must NOT be
+      // treated as a usable extraction. Without this guard, reanalyze /
+      // batch-retry / pipeline-retry happily reuse the failure payload
+      // and burn three lens calls on a non-existent document. Reject the
+      // cache here so the next branch falls through to a fresh extraction
+      // attempt against the original file.
+      if (
+        decoded &&
+        typeof decoded === "object" &&
+        (decoded as Record<string, unknown>).extractionError !== true &&
+        Object.keys(decoded).length > 0
+      ) {
         logger.info({ recordId, recordType }, "Skipping extraction — reusing cached extracted_data");
         structuredData = decoded;
+        cacheUsable = true;
+      } else if (decoded && (decoded as Record<string, unknown>).extractionError === true) {
+        logger.warn(
+          { recordId, recordType },
+          "Cached extraction is a prior failure payload — re-running extraction",
+        );
       }
     }
 
-    if (!cachedExtraction) try {
+    // Use `cacheUsable` (not `cachedExtraction`) so a poisoned or empty
+    // cache row — rejected above — triggers a fresh extraction instead
+    // of being treated as a successful cache hit.
+    if (!cacheUsable) try {
       structuredData = await extractFromDocument(base64, mimeType, recordType);
+
+      // Defect-B follow-up (May 2026): extractFromDocument's inner catch
+      // returns `{extractionError: true, note: ...}` instead of throwing on
+      // upstream LLM failures (APIConnectionTimeoutError on dense multi-page
+      // PDFs etc.). The `recordTypeRequiresBiomarkers` gate further down
+      // is FALSE for "other"/imaging/dexa/etc., so the empty payload would
+      // otherwise fall through to the lens pipeline and burn three lens
+      // calls on a bogus document. Surface the flag as a hard failure
+      // regardless of recordType, BEFORE the audit log so we don't pollute
+      // it with zero-count rows that look like successful extractions.
+      if ((structuredData as Record<string, unknown>).extractionError === true) {
+        extractionFailed = true;
+        extractionFailureReason = ((structuredData as Record<string, unknown>).note as string | undefined) || "Extraction failed";
+        logger.warn(
+          { recordId, recordType, note: extractionFailureReason },
+          "Extraction returned extractionError flag — marking record as error",
+        );
+        await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+        return;
+      }
 
       // ── Auditability Fix 1a — Extraction audit log ───────────────────────
       // Log what the LLM returned so we can debug extraction failures from
@@ -354,8 +402,11 @@ export async function processUploadedDocument(opts: {
     }
 
     // Cache hit but the JSON was somehow null/undefined — guard so we don't
-    // run the lens pipeline on `{}`.
-    if (cachedExtraction && (!structuredData || Object.keys(structuredData).length === 0)) {
+    // run the lens pipeline on `{}`. Uses `cacheUsable` (not the raw row
+    // existence flag) so a poisoned cache row that already triggered a
+    // fresh re-extract above doesn't trip this guard with the wrong
+    // failure reason — re-extract failures are handled by the catch block.
+    if (cacheUsable && (!structuredData || Object.keys(structuredData).length === 0)) {
       extractionFailed = true;
       extractionFailureReason = "Cached extraction was empty or unreadable";
     }
@@ -973,6 +1024,23 @@ export async function runInterpretationPipeline(
   structuredData: Record<string, unknown>,
   opts: { version?: number; biomarkerWritePromise?: Promise<void> } = {},
 ): Promise<void> {
+  // Defect-B global safety net (May 2026): refuse to run lenses on a
+  // poisoned extraction payload regardless of which call site dispatched
+  // us. Each consumer (records-upload, processUploadedDocument cache+fresh,
+  // records-manage reanalyze + reprocess-stuck, biomarkers reinterpret,
+  // interpretations regenerate) already filters this out, but a single
+  // missed entry point would silently burn three lens LLM calls on a
+  // non-existent document. Mark the record as error and bail before any
+  // lens dispatch so the user sees a visible failure instead of a
+  // misleading empty report.
+  if (structuredData?.extractionError === true) {
+    logger.warn(
+      { patientId, recordId, note: structuredData.note },
+      "runInterpretationPipeline: refusing to run on extractionError payload",
+    );
+    await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, recordId));
+    return;
+  }
   const anonymised = stripPII(structuredData) as AnonymisedData;
   const version = opts.version ?? 1;
   // We MUST keep the original `anonymised` for `idempotencyKey` (recompute

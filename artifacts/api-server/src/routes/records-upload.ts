@@ -135,6 +135,23 @@ router.post(
         try {
           structuredData = await extractFromDocument(base64, mimeType, recordType);
 
+          // Defect-B follow-up (May 2026): extractFromDocument's inner catch
+          // returns `{extractionError: true, note: ...}` instead of throwing
+          // when the upstream LLM call fails (e.g. APIConnectionTimeoutError
+          // on dense multi-page PDFs). For recordType="other" the existing
+          // `recordTypeRequiresBiomarkers` gate is FALSE, so the empty
+          // payload would silently fall through to runInterpretationPipeline
+          // and burn three lens calls on nothing. Throwing here funnels the
+          // failure into the existing catch-block, which sets the failure
+          // flag, logs once, and skips the lens pipeline below — AND
+          // critically prevents the poisoned payload from being inserted
+          // into extracted_data, where the reanalyze cache would later
+          // pick it up and pretend it was a successful extraction.
+          if (structuredData.extractionError === true) {
+            const note = (structuredData.note as string | undefined) || "Extraction failed";
+            throw new Error(note);
+          }
+
           // Enhancement E4 — derive the legacy text bucket from the LLM-reported
           // numeric confidence; full structured block stays inside structuredJson.
           const conf = parseExtractionConfidence(structuredData);

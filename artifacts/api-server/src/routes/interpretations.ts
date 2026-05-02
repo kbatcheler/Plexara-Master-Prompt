@@ -369,7 +369,16 @@ router.post("/regenerate", requireAuth, async (req, res): Promise<void> => {
     }
 
     const cached = decryptStructuredJson<Record<string, unknown>>(candidateStructured);
-    if (!cached || Object.keys(cached).length === 0) {
+    // Defect-B follow-up (May 2026): also reject `{extractionError:true}`
+    // cache rows. Without this guard the manual regenerate-findings button
+    // would happily feed a prior-failure payload into the lens pipeline
+    // and burn three lens calls on a non-existent document. Same surface
+    // error message as the empty-cache case so the UI flow is unchanged.
+    if (
+      !cached ||
+      Object.keys(cached).length === 0 ||
+      cached.extractionError === true
+    ) {
       regenerateCooldown.delete(patientId);
       claimed = false;
       res.status(400).json({

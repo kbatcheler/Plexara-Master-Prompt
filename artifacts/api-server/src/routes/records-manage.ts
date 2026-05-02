@@ -129,7 +129,17 @@ router.post("/reprocess-stuck", requireAuth, async (req, res): Promise<void> => 
             // Prefer cached extraction → cheap re-run; otherwise full pipeline.
             const [extracted] = await db.select().from(extractedDataTable).where(eq(extractedDataTable.recordId, r.id));
             const cached = decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson);
-            if (cached && Object.keys(cached).length > 0) {
+            // Defect-B follow-up (May 2026): exclude poisoned `{extractionError:true}`
+            // cache rows from the cheap-rerun path. Without this guard, the bulk
+            // reprocess endpoint would happily feed a prior failure payload into
+            // runInterpretationPipeline and burn three lens calls on a
+            // non-existent document. Falls through to the file-re-extract branch
+            // below so the user gets a real second chance.
+            if (
+              cached &&
+              Object.keys(cached).length > 0 &&
+              cached.extractionError !== true
+            ) {
               await runInterpretationPipeline(patientId, r.id, cached);
               return;
             }
@@ -295,7 +305,16 @@ router.post("/:recordId/reanalyze", requireAuth, async (req, res): Promise<void>
       .where(eq(extractedDataTable.recordId, recordId));
 
     const cached = decryptStructuredJson<Record<string, unknown>>(extracted?.structuredJson);
-    const hasUsefulExtraction = !!cached && Object.keys(cached).length > 0;
+    // Defect-B follow-up (May 2026): a `{extractionError: true}` payload
+    // is NOT a useful extraction — reanalysing it via the cached path
+    // would burn three lens calls on a non-existent document. Fall
+    // through to the file-re-extract branch below in that case so the
+    // user gets a real second chance instead of an instant repeat
+    // failure on the same poisoned data.
+    const hasUsefulExtraction =
+      !!cached &&
+      Object.keys(cached).length > 0 &&
+      cached.extractionError !== true;
 
     // Mark as pending immediately so the UI shows "Processing" while the
     // background work runs.

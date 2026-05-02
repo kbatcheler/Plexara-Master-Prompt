@@ -744,9 +744,25 @@ export async function extractFromDocument(base64File: string, mimeType: string, 
     // panel and a longer wall-clock budget for large PDFs. The threshold
     // below uses base64-encoded length (≈ 1.37× raw bytes) to estimate
     // when to switch to the extended timeout.
+    //
+    // Beta-tester regression (Defect B, May 2026): a 19 KB / 7-page
+    // longitudinal supplement-stack PDF — well below the 2 MB threshold
+    // — consistently timed out at 60 s with APIConnectionTimeoutError.
+    // PDF page count, not raw byte size, drives extraction wall time:
+    // dense text-heavy PDFs are intrinsically more expensive than image
+    // OCR because Anthropic processes both the visual and text layers
+    // for every page. Floors raised to 120 s (small PDF) / 240 s (large
+    // PDF) so dense multi-page longitudinal documents (stacks, trend
+    // reports, compiled summaries) actually complete instead of failing
+    // silently and falling through to an empty-data lens run. Image
+    // budgets unchanged — single-image OCR is fast and the prior 60 s
+    // ceiling was correct for that case.
     const LARGE_DOC_BASE64_THRESHOLD = Math.floor(2 * 1024 * 1024 * 1.37); // ~2 MB raw
     const isLargeDocument = base64File.length > LARGE_DOC_BASE64_THRESHOLD;
-    const extractionTimeout = isLargeDocument ? 120_000 : 60_000;
+    const isPdf = mimeType === "application/pdf";
+    const imageTimeout = isLargeDocument ? 120_000 : 60_000;
+    const pdfTimeout = isLargeDocument ? 240_000 : 120_000;
+    const extractionTimeout = isPdf ? pdfTimeout : imageTimeout;
     const extractionMaxTokens = 16384;
 
     if (imageTypes.includes(mimeType as ImageType)) {
