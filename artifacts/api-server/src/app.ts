@@ -147,6 +147,24 @@ app.use(cookieParser(process.env.SESSION_SECRET ?? "dev-fallback-secret-change-m
 
 app.use(clerkMiddleware());
 
+// ── Sentry deploy-verification endpoint ─────────────────────────────────────
+// Intentionally throws to verify the Sentry DSN + transport are wired correctly.
+// Gated on SENTRY_TEST_ENABLED=true + a matching X-Sentry-Test-Token header;
+// any other call returns 404 so the path cannot be probed in normal operation.
+// Enable briefly during a deploy for smoke-testing, then disable immediately.
+// MUST stay registered before any SPA catch-all or static-file catch-all route.
+app.get("/__sentry-test", (req, res): void => {
+  if (
+    process.env.SENTRY_TEST_ENABLED !== "true" ||
+    !process.env.SENTRY_TEST_TOKEN ||
+    req.headers["x-sentry-test-token"] !== process.env.SENTRY_TEST_TOKEN
+  ) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  throw new Error("Sentry smoke-test error");
+});
+
 // ── Rate limiting ────────────────────────────────────────────────────────────
 // Two-tier:
 //   - global limiter on every /api/* call (DoS / brute-force defence)
@@ -343,22 +361,6 @@ if (staticDirRaw) {
     "Serving static frontend",
   );
 }
-
-// Sentry smoke-test: intentionally throws to verify DSN + transport.
-// Only active when SENTRY_TEST_ENABLED=true and the caller supplies the
-// shared secret in X-Sentry-Test-Token. Any other request to this path
-// returns 404 so it can't be probed in normal operation.
-app.get("/__sentry-test", (req, res): void => {
-  if (
-    process.env.SENTRY_TEST_ENABLED !== "true" ||
-    !process.env.SENTRY_TEST_TOKEN ||
-    req.headers["x-sentry-test-token"] !== process.env.SENTRY_TEST_TOKEN
-  ) {
-    res.status(404).json({ error: "Not found" });
-    return;
-  }
-  throw new Error("Sentry smoke-test error");
-});
 
 // Central error handler MUST be the very last middleware. Catches:
 //   - errors thrown synchronously from any handler
