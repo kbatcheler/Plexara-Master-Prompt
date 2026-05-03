@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router } from "express";
 import multer from "multer";
 import { Readable } from "stream";
@@ -261,6 +262,7 @@ router.post("/", requireAuth, uploadAny, async (req, res): Promise<void> => {
 
       createdStudies.push({ ...study, sliceCount: slices.length });
     } catch (err) {
+      Sentry.captureException(err);
       logger.error({ err }, "DICOM series upload failed");
       // Keep going — don't lose other successfully-uploaded series in this batch.
     }
@@ -332,6 +334,7 @@ router.post("/:studyId/report", requireAuth, reportUpload.single("file"), async 
       }).catch((err) => logger.error({ err, recordId: record.id }, "Imaging report extraction failed"));
     });
   } catch (err) {
+    Sentry.captureException(err);
     logger.error({ err }, "Imaging report upload failed");
     res.status(500).json({ error: "Upload failed" });
   }
@@ -384,6 +387,7 @@ router.post("/:studyId/interpret", requireAuth, async (req, res): Promise<void> 
     const result = await runImagingInterpretation(studyId);
     res.json(result);
   } catch (err) {
+    Sentry.captureException(err, { extra: { studyId } });
     logger.error({ err, studyId }, "Imaging interpretation failed");
     const msg = err instanceof Error ? err.message : "Interpretation failed";
     res.status(500).json({ error: msg });
@@ -596,6 +600,7 @@ dicomRouter.get("/imaging/study/:studyId/tags", requireAuth, async (req, res): P
     const buf = Buffer.from(await response.arrayBuffer());
     res.json(extractAllDicomTags(buf));
   } catch (err) {
+    Sentry.captureException(err, { extra: { studyId } });
     logger.error({ err, studyId }, "DICOM tag dump failed");
     res.status(500).json({ error: "Tag dump failed" });
   }
@@ -636,6 +641,7 @@ dicomRouter.get("/imaging/dicom/:studyId", requireAuth, async (req, res): Promis
   try {
     await streamDicomKey(res, study.dicomObjectKey);
   } catch (err) {
+    Sentry.captureException(err);
     logger.error({ err }, "DICOM stream failed");
     res.status(500).json({ error: "Stream failed" });
   }
@@ -673,6 +679,7 @@ dicomRouter.get("/imaging/dicom/:studyId/file/:fileIndex", requireAuth, async (r
   try {
     await streamDicomKey(res, objectKey);
   } catch (err) {
+    Sentry.captureException(err, { extra: { studyId, fileIndex } });
     logger.error({ err, studyId, fileIndex }, "DICOM slice stream failed");
     res.status(500).json({ error: "Stream failed" });
   }

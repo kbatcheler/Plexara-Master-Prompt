@@ -4,7 +4,7 @@ export interface AnonymisedData {
   [key: string]: unknown;
 }
 
-const PII_FIELD_NAMES = new Set([
+export const PHI_FIELD_NAMES = new Set([
   "patientname", "name", "fullname", "firstname", "lastname",
   "dateofbirth", "dob", "birthdate", "birthday",
   "patientid", "mrn", "medicalrecordnumber",
@@ -20,6 +20,43 @@ const PII_FIELD_NAMES = new Set([
   "gpname", "gppractice", "surgery",
   "postcode", "zipcode",
   "hospitalnumber", "hospitalid",
+
+  // Clinical content
+  "diagnosis", "condition", "symptom", "complaint",
+  "clinicalnotes", "patientnotes",
+  "medication", "prescription", "dosage", "medname", "supplementname",
+
+  // Biomarkers
+  "biomarker", "labvalue", "labresult", "testresult",
+  "hba1c", "glucose", "cholesterol", "triglycerides",
+  "vitamin", "vitamind", "vitamind3", "vitaminb12", "vitaminc", "b12",
+  "ldl", "hdl", "tghdl", "apob", "crp", "tsh",
+
+  // Findings / AI outputs
+  "finding", "findings", "interpretation", "recommendation",
+  "urgentfinding", "narrative",
+
+  // Genetic data
+  "genome", "dna", "geneticdata", "snp", "variant",
+  "genename", "genevariant", "geneticmarker", "epigenome", "methylation",
+
+  // Imaging
+  "mri", "mriscan", "bodyscan", "medicalscan", "ctscan", "ultrasoundscan",
+  "imaging", "radiologyreport", "dicom",
+
+  // Wearables / vitals
+  "heartrate", "hrv", "bloodpressure", "vitals", "vo2max",
+  "sleepdata", "sensordata", "wearabledata",
+
+  // Demographics
+  "sex", "weight", "height", "bmi",
+
+  // Identifiers
+  "patientuuid", "sessionid", "ipaddress", "ip", "clientip", "useragent",
+
+  // Free-text / conversation
+  "journalentry", "journalcontent", "journaltext", "journalmessage",
+  "chatmessage", "usermessage", "patientmessage", "transcript",
 ]);
 
 const PII_REPLACEMENTS: Record<string, string> = {
@@ -40,6 +77,55 @@ const PII_REPLACEMENTS: Record<string, string> = {
   gpname: "[PHYSICIAN]", gppractice: "[FACILITY]", surgery: "[FACILITY]",
   postcode: "[POSTCODE]", zipcode: "[POSTCODE]",
   hospitalnumber: "[ID]", hospitalid: "[ID]",
+
+  // Clinical content
+  diagnosis: "[REDACTED]", condition: "[REDACTED]", symptom: "[REDACTED]",
+  complaint: "[REDACTED]", clinicalnotes: "[REDACTED]", patientnotes: "[REDACTED]",
+  medication: "[REDACTED]", prescription: "[REDACTED]", dosage: "[REDACTED]",
+  medname: "[REDACTED]", supplementname: "[REDACTED]",
+
+  // Biomarkers
+  biomarker: "[REDACTED]", labvalue: "[REDACTED]", labresult: "[REDACTED]",
+  testresult: "[REDACTED]", hba1c: "[REDACTED]", glucose: "[REDACTED]",
+  cholesterol: "[REDACTED]", triglycerides: "[REDACTED]",
+  vitamin: "[REDACTED]", vitamind: "[REDACTED]", vitamind3: "[REDACTED]",
+  vitaminb12: "[REDACTED]", vitaminc: "[REDACTED]", b12: "[REDACTED]",
+  ldl: "[REDACTED]", hdl: "[REDACTED]", tghdl: "[REDACTED]",
+  apob: "[REDACTED]", crp: "[REDACTED]", tsh: "[REDACTED]",
+
+  // Findings / AI outputs
+  finding: "[REDACTED]", findings: "[REDACTED]", interpretation: "[REDACTED]",
+  recommendation: "[REDACTED]", urgentfinding: "[REDACTED]", narrative: "[REDACTED]",
+
+  // Genetic data
+  genome: "[REDACTED]", dna: "[REDACTED]", geneticdata: "[REDACTED]",
+  snp: "[REDACTED]", variant: "[REDACTED]", genename: "[REDACTED]",
+  genevariant: "[REDACTED]", geneticmarker: "[REDACTED]",
+  epigenome: "[REDACTED]", methylation: "[REDACTED]",
+
+  // Imaging
+  mri: "[REDACTED]", mriscan: "[REDACTED]", bodyscan: "[REDACTED]",
+  medicalscan: "[REDACTED]", ctscan: "[REDACTED]", ultrasoundscan: "[REDACTED]",
+  imaging: "[REDACTED]", radiologyreport: "[REDACTED]", dicom: "[REDACTED]",
+
+  // Wearables / vitals
+  heartrate: "[REDACTED]", hrv: "[REDACTED]", bloodpressure: "[REDACTED]",
+  vitals: "[REDACTED]", vo2max: "[REDACTED]", sleepdata: "[REDACTED]",
+  sensordata: "[REDACTED]", wearabledata: "[REDACTED]",
+
+  // Demographics
+  sex: "[REDACTED]", weight: "[REDACTED]", height: "[REDACTED]", bmi: "[REDACTED]",
+
+  // Identifiers — UUID/session get [ID]; network identifiers get [REDACTED]
+  patientuuid: "[ID]", sessionid: "[ID]",
+  ipaddress: "[REDACTED]", ip: "[REDACTED]", clientip: "[REDACTED]",
+  useragent: "[REDACTED]",
+
+  // Free-text / conversation
+  journalentry: "[REDACTED]", journalcontent: "[REDACTED]",
+  journaltext: "[REDACTED]", journalmessage: "[REDACTED]",
+  chatmessage: "[REDACTED]", usermessage: "[REDACTED]",
+  patientmessage: "[REDACTED]", transcript: "[REDACTED]",
 };
 
 // Patterns are applied sequentially. Order matters: more specific / more
@@ -91,7 +177,7 @@ function stripRecursive(value: unknown): unknown {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(obj)) {
       const normalizedKey = key.toLowerCase().replace(/[_\-\s]/g, "");
-      if (PII_FIELD_NAMES.has(normalizedKey)) {
+      if (PHI_FIELD_NAMES.has(normalizedKey)) {
         result[key] = PII_REPLACEMENTS[normalizedKey] || "[REDACTED]";
       } else if (typeof val === "string") {
         result[key] = scrubString(val);

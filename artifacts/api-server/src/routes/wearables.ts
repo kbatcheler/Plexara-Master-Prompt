@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router } from "express";
 import multer from "multer";
 import fs from "fs";
@@ -116,6 +117,7 @@ router.post("/wearables/apple/import/:patientId",
       });
     } catch (err) {
       importErr = err;
+      Sentry.captureException(err);
       logger.error({ err }, "Apple Health import failed");
     } finally {
       // Always: finalise ingest record + remove temp file.

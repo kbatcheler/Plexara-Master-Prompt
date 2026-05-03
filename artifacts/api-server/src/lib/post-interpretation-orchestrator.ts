@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { db } from "@workspace/db";
 import {
   recordsTable,
@@ -16,6 +17,7 @@ import {
 } from "@workspace/db";
 import { and, eq, desc, asc, isNotNull, isNull, sql, inArray } from "drizzle-orm";
 import { logger } from "./logger";
+import { hashForSentry } from "./sentry";
 import { runImagingInterpretation } from "./imaging-interpretation";
 import {
   buildPatientContext,
@@ -204,18 +206,21 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
   try {
     report.trendsComputed = await recomputeTrendsForPatient(patientId);
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "trends" } });
     logger.error({ err, patientId, step: "trends" }, "Orchestrator step failed");
     report.errors.trends = (err as Error)?.message ?? "unknown";
   }
   try {
     report.changeAlertsFired = await detectChangeAlerts(patientId);
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "changeAlerts" } });
     logger.error({ err, patientId, step: "changeAlerts" }, "Orchestrator step failed");
     report.errors.changeAlerts = (err as Error)?.message ?? "unknown";
   }
   try {
     report.trajectoryAlertsFired = await detectTrajectoryAlerts(patientId);
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "trajectoryAlerts" } });
     logger.error({ err, patientId, step: "trajectoryAlerts" }, "Orchestrator step failed");
     report.errors.trajectoryAlerts = (err as Error)?.message ?? "unknown";
   }
@@ -328,6 +333,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     }
     } // end isIntermediateRun guard
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "correlation" } });
     logger.error({ err, patientId, step: "correlation" }, "Orchestrator step failed");
     report.errors.correlation = (err as Error)?.message ?? "unknown";
   }
@@ -423,6 +429,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       }
     }
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "metabolomicCorrelation" } });
     logger.error({ err, patientId, step: "metabolomicCorrelation" }, "Orchestrator step failed");
     report.errors.metabolomicCorrelation = (err as Error)?.message ?? "unknown";
   }
@@ -525,6 +532,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       }
     }
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "comprehensiveReport" } });
     logger.error({ err, patientId, step: "comprehensiveReport" }, "Orchestrator step failed");
     report.errors.comprehensiveReport = (err as Error)?.message ?? "unknown";
   }
@@ -608,6 +616,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
       }
     }
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "supplements" } });
     logger.error({ err, patientId, step: "supplements" }, "Orchestrator step failed");
     report.errors.supplements = (err as Error)?.message ?? "unknown";
   }
@@ -680,6 +689,7 @@ export async function runPostInterpretationPipeline(patientId: number): Promise<
     }
     } // end isIntermediateRun guard
   } catch (err) {
+    Sentry.captureException(err, { tags: { patient: hashForSentry(String(patientId)) }, extra: { step: "protocols" } });
     logger.error({ err, patientId, step: "protocols" }, "Orchestrator step failed");
     report.errors.protocols = (err as Error)?.message ?? "unknown";
   }

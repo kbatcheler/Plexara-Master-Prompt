@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import * as Sentry from "@sentry/node";
 import { ZodError } from "zod";
 import multer from "multer";
 import { logger } from "../lib/logger";
@@ -57,6 +58,7 @@ export function errorHandler(
   // Pino-http populates req.id; surface it on every error response so users
   // and operators can correlate a failed call with structured server logs.
   const requestId = (req as Request & { id?: string }).id;
+  const userId = (req as { auth?: { userId?: string } }).auth?.userId;
 
   // Multer rejects (file too large, too many files, disallowed mime via the
   // fileFilter) need user-friendly status codes — 413 for size, 400 for
@@ -97,6 +99,7 @@ export function errorHandler(
     }
     // 5xx HttpError — fall through to the generic 500 path.
     req.log?.error({ err, status: err.status }, "Server HttpError");
+    Sentry.captureException(err, { extra: { url: req.url, method: req.method, status: err.status, userId } });
     res.status(err.status).json({
       error: process.env.NODE_ENV === "production" ? "Internal server error" : err.message,
       requestId,
@@ -107,6 +110,7 @@ export function errorHandler(
   // Unknown error — log with stack, return generic message in prod.
   const e = err as { message?: string; stack?: string };
   req.log?.error({ err, stack: e?.stack }, "Unhandled error");
+  Sentry.captureException(err, { extra: { url: req.url, method: req.method, status: 500, userId } });
   res.status(500).json({
     error: "Internal server error",
     ...(process.env.NODE_ENV !== "production" && e?.message ? { detail: e.message } : {}),

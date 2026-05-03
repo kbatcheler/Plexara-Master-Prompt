@@ -1,3 +1,6 @@
+import { initSentry } from "./lib/sentry";
+import { captureException as sentryCaptureException } from "@sentry/node";
+initSentry();
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import app from "./app";

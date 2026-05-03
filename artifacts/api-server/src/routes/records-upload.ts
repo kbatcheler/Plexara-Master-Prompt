@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { recordsTable } from "@workspace/db";
@@ -123,12 +124,14 @@ router.post(
             testDate: testDate ?? null,
           });
         } catch (err) {
+          Sentry.captureException(err, { extra: { recordId: record.id } });
           logger.error({ err, recordId: record.id }, "Single-upload processing task failed");
           await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
         }
       });
     });
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to upload record");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -216,6 +219,7 @@ router.post(
                 testDate: testDate ?? null,
               });
             } catch (err) {
+              Sentry.captureException(err, { extra: { recordId: record.id } });
               logger.error({ err, recordId: record.id }, "Batch processing task failed");
               await db.update(recordsTable).set({ status: "error" }).where(eq(recordsTable.id, record.id));
             }
@@ -223,6 +227,7 @@ router.post(
         });
       }
     } catch (err) {
+      Sentry.captureException(err);
       req.log.error({ err, patientId, fileCount: files.length }, "Failed to create batch records");
       // We may have responded already if insert succeeded but enqueue threw —
       // headers-already-sent guard.

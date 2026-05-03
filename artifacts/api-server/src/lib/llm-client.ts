@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
@@ -100,6 +101,7 @@ export async function withLLMRetry<T>(
       lastErr = err;
       const transient = isTransientLLMError(err);
       if (!transient || attempt === maxAttempts) {
+        Sentry.captureException(err, { extra: { label, attempt } });
         throw err;
       }
       const baseMs = 250 * Math.pow(2, attempt - 1);

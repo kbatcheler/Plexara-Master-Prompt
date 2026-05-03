@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router } from "express";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
@@ -383,6 +384,7 @@ router.get("/conversations", requireAuth, async (req, res): Promise<void> => {
       .orderBy(desc(chatConversationsTable.updatedAt));
     res.json(conversations);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to load journal conversations");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -407,6 +409,7 @@ router.get("/conversations/:conversationId", requireAuth, async (req, res): Prom
       .orderBy(chatMessagesTable.createdAt);
     res.json({ conversation: conv, messages });
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to load journal conversation");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -548,6 +551,7 @@ router.post(
             }
           }
         } catch (streamErr) {
+          Sentry.captureException(streamErr);
           req.log.error({ err: streamErr }, "Journal stream failed");
           writeEvent({ type: "error", error: "stream_failed" });
         } finally {
@@ -584,6 +588,7 @@ router.post(
             captured = result.captured;
           }
         } catch (extractErr) {
+          Sentry.captureException(extractErr);
           req.log.error({ err: extractErr }, "Journal: extraction apply failed");
         }
 
@@ -623,11 +628,13 @@ router.post(
           captured = result.captured;
         }
       } catch (extractErr) {
+        Sentry.captureException(extractErr);
         req.log.error({ err: extractErr }, "Journal: extraction apply failed (json branch)");
       }
 
       res.json({ conversationId: activeConvId, message: assistantMsg, captured });
     } catch (err) {
+      Sentry.captureException(err);
       req.log.error({ err }, "Journal message failed");
       if (!res.headersSent) {
         res.status(500).json({ error: "Failed to generate response" });
@@ -656,6 +663,7 @@ router.delete("/conversations/:conversationId", requireAuth, async (req, res): P
     await db.delete(chatConversationsTable).where(eq(chatConversationsTable.id, conversationId));
     res.status(204).send();
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to delete journal conversation");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -779,6 +787,7 @@ router.post(
       res.json({ captured, summary: stripExtraction(fullText) });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to parse uploaded list";
+      Sentry.captureException(err);
       req.log.error({ err, mimeType }, "Journal: import-list failed");
       res.status(500).json({ error: msg });
     }

@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router } from "express";
 import multer from "multer";
 import { createHash } from "crypto";
@@ -109,6 +110,7 @@ router.post("/", requireAuth, upload.single("file"), async (req, res): Promise<v
 
     res.status(201).json(profile);
   } catch (err) {
+    Sentry.captureException(err);
     logger.error({ err }, "Genetics upload failed");
     res.status(500).json({ error: "Upload failed" });
   }
@@ -289,6 +291,7 @@ router.post("/:profileId/interpret", requireAuth, async (req, res): Promise<void
     });
     res.json({ interpretation, model: "claude-sonnet-4-6", at: new Date().toISOString() });
   } catch (err) {
+    Sentry.captureException(err);
     logger.error({ err }, "Genetics interpretation failed");
     res.status(500).json({ error: err instanceof Error ? err.message : "Interpretation failed" });
   }

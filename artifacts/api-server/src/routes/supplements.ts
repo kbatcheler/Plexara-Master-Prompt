@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { Router } from "express";
 import multer from "multer";
 import fs from "fs";
@@ -145,6 +146,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       .orderBy(desc(supplementsTable.createdAt));
     res.json(stack);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to list supplements");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -183,6 +185,7 @@ router.post("/", requireAuth, validate({ body: supplementCreateBody }), async (r
     });
     res.status(201).json(supplement);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to create supplement");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -249,6 +252,7 @@ router.patch(
     }
     res.json(updated);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to update supplement");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -283,6 +287,7 @@ router.delete("/:supplementId", requireAuth, async (req, res): Promise<void> => 
       .where(and(eq(supplementsTable.id, supplementId), eq(supplementsTable.patientId, patientId)));
     res.status(204).send();
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to delete supplement");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -305,6 +310,7 @@ router.get("/changes/log", requireAuth, async (req, res): Promise<void> => {
       .orderBy(desc(stackChangesTable.occurredAt));
     res.json(changes);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to load stack changes");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -435,6 +441,7 @@ router.get("/:supplementId/impact", requireAuth, async (req, res): Promise<void>
       caveat: "Observational pre/post comparison only. Correlation does not imply causation; biomarker movement may reflect other factors.",
     });
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to compute supplement impact");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -457,6 +464,7 @@ router.get("/recommendations/list", requireAuth, async (req, res): Promise<void>
       .orderBy(desc(supplementRecommendationsTable.createdAt));
     res.json(recs);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to list supplement recommendations");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -531,6 +539,7 @@ router.post("/recommendations/generate", requireAuth, async (req, res): Promise<
       redundantWithCurrentStack: output.redundantWithCurrentStack,
     });
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to generate supplement recommendations");
     res.status(500).json({ error: "Failed to generate recommendations" });
   }
@@ -584,6 +593,7 @@ router.patch(
 
     res.json(updated);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err }, "Failed to update recommendation");
     res.status(500).json({ error: "Internal server error" });
   }
@@ -782,6 +792,7 @@ router.post("/stack-analysis", requireAuth, async (req, res): Promise<void> => {
 
     res.json(analysis);
   } catch (err) {
+    Sentry.captureException(err);
     req.log.error({ err, patientId }, "Stack analysis failed");
     res.status(500).json({ error: "Failed to analyse stack" });
   }
@@ -892,6 +903,7 @@ router.post(
       res.json({ items });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to parse file";
+      Sentry.captureException(err);
       req.log.error({ err, mimeType }, "Supplement import parse failed");
       // Surface consent failures explicitly so the UI can route the user to settings.
       if (msg.includes("consent required")) {
@@ -966,6 +978,7 @@ router.post(
 
       res.status(201).json({ supplements: inserted });
     } catch (err) {
+      Sentry.captureException(err);
       req.log.error({ err }, "Failed to bulk-insert supplements");
       res.status(500).json({ error: "Internal server error" });
     }

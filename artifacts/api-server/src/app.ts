@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -343,12 +344,31 @@ if (staticDirRaw) {
   );
 }
 
+// Sentry smoke-test: intentionally throws to verify DSN + transport.
+// Only active when SENTRY_TEST_ENABLED=true and the caller supplies the
+// shared secret in X-Sentry-Test-Token. Any other request to this path
+// returns 404 so it can't be probed in normal operation.
+app.get("/__sentry-test", (req, res): void => {
+  if (
+    process.env.SENTRY_TEST_ENABLED !== "true" ||
+    !process.env.SENTRY_TEST_TOKEN ||
+    req.headers["x-sentry-test-token"] !== process.env.SENTRY_TEST_TOKEN
+  ) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  throw new Error("Sentry smoke-test error");
+});
+
 // Central error handler MUST be the very last middleware. Catches:
 //   - errors thrown synchronously from any handler
 //   - rejected promises from async handlers (Express 5 forwards these)
 //   - ZodError raised by validate() → 400 with field-level detail
 //   - HttpError raised explicitly → its declared status
 //   - everything else → 500 with stack hidden in production
+// setupExpressErrorHandler must precede the application error handler so
+// Sentry captures the original error before it is transformed/swallowed.
+Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
 
 export default app;
